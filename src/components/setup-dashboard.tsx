@@ -160,7 +160,7 @@ export function SetupDashboard() {
 
   async function handleDeviceDelete(deviceId: string) {
     const confirmed = window.confirm(
-      `Delete ${deviceId} from the app? The sensor will need its provision reset button held before it can go through BLE setup again.`,
+      `Delete ${deviceId} from the app? After deletion, hold the ESP32 BOOT button while tapping EN (reset) so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
     );
 
     if (!confirmed) {
@@ -176,16 +176,22 @@ export function SetupDashboard() {
       return;
     }
 
-    setDevices((currentDevices) =>
-      currentDevices.filter((device) => device.id !== deviceId),
-    );
+    let remainingDeviceCount = 0;
+    setDevices((currentDevices) => {
+      const nextDevices = currentDevices.filter((device) => device.id !== deviceId);
+      remainingDeviceCount = nextDevices.length;
+      return nextDevices;
+    });
     setDrafts((currentDrafts) => {
       const nextDrafts = { ...currentDrafts };
       delete nextDrafts[deviceId];
       return nextDrafts;
     });
+    if (remainingDeviceCount === 0) {
+      setShowProvisioningWizard(true);
+    }
     setStatus(
-      `Deleted ${deviceId}. Hold the provision reset button on the sensor to clear saved Wi-Fi before setting it up again.`,
+      `Deleted ${deviceId}. To provision the same sensor again, hold BOOT on the ESP32 while tapping EN so it clears saved Wi-Fi and re-enters BLE setup mode.`,
     );
   }
 
@@ -277,6 +283,16 @@ export function SetupDashboard() {
             >
               Add device
             </button>
+          </div>
+
+          <div className={styles.rolloutBanner}>
+            <span className={styles.rolloutLabel}>Re-provision</span>
+            <strong>Delete + BOOT/EN reset</strong>
+            <span className={styles.rolloutHint}>
+              Deleting a device only forgets it in the app. To run setup again on the
+              same ESP32, hold <strong>BOOT</strong> and tap <strong>EN</strong> so it
+              clears saved Wi-Fi and comes back in BLE setup mode.
+            </span>
           </div>
 
           <div className={styles.rolloutBanner}>
