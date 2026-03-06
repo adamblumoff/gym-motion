@@ -6,7 +6,7 @@ import type { DeviceSummary, MotionEventSummary } from "@/lib/motion";
 
 import styles from "./device-dashboard.module.css";
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 1000;
 
 type DeviceResponse = {
   devices: DeviceSummary[];
@@ -151,7 +151,7 @@ export function DeviceDashboard() {
           )}
         </section>
 
-        <p className={styles.pollingNote}>Polling every 3 seconds.</p>
+        <p className={styles.pollingNote}>Polling every second.</p>
       </div>
     </section>
   );
