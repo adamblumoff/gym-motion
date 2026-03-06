@@ -1,161 +1,155 @@
-.stack {
+.page {
+  min-height: 100vh;
+  padding: 32px 18px 40px;
   display: grid;
-  gap: 18px;
+  align-items: center;
+  background:
+    radial-gradient(circle at top, rgba(255, 122, 89, 0.12), transparent 24%),
+    radial-gradient(circle at bottom, rgba(77, 226, 197, 0.12), transparent 22%),
+    linear-gradient(180deg, #09121b 0%, #04080c 100%);
 }
 
-.heroCard,
-.deviceCard,
-.emptyCard {
-  border: 1px solid var(--border);
-  border-radius: 28px;
-  background: var(--panel);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
-}
-
-.heroCard {
-  padding: 28px;
-}
-
-.heroCard[data-state="moving"] {
-  border-color: rgba(255, 122, 89, 0.5);
-  box-shadow: 0 28px 80px rgba(255, 122, 89, 0.2);
-}
-
-.heroCard[data-state="still"] {
-  border-color: rgba(77, 226, 197, 0.42);
-  box-shadow: 0 28px 80px rgba(77, 226, 197, 0.16);
-}
-
-.heroTop,
-.deviceTop {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+.shell {
+  width: min(880px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
 }
 
 .deviceId {
   color: var(--muted);
   font-family: var(--font-mono), monospace;
   font-size: 0.82rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  text-align: center;
 }
 
-.heroState {
-  margin: 14px 0 16px;
+.statusBoard {
+  display: grid;
+  gap: 14px;
+}
+
+.statusLine {
+  display: block;
+  padding: 22px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(239, 246, 255, 0.24);
   font-family: var(--font-display), sans-serif;
-  font-size: clamp(3.2rem, 8vw, 5.8rem);
+  font-size: clamp(4.2rem, 16vw, 10rem);
   line-height: 0.9;
   letter-spacing: -0.08em;
+  text-align: center;
   text-transform: uppercase;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 
-.heroCard[data-state="moving"] .heroState,
-.deviceCard[data-state="moving"] .deviceState {
+.statusLine[data-active="true"] {
+  transform: scale(1.01);
+}
+
+.statusLine[data-state="moving"][data-active="true"] {
   color: var(--moving);
+  border-color: rgba(255, 122, 89, 0.5);
+  background: rgba(255, 122, 89, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 122, 89, 0.1), 0 24px 80px rgba(255, 122, 89, 0.18);
 }
 
-.heroCard[data-state="still"] .heroState,
-.deviceCard[data-state="still"] .deviceState {
+.statusLine[data-state="still"][data-active="true"] {
   color: var(--still);
+  border-color: rgba(77, 226, 197, 0.5);
+  background: rgba(77, 226, 197, 0.1);
+  box-shadow: 0 0 0 1px rgba(77, 226, 197, 0.08), 0 24px 80px rgba(77, 226, 197, 0.16);
 }
 
-.pill,
-.statusDot {
-  flex-shrink: 0;
-}
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 104px;
-  padding: 10px 14px;
-  border-radius: 999px;
-  font-family: var(--font-mono), monospace;
-  font-size: 0.82rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.heroCard[data-state="moving"] .pill,
-.deviceCard[data-state="moving"] .statusDot {
-  background: var(--moving-soft);
-  color: var(--moving);
-}
-
-.heroCard[data-state="still"] .pill,
-.deviceCard[data-state="still"] .statusDot {
-  background: var(--still-soft);
-  color: var(--still);
-}
-
-.heroMeta,
-.deviceMeta {
+.meta {
   display: grid;
-  gap: 14px;
-}
-
-.heroMeta {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  margin-top: 28px;
-  padding-top: 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.metaLabel {
-  margin-bottom: 6px;
+  gap: 6px;
   color: var(--muted);
-  font-size: 0.82rem;
+  text-align: center;
+}
+
+.meta strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.events {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.eventsHeader {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
-.metaValue {
-  font-size: 1rem;
+.eventsList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.grid {
+.eventsEmpty {
+  padding: 14px 16px;
+  color: var(--muted);
+}
+
+.eventRow {
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: 1.2fr 0.8fr 0.8fr 1.2fr;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.92rem;
 }
 
-.deviceCard,
-.emptyCard {
-  padding: 18px;
+.eventRow:first-child {
+  border-top: 0;
 }
 
-.deviceState {
-  margin-top: 18px;
-  font-family: var(--font-display), sans-serif;
-  font-size: 2rem;
-  line-height: 1;
-  letter-spacing: -0.05em;
+.eventState {
+  font-weight: 700;
   text-transform: uppercase;
 }
 
-.deviceMeta {
-  margin-top: 20px;
+.eventState[data-state="moving"] {
+  color: var(--moving);
 }
 
-.statusDot {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
+.eventState[data-state="still"] {
+  color: var(--still);
 }
 
 .emptyCard {
-  background: var(--panel-strong);
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: center;
 }
 
 .emptyTitle {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   font-family: var(--font-display), sans-serif;
-  font-size: 2rem;
-  letter-spacing: -0.05em;
+  font-size: clamp(2.8rem, 12vw, 5rem);
+  line-height: 0.92;
+  letter-spacing: -0.07em;
+  text-transform: uppercase;
 }
 
 .emptyText,
@@ -164,21 +158,21 @@
 }
 
 .pollingNote {
-  margin: 4px 0 0;
+  margin: 0;
+  text-align: center;
   font-size: 0.88rem;
 }
 
 @media (max-width: 720px) {
-  .heroCard {
-    padding: 22px;
+  .page {
+    padding: 18px 12px 28px;
   }
 
-  .heroTop,
-  .deviceTop {
-    flex-direction: column;
+  .statusLine {
+    padding: 18px 14px;
   }
 
-  .pill {
-    min-width: 0;
+  .eventRow {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,5 +1,9 @@
 import { getDb } from "@/lib/db";
-import type { DeviceSummary, IngestPayload } from "@/lib/motion";
+import type {
+  DeviceSummary,
+  IngestPayload,
+  MotionEventSummary,
+} from "@/lib/motion";
 import { toEventDate } from "@/lib/motion";
 
 type DeviceRow = {
@@ -7,6 +11,15 @@ type DeviceRow = {
   last_state: DeviceSummary["lastState"];
   last_seen_at: Date;
   last_delta: number | null;
+};
+
+type MotionEventRow = {
+  id: number;
+  device_id: string;
+  state: MotionEventSummary["state"];
+  delta: number | null;
+  event_timestamp: Date;
+  received_at: Date;
 };
 
 export async function recordMotionEvent(payload: IngestPayload) {
@@ -56,5 +69,24 @@ export async function listDevices(): Promise<DeviceSummary[]> {
     lastState: row.last_state,
     lastSeenAt: row.last_seen_at.toISOString(),
     lastDelta: row.last_delta,
+  }));
+}
+
+export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]> {
+  const result = await getDb().query<MotionEventRow>(
+    `select id, device_id, state, delta, event_timestamp, received_at
+     from motion_events
+     order by event_timestamp desc, id desc
+     limit $1`,
+    [limit],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    deviceId: row.device_id,
+    state: row.state,
+    delta: row.delta,
+    eventTimestamp: row.event_timestamp.toISOString(),
+    receivedAt: row.received_at.toISOString(),
   }));
 }

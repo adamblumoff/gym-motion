@@ -2,7 +2,7 @@
 
 Minimal motion dashboard for an ESP32 device.
 
-The device sends `POST /api/ingest` whenever its motion state changes. The app stores every event in PostgreSQL, keeps the latest state per device, and the dashboard polls the backend to show whether each device is currently `MOVING` or `STILL`.
+The device sends `POST /api/ingest` whenever its motion state changes. The app stores every event in PostgreSQL, keeps the latest state per device, and the dashboard polls the backend to show whether each device is currently `MOVING` or `STILL` while also listing recent events from the database.
 
 ## Stack
 
@@ -101,6 +101,10 @@ Success response:
 
 Returns the latest known state for all devices.
 
+### `GET /api/events`
+
+Returns a small recent-events feed from `motion_events` for dashboard visibility.
+
 ## Test / seed
 
 Send a sample event to a running app:
@@ -147,4 +151,4 @@ Start: bun run start
 3. The backend inserts the raw event into `motion_events`.
 4. The backend upserts the current device state into `devices`.
 5. The dashboard polls `GET /api/devices` every 3 seconds.
-6. The UI renders the latest state as `MOVING` or `STILL`.
+6. The UI renders the latest state as `MOVING` or `STILL` and shows recent events from the database underneath.

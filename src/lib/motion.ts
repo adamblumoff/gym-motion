@@ -19,6 +19,15 @@ export type DeviceSummary = {
   lastDelta: number | null;
 };
 
+export type MotionEventSummary = {
+  id: number;
+  deviceId: string;
+  state: MotionState;
+  delta: number | null;
+  eventTimestamp: string;
+  receivedAt: string;
+};
+
 export function parseIngestPayload(input: unknown) {
   return ingestPayloadSchema.safeParse(input);
 }

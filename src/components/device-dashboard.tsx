@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import type { DeviceSummary } from "@/lib/motion";
+import type { DeviceSummary, MotionEventSummary } from "@/lib/motion";
 
 import styles from "./device-dashboard.module.css";
 
@@ -12,7 +12,11 @@ type DeviceResponse = {
   devices: DeviceSummary[];
 };
 
-function formatState(state: DeviceSummary["lastState"]) {
+type EventResponse = {
+  events: MotionEventSummary[];
+};
+
+function formatState(state: DeviceSummary["lastState"] | MotionEventSummary["state"]) {
   return state.toUpperCase();
 }
 
@@ -23,49 +27,31 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function DeviceCard({ device }: { device: DeviceSummary }) {
-  return (
-    <article className={styles.deviceCard} data-state={device.lastState}>
-      <div className={styles.deviceTop}>
-        <div>
-          <div className={styles.deviceId}>{device.id}</div>
-          <div className={styles.deviceState}>{formatState(device.lastState)}</div>
-        </div>
-        <div className={styles.statusDot} aria-hidden="true" />
-      </div>
-      <div className={styles.deviceMeta}>
-        <div>
-          <div className={styles.metaLabel}>Last seen</div>
-          <div className={styles.metaValue}>{formatTime(device.lastSeenAt)}</div>
-        </div>
-        <div>
-          <div className={styles.metaLabel}>Delta</div>
-          <div className={styles.metaValue}>{device.lastDelta ?? "N/A"}</div>
-        </div>
-      </div>
-    </article>
-  );
-}
-
 export function DeviceDashboard() {
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
+  const [events, setEvents] = useState<MotionEventSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadDevices() {
+    async function loadData() {
       try {
-        const response = await fetch("/api/devices", { cache: "no-store" });
+        const [devicesResponse, eventsResponse] = await Promise.all([
+          fetch("/api/devices", { cache: "no-store" }),
+          fetch("/api/events", { cache: "no-store" }),
+        ]);
 
-        if (!response.ok) {
+        if (!devicesResponse.ok || !eventsResponse.ok) {
           throw new Error("Could not load devices.");
         }
 
-        const data = (await response.json()) as DeviceResponse;
+        const deviceData = (await devicesResponse.json()) as DeviceResponse;
+        const eventData = (await eventsResponse.json()) as EventResponse;
 
         if (!cancelled) {
-          setDevices(data.devices);
+          setDevices(deviceData.devices);
+          setEvents(eventData.events);
           setError(null);
         }
       } catch {
@@ -75,10 +61,10 @@ export function DeviceDashboard() {
       }
     }
 
-    void loadDevices();
+    void loadData();
 
     const intervalId = window.setInterval(() => {
-      void loadDevices();
+      void loadData();
     }, POLL_INTERVAL_MS);
 
     return () => {
@@ -91,57 +77,79 @@ export function DeviceDashboard() {
 
   if (!primaryDevice) {
     return (
-      <section className={styles.stack}>
-        <article className={styles.emptyCard}>
-          <h2 className={styles.emptyTitle}>No motion data yet</h2>
-          <p className={styles.emptyText}>
-            Send an event to <code>/api/ingest</code> and the dashboard will
-            light up on the next poll.
-          </p>
-          {error ? <p className={styles.pollingNote}>{error}</p> : null}
-        </article>
+      <section className={styles.page}>
+        <div className={styles.shell}>
+          <article className={styles.emptyCard}>
+            <h2 className={styles.emptyTitle}>No motion data yet</h2>
+            <p className={styles.emptyText}>
+              Send an event to <code>/api/ingest</code> and the dashboard will
+              light up on the next poll.
+            </p>
+            {error ? <p className={styles.pollingNote}>{error}</p> : null}
+          </article>
+        </div>
       </section>
     );
   }
 
   return (
-    <section className={styles.stack}>
-      <article className={styles.heroCard} data-state={primaryDevice.lastState}>
-        <div className={styles.heroTop}>
-          <div>
-            <div className={styles.deviceId}>{primaryDevice.id}</div>
-            <div className={styles.heroState}>
-              {formatState(primaryDevice.lastState)}
-            </div>
-          </div>
-          <div className={styles.pill}>{formatState(primaryDevice.lastState)}</div>
-        </div>
+    <section className={styles.page}>
+      <div className={styles.shell}>
+        <div className={styles.deviceId}>{primaryDevice.id}</div>
 
-        <div className={styles.heroMeta}>
-          <div>
-            <div className={styles.metaLabel}>Last seen</div>
-            <div className={styles.metaValue}>
-              {formatTime(primaryDevice.lastSeenAt)}
-            </div>
+        <div className={styles.statusBoard}>
+          <div
+            className={styles.statusLine}
+            data-active={primaryDevice.lastState === "moving"}
+            data-state="moving"
+          >
+            MOVING
           </div>
-          <div>
-            <div className={styles.metaLabel}>Delta</div>
-            <div className={styles.metaValue}>
-              {primaryDevice.lastDelta ?? "N/A"}
-            </div>
+          <div
+            className={styles.statusLine}
+            data-active={primaryDevice.lastState === "still"}
+            data-state="still"
+          >
+            STILL
           </div>
         </div>
-      </article>
 
-      {otherDevices.length > 0 ? (
-        <div className={styles.grid}>
-          {otherDevices.map((device) => (
-            <DeviceCard key={device.id} device={device} />
-          ))}
+        <div className={styles.meta}>
+          <div>
+            Last seen <strong>{formatTime(primaryDevice.lastSeenAt)}</strong>
+          </div>
+          <div>
+            Delta <strong>{primaryDevice.lastDelta ?? "N/A"}</strong>
+          </div>
+          {otherDevices.length > 0 ? (
+            <div>
+              Tracking <strong>{devices.length}</strong> devices total
+            </div>
+          ) : null}
         </div>
-      ) : null}
 
-      <p className={styles.pollingNote}>Polling every 3 seconds.</p>
+        <section className={styles.events}>
+          <div className={styles.eventsHeader}>Recent events from DB</div>
+          {events.length === 0 ? (
+            <div className={styles.eventsEmpty}>No events in the database yet.</div>
+          ) : (
+            <ul className={styles.eventsList}>
+              {events.map((event) => (
+                <li className={styles.eventRow} key={event.id}>
+                  <span>{event.deviceId}</span>
+                  <span className={styles.eventState} data-state={event.state}>
+                    {formatState(event.state)}
+                  </span>
+                  <span>delta {event.delta ?? "N/A"}</span>
+                  <span>{formatTime(event.eventTimestamp)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <p className={styles.pollingNote}>Polling every 3 seconds.</p>
+      </div>
     </section>
   );
 }
