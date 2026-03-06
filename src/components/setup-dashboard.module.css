@@ -65,6 +65,12 @@
   cursor: pointer;
 }
 
+.saveButton[data-variant="danger"] {
+  border-color: rgba(255, 93, 93, 0.32);
+  background: rgba(255, 93, 93, 0.08);
+  color: #ffd3d3;
+}
+
 .status,
 .section,
 .deviceCard,

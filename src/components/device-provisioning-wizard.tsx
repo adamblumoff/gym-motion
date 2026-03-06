@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DeviceSummary, MotionStreamPayload } from "@/lib/motion";
 import type {
@@ -66,6 +66,7 @@ export function DeviceProvisioningWizard({
   const [storedProfile, setStoredProfile] = useState<StoredWiFiProfile | null>(
     null,
   );
+  const awaitingDeviceReconnect = useRef(false);
 
   useEffect(() => {
     setStoredProfile(loadStoredWiFiProfile());
@@ -139,9 +140,13 @@ export function DeviceProvisioningWizard({
         setStatus("Choose the gym Wi-Fi and continue.");
         break;
       case "phase":
+        if (message.phase === "restarting") {
+          awaitingDeviceReconnect.current = true;
+        }
         setStatus(message.message);
         break;
       case "provisioned":
+        awaitingDeviceReconnect.current = true;
         setPendingProvisionDeviceId(message.deviceId);
         setStep("provisioning");
         setStatus(
@@ -149,6 +154,7 @@ export function DeviceProvisioningWizard({
         );
         break;
       case "error":
+        awaitingDeviceReconnect.current = false;
         setError(message.message);
         break;
     }
@@ -157,6 +163,7 @@ export function DeviceProvisioningWizard({
   async function handleConnect() {
     try {
       setError(null);
+      awaitingDeviceReconnect.current = false;
       setStatus("Opening the Bluetooth chooser…");
       const device = await requestProvisioningDevice();
       const connection = await connectProvisioningDevice(device);
@@ -173,6 +180,14 @@ export function DeviceProvisioningWizard({
           cleanup();
           setBluetoothConnected(false);
           setControlCharacteristic(null);
+
+          if (awaitingDeviceReconnect.current) {
+            setStatus(
+              "The sensor dropped Bluetooth so it can reboot into Wi-Fi mode. Waiting for it to appear online…",
+            );
+            return;
+          }
+
           setStatus("Bluetooth disconnected. Reconnect to continue.");
         },
         { once: true },
@@ -260,9 +275,11 @@ export function DeviceProvisioningWizard({
         wifiPassword,
       });
 
+      awaitingDeviceReconnect.current = true;
       setPendingProvisionDeviceId(deviceId);
       setStatus("Waiting for the device to join Wi-Fi and report online…");
     } catch (nextError) {
+      awaitingDeviceReconnect.current = false;
       console.error(nextError);
       setError("Provisioning failed before the device finished setup.");
       setStep("details");

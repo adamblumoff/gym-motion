@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { formatZodError, parseDeviceAssignment } from "@/lib/motion";
 import { broadcastMotionUpdate } from "@/lib/motion-stream";
-import { updateDeviceAssignment } from "@/lib/repository";
+import { purgeDeviceData, updateDeviceAssignment } from "@/lib/repository";
 
 export const runtime = "nodejs";
 
@@ -53,6 +53,30 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return NextResponse.json(
       { ok: false, error: "Failed to update device." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(_request: Request, context: RouteContext) {
+  const { deviceId } = await context.params;
+
+  try {
+    const result = await purgeDeviceData(deviceId);
+
+    if (result.deletedDevices === 0) {
+      return NextResponse.json(
+        { ok: false, error: "Device not found." },
+        { status: 404 },
+      );
+    }
+
+    return NextResponse.json({ ok: true, result });
+  } catch (error) {
+    console.error("Failed to delete device", error);
+
+    return NextResponse.json(
+      { ok: false, error: "Failed to delete device." },
       { status: 500 },
     );
   }

@@ -158,6 +158,37 @@ export function SetupDashboard() {
     setStatus(`Saved ${deviceId}.`);
   }
 
+  async function handleDeviceDelete(deviceId: string) {
+    const confirmed = window.confirm(
+      `Delete ${deviceId} from the app? The sensor will need its provision reset button held before it can go through BLE setup again.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const response = await fetch(`/api/devices/${deviceId}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      setStatus(`Failed to delete ${deviceId}.`);
+      return;
+    }
+
+    setDevices((currentDevices) =>
+      currentDevices.filter((device) => device.id !== deviceId),
+    );
+    setDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      delete nextDrafts[deviceId];
+      return nextDrafts;
+    });
+    setStatus(
+      `Deleted ${deviceId}. Hold the provision reset button on the sensor to clear saved Wi-Fi before setting it up again.`,
+    );
+  }
+
   async function handleReleaseSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -299,6 +330,14 @@ export function SetupDashboard() {
                         type="button"
                       >
                         Save
+                      </button>
+                      <button
+                        className={styles.saveButton}
+                        data-variant="danger"
+                        onClick={() => void handleDeviceDelete(device.id)}
+                        type="button"
+                      >
+                        Delete
                       </button>
                       </div>
                     </div>

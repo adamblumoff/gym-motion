@@ -399,6 +399,8 @@ If a device reports `ota.failed` with reason `slot-too-small-requires-usb-migrat
 6. The browser sends Wi-Fi credentials and identity to the ESP32 over BLE.
 7. The ESP32 stores the config in NVS, joins Wi-Fi, reboots into normal mode, and appears online as `provisioned`.
 
+Deleting a device from `/setup` only forgets it in the app database. To run BLE setup again for the same physical sensor, hold the device's provision reset button so it clears saved Wi-Fi and re-enters provisioning mode.
+
 ## Test / seed
 
 Send a sample event:
