@@ -79,6 +79,7 @@ describe("parseFirmwareRelease", () => {
       gitSha: "abcdef1",
       assetUrl: "https://example.com/gym-motion.bin",
       sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      md5: "0123456789abcdef0123456789abcdef",
       sizeBytes: 245760,
       rolloutState: "active",
     });

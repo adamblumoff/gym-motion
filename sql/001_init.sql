@@ -37,6 +37,7 @@ create table if not exists firmware_releases (
   git_sha text not null,
   asset_url text not null,
   sha256 text not null,
+  md5 text,
   size_bytes bigint not null,
   rollout_state text not null default 'draft',
   created_at timestamp not null default now()

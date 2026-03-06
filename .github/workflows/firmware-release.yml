@@ -27,6 +27,14 @@ jobs:
       - name: Build firmware binary
         run: ./scripts/build-firmware.sh
 
+      - name: Generate checksums
+        run: |
+          cd build/firmware
+          for file in *.bin; do
+            sha256sum "$file" > "$file.sha256"
+            md5sum "$file" > "$file.md5"
+          done
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:

@@ -28,6 +28,11 @@ export async function GET(request: Request) {
         updateAvailable: result.updateAvailable,
         device: result.device,
         release: result.release,
+        version: result.release?.version ?? null,
+        assetUrl: result.release?.assetUrl ?? null,
+        sha256: result.release?.sha256 ?? null,
+        md5: result.release?.md5 ?? null,
+        sizeBytes: result.release?.sizeBytes ?? null,
       },
       {
         headers: {

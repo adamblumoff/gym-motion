@@ -64,6 +64,7 @@ export function SetupDashboard() {
     gitSha: "",
     assetUrl: "",
     sha256: "",
+    md5: "",
     sizeBytes: "",
     rolloutState: "draft",
   });
@@ -174,14 +175,15 @@ export function SetupDashboard() {
     const data = (await response.json()) as { release: FirmwareReleaseSummary };
 
     setReleases((currentReleases) => [data.release, ...currentReleases]);
-    setReleaseForm({
-      version: "",
-      gitSha: "",
-      assetUrl: "",
-      sha256: "",
-      sizeBytes: "",
-      rolloutState: "draft",
-    });
+        setReleaseForm({
+          version: "",
+          gitSha: "",
+          assetUrl: "",
+          sha256: "",
+          md5: "",
+          sizeBytes: "",
+          rolloutState: "draft",
+        });
     setStatus(`Saved firmware ${data.release.version}.`);
   }
 
@@ -376,6 +378,18 @@ export function SetupDashboard() {
                   setReleaseForm((currentForm) => ({
                     ...currentForm,
                     sha256: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.field}>
+              <span>MD5</span>
+              <input
+                value={releaseForm.md5}
+                onChange={(event) =>
+                  setReleaseForm((currentForm) => ({
+                    ...currentForm,
+                    md5: event.target.value,
                   }))
                 }
               />

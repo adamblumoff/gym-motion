@@ -47,6 +47,7 @@ type FirmwareReleaseRow = {
   git_sha: string;
   asset_url: string;
   sha256: string;
+  md5: string | null;
   size_bytes: string | number;
   rollout_state: FirmwareReleaseSummary["rolloutState"];
   created_at: Date;
@@ -109,6 +110,7 @@ function mapFirmwareReleaseRow(row: FirmwareReleaseRow): FirmwareReleaseSummary 
     gitSha: row.git_sha,
     assetUrl: row.asset_url,
     sha256: row.sha256,
+    md5: row.md5,
     sizeBytes: toSafeNumber(row.size_bytes),
     rolloutState: row.rollout_state,
     createdAt: row.created_at.toISOString(),
@@ -415,22 +417,25 @@ export async function createFirmwareRelease(
        git_sha,
        asset_url,
        sha256,
+       md5,
        size_bytes,
        rollout_state
      )
-     values ($1, $2, $3, $4, $5, $6)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (version) do update
      set git_sha = excluded.git_sha,
          asset_url = excluded.asset_url,
          sha256 = excluded.sha256,
+         md5 = excluded.md5,
          size_bytes = excluded.size_bytes,
          rollout_state = excluded.rollout_state
-     returning version, git_sha, asset_url, sha256, size_bytes, rollout_state, created_at`,
+     returning version, git_sha, asset_url, sha256, md5, size_bytes, rollout_state, created_at`,
     [
       input.version,
       input.gitSha,
       input.assetUrl,
       input.sha256,
+      input.md5 ?? null,
       input.sizeBytes,
       input.rolloutState,
     ],
@@ -441,7 +446,7 @@ export async function createFirmwareRelease(
 
 export async function listFirmwareReleases(): Promise<FirmwareReleaseSummary[]> {
   const result = await getDb().query<FirmwareReleaseRow>(
-    `select version, git_sha, asset_url, sha256, size_bytes, rollout_state, created_at
+    `select version, git_sha, asset_url, sha256, md5, size_bytes, rollout_state, created_at
      from firmware_releases
      order by created_at desc, version desc`,
   );
@@ -478,7 +483,7 @@ export async function checkForFirmwareUpdate(
       [input.deviceId],
     ),
     getDb().query<FirmwareReleaseRow>(
-      `select version, git_sha, asset_url, sha256, size_bytes, rollout_state, created_at
+      `select version, git_sha, asset_url, sha256, md5, size_bytes, rollout_state, created_at
        from firmware_releases
        where rollout_state = 'active'
        order by created_at desc

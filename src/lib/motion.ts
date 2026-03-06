@@ -47,6 +47,7 @@ export const firmwareReleaseSchema = z.object({
   gitSha: z.string().trim().min(1).max(120),
   assetUrl: z.string().url(),
   sha256: z.string().trim().min(32).max(128),
+  md5: z.string().trim().length(32).optional(),
   sizeBytes: z.number().int().positive(),
   rolloutState: z.enum(["draft", "active", "paused"]).default("draft"),
 });
@@ -108,6 +109,7 @@ export type FirmwareReleaseSummary = {
   gitSha: string;
   assetUrl: string;
   sha256: string;
+  md5: string | null;
   sizeBytes: number;
   rolloutState: "draft" | "active" | "paused";
   createdAt: string;

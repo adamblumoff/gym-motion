@@ -7,7 +7,7 @@ The web app now does four jobs:
 - shows live `MOVING` / `STILL` state over SSE
 - tracks device health with server-side `ONLINE` / `STALE` / `OFFLINE`
 - gives you a simple `/setup` screen for assigning machine labels and sites
-- stores firmware release metadata so the repo can grow into OTA safely
+- manages OTA firmware releases and device update status
 
 The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
 
@@ -100,6 +100,7 @@ create table if not exists firmware_releases (
   git_sha text not null,
   asset_url text not null,
   sha256 text not null,
+  md5 text,
   size_bytes bigint not null,
   rollout_state text not null default 'draft',
   created_at timestamp not null default now()
@@ -192,6 +193,7 @@ Stores a firmware release row:
   "gitSha": "abc1234",
   "assetUrl": "https://github.com/owner/repo/releases/download/firmware-v0.3.1/gym_motion.bin",
   "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "md5": "0123456789abcdef0123456789abcdef",
   "sizeBytes": 245760,
   "rolloutState": "active"
 }
@@ -224,19 +226,31 @@ Build locally with Arduino CLI:
 bun run firmware:build
 ```
 
-Default board target:
+Default board target and partition scheme:
 
 ```text
-esp32:esp32:esp32
+FQBN=esp32:esp32:esp32
+PARTITIONS=min_spiffs
 ```
 
 Override it if needed:
 
 ```bash
-FQBN=esp32:esp32:esp32 bun run firmware:build
+FQBN=esp32:esp32:esp32 PARTITIONS=min_spiffs bun run firmware:build
 ```
 
 There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that builds firmware on tag pushes like `firmware-v0.3.1` and uploads the binary as a release asset.
+
+## OTA firmware flow
+
+1. Flash the ESP32 once over USB with the OTA-capable sketch and `min_spiffs` partition scheme.
+2. The device sends normal motion events plus heartbeats with `firmwareVersion`, `bootId`, and `hardwareId`.
+3. A background OTA task on the device checks `/api/firmware/check` every few minutes while the device is idle.
+4. If the backend advertises a newer active release, the device downloads the `.bin` from GitHub Releases over HTTPS.
+5. The device verifies the image checksum, writes it to the inactive OTA app slot, reports `applied`, and restarts.
+6. On the next boot, the device reports `booted` and continues normal motion tracking.
+
+The release workflow now also generates `.sha256` and `.md5` files alongside the firmware binary.
 
 ## Test / seed
 
