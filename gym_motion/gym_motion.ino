@@ -627,7 +627,7 @@ class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const String rawValue = characteristic->getValue();
 
-    if (rawValue.empty()) {
+    if (rawValue.isEmpty()) {
       return;
     }
 
