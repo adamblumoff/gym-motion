@@ -2,14 +2,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ARDUINO_CLI="${ARDUINO_CLI:-$REPO_ROOT/bin/arduino-cli}"
+
 FQBN="${FQBN:-esp32:esp32:esp32}"
 SKETCH_PATH="${SKETCH_PATH:-gym_motion/gym_motion.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
-arduino-cli compile \
+"$ARDUINO_CLI" compile \
   --fqbn "$FQBN" \
-  --build-property "build.partitions=$PARTITIONS" \
+  --board-options "PartitionScheme=$PARTITIONS" \
   --export-binaries \
   --output-dir "$BUILD_PATH" \
   "$SKETCH_PATH"

@@ -292,6 +292,14 @@ Build locally with Arduino CLI:
 bun run firmware:build
 ```
 
+The repo ships its own `arduino-cli` binary in `bin/arduino-cli`, so `bun run firmware:build` uses the repo toolchain instead of relying on your shell `PATH`.
+
+One-time local setup for a fresh machine:
+
+```bash
+./bin/arduino-cli core install esp32:esp32
+```
+
 Default board target and partition scheme:
 
 ```text
@@ -303,6 +311,15 @@ Override it if needed:
 
 ```bash
 FQBN=esp32:esp32:esp32 PARTITIONS=min_spiffs bun run firmware:build
+```
+
+Recommended manual QA flow before publishing a firmware tag:
+
+```bash
+bun test
+bun run lint
+bun run build
+bun run firmware:build
 ```
 
 There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that can fully publish firmware on tag pushes like `firmware-v0.4.2`.
