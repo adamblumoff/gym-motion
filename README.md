@@ -1,34 +1,150 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Gym Motion MVP
 
-## Getting Started
+Minimal motion dashboard for an ESP32 device.
 
-First, run the development server:
+The device sends `POST /api/ingest` whenever its motion state changes. The app stores every event in PostgreSQL, keeps the latest state per device, and the dashboard polls the backend to show whether each device is currently `MOVING` or `STILL`.
+
+## Stack
+
+- Next.js App Router + TypeScript
+- Railway PostgreSQL
+- Bun
+- Direct SQL with `pg`
+
+## Required environment variables
+
+Create `.env.local` with:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/railway
+```
+
+Railway will also provide `DATABASE_URL` in production.
+You can copy `.env.example` as a starting point.
+
+## Local setup
+
+```bash
+bun install
+bun run db:setup
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Database setup
 
-## Learn More
+Schema file:
 
-To learn more about Next.js, take a look at the following resources:
+- `sql/001_init.sql`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Apply it locally or against Railway with either of these:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+bun run db:setup
+```
 
-## Deploy on Vercel
+Or with `psql`:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+psql "$DATABASE_URL" -f sql/001_init.sql
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## SQL to create the tables
+
+```sql
+create table if not exists devices (
+  id text primary key,
+  last_state text not null,
+  last_seen_at timestamp not null,
+  last_delta integer,
+  updated_at timestamp not null default now()
+);
+
+create table if not exists motion_events (
+  id bigserial primary key,
+  device_id text not null,
+  state text not null,
+  delta integer,
+  event_timestamp timestamp not null,
+  received_at timestamp not null default now()
+);
+
+create index if not exists motion_events_device_id_idx
+  on motion_events (device_id, event_timestamp desc);
+```
+
+## API
+
+### `POST /api/ingest`
+
+Request body:
+
+```json
+{
+  "deviceId": "stack-001",
+  "state": "moving",
+  "timestamp": 1710000000000,
+  "delta": 42
+}
+```
+
+Success response:
+
+```json
+{
+  "ok": true
+}
+```
+
+### `GET /api/devices`
+
+Returns the latest known state for all devices.
+
+## Test / seed
+
+Send a sample event to a running app:
+
+```bash
+bun run seed
+```
+
+Point it at another host if needed:
+
+```bash
+API_URL=https://your-app.up.railway.app bun run seed
+```
+
+Run tests:
+
+```bash
+bun test
+```
+
+## Railway deployment
+
+1. Create a new Railway project.
+2. Add a PostgreSQL service.
+3. Add this repo as a web service.
+4. Set `DATABASE_URL` on the web service using the Postgres connection string.
+5. Run the schema once:
+   - Railway Postgres console or `psql`
+   - or connect locally and run `bun run db:setup`
+6. Deploy.
+
+Railway should detect the Next.js app automatically. If you want explicit commands, use:
+
+```bash
+Install: bun install
+Build: bun run build
+Start: bun run start
+```
+
+## ESP32 -> API -> DB -> UI flow
+
+1. The ESP32 detects a state change and sends JSON to `POST /api/ingest`.
+2. The backend validates the payload with Zod.
+3. The backend inserts the raw event into `motion_events`.
+4. The backend upserts the current device state into `devices`.
+5. The dashboard polls `GET /api/devices` every 3 seconds.
+6. The UI renders the latest state as `MOVING` or `STILL`.
