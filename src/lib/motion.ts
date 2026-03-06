@@ -1,16 +1,72 @@
 import { z } from "zod";
 
 export const motionStateSchema = z.enum(["moving", "still"]);
+export const provisioningStateSchema = z.enum([
+  "unassigned",
+  "assigned",
+  "provisioned",
+]);
+export const updateStatusSchema = z.enum([
+  "idle",
+  "available",
+  "downloading",
+  "applied",
+  "booted",
+  "failed",
+  "rolled_back",
+]);
+export const healthStatusSchema = z.enum(["online", "stale", "offline"]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
   state: motionStateSchema,
   timestamp: z.number().int().positive(),
   delta: z.number().int().nullable().optional(),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  firmwareVersion: z.string().trim().min(1).max(120).optional(),
+  hardwareId: z.string().trim().min(1).max(120).optional(),
+});
+
+export const heartbeatPayloadSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  timestamp: z.number().int().positive(),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  firmwareVersion: z.string().trim().min(1).max(120).optional(),
+  hardwareId: z.string().trim().min(1).max(120).optional(),
+});
+
+export const deviceAssignmentSchema = z.object({
+  machineLabel: z.string().trim().min(1).max(120).nullable().optional(),
+  siteId: z.string().trim().min(1).max(120).nullable().optional(),
+  hardwareId: z.string().trim().min(1).max(120).nullable().optional(),
+  provisioningState: provisioningStateSchema.optional(),
+});
+
+export const firmwareReleaseSchema = z.object({
+  version: z.string().trim().min(1).max(120),
+  gitSha: z.string().trim().min(1).max(120),
+  assetUrl: z.string().url(),
+  sha256: z.string().trim().min(32).max(128),
+  sizeBytes: z.number().int().positive(),
+  rolloutState: z.enum(["draft", "active", "paused"]).default("draft"),
+});
+
+export const firmwareReportSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  status: updateStatusSchema,
+  targetVersion: z.string().trim().min(1).max(120).optional(),
+  detail: z.string().trim().min(1).max(280).optional(),
 });
 
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
+export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
+export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
+export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
 export type MotionState = z.infer<typeof motionStateSchema>;
+export type ProvisioningState = z.infer<typeof provisioningStateSchema>;
+export type UpdateStatus = z.infer<typeof updateStatusSchema>;
+export type HealthStatus = z.infer<typeof healthStatusSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -18,6 +74,16 @@ export type DeviceSummary = {
   lastSeenAt: number;
   lastDelta: number | null;
   updatedAt: string;
+  hardwareId: string | null;
+  bootId: string | null;
+  firmwareVersion: string;
+  machineLabel: string | null;
+  siteId: string | null;
+  provisioningState: ProvisioningState;
+  updateStatus: UpdateStatus;
+  lastHeartbeatAt: string | null;
+  lastEventReceivedAt: string | null;
+  healthStatus: HealthStatus;
 };
 
 export type MotionEventSummary = {
@@ -27,11 +93,24 @@ export type MotionEventSummary = {
   delta: number | null;
   eventTimestamp: number;
   receivedAt: string;
+  bootId: string | null;
+  firmwareVersion: string | null;
+  hardwareId: string | null;
 };
 
 export type MotionStreamPayload = {
   device: DeviceSummary;
-  event: MotionEventSummary;
+  event?: MotionEventSummary;
+};
+
+export type FirmwareReleaseSummary = {
+  version: string;
+  gitSha: string;
+  assetUrl: string;
+  sha256: string;
+  sizeBytes: number;
+  rolloutState: "draft" | "active" | "paused";
+  createdAt: string;
 };
 
 export function mergeDeviceUpdate(
@@ -56,6 +135,22 @@ export function mergeEventUpdate(
 
 export function parseIngestPayload(input: unknown) {
   return ingestPayloadSchema.safeParse(input);
+}
+
+export function parseHeartbeatPayload(input: unknown) {
+  return heartbeatPayloadSchema.safeParse(input);
+}
+
+export function parseDeviceAssignment(input: unknown) {
+  return deviceAssignmentSchema.safeParse(input);
+}
+
+export function parseFirmwareRelease(input: unknown) {
+  return firmwareReleaseSchema.safeParse(input);
+}
+
+export function parseFirmwareReport(input: unknown) {
+  return firmwareReportSchema.safeParse(input);
 }
 
 export function formatZodError(message: z.ZodError) {

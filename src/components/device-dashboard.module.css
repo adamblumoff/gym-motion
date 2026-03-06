@@ -10,19 +10,81 @@
 }
 
 .shell {
-  width: min(880px, 100%);
+  width: min(980px, 100%);
   margin: 0 auto;
   display: grid;
   gap: 22px;
 }
 
-.deviceId {
-  color: var(--muted);
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topLabel,
+.deviceId,
+.eventsHeader,
+.metaLabel,
+.topLink {
   font-family: var(--font-mono), monospace;
-  font-size: 0.82rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  text-align: center;
+}
+
+.topLabel,
+.deviceId {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.topLink {
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.76rem;
+}
+
+.healthRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+}
+
+.healthBadge {
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.healthBadge[data-health="online"] {
+  color: var(--still);
+  border-color: rgba(77, 226, 197, 0.4);
+  background: rgba(77, 226, 197, 0.12);
+}
+
+.healthBadge[data-health="stale"] {
+  color: #ffcc70;
+  border-color: rgba(255, 204, 112, 0.4);
+  background: rgba(255, 204, 112, 0.12);
+}
+
+.healthBadge[data-health="offline"] {
+  color: var(--moving);
+  border-color: rgba(255, 122, 89, 0.4);
+  background: rgba(255, 122, 89, 0.12);
+}
+
+.healthMeta {
+  color: var(--muted);
 }
 
 .statusBoard {
@@ -38,7 +100,7 @@
   background: rgba(255, 255, 255, 0.04);
   color: rgba(239, 246, 255, 0.24);
   font-family: var(--font-display), sans-serif;
-  font-size: clamp(4.2rem, 16vw, 10rem);
+  font-size: clamp(4rem, 16vw, 10rem);
   line-height: 0.9;
   letter-spacing: -0.08em;
   text-align: center;
@@ -69,22 +131,49 @@
   box-shadow: 0 0 0 1px rgba(77, 226, 197, 0.08), 0 24px 80px rgba(77, 226, 197, 0.16);
 }
 
-.meta {
+.metaGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metaCard,
+.events,
+.emptyCard {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.metaCard {
+  border-radius: 22px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.metaCard strong {
+  font-weight: 600;
+}
+
+.metaLabel {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.debugMeta {
   display: grid;
   gap: 6px;
   color: var(--muted);
   text-align: center;
 }
 
-.meta strong {
+.debugMeta strong {
   color: var(--text);
   font-weight: 600;
 }
 
 .events {
-  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.04);
   overflow: hidden;
 }
 
@@ -92,10 +181,7 @@
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--muted);
-  font-family: var(--font-mono), monospace;
   font-size: 0.78rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .eventsList {
@@ -111,7 +197,7 @@
 
 .eventRow {
   display: grid;
-  grid-template-columns: 1.2fr 0.8fr 0.8fr 1.2fr;
+  grid-template-columns: 1.1fr 0.8fr 0.8fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 12px 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -137,9 +223,7 @@
 
 .emptyCard {
   padding: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 28px;
-  background: rgba(255, 255, 255, 0.04);
   text-align: center;
 }
 
@@ -163,7 +247,17 @@
   font-size: 0.88rem;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
+  .metaGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .eventRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
   .page {
     padding: 18px 12px 28px;
   }
@@ -172,7 +266,7 @@
     padding: 18px 14px;
   }
 
-  .eventRow {
+  .metaGrid {
     grid-template-columns: 1fr;
   }
 }

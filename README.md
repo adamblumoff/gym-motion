@@ -1,10 +1,15 @@
-# Gym Motion MVP
+# Gym Motion
 
-Minimal motion dashboard for an ESP32 device.
+Motion dashboard and device control plane for ESP32-based gym stack sensors.
 
-The device sends `POST /api/ingest` whenever its motion state changes. The app stores every event in PostgreSQL, keeps the latest state per device, and the dashboard polls the backend to show whether each device is currently `MOVING` or `STILL` while also listing recent events from the database.
+The web app now does four jobs:
 
-The incoming `timestamp` is the ESP32 `millis()` value, not a wall-clock Unix timestamp. The UI shows server receipt time as the human-readable "last seen" value and exposes the raw device millis for debugging.
+- shows live `MOVING` / `STILL` state over SSE
+- tracks device health with server-side `ONLINE` / `STALE` / `OFFLINE`
+- gives you a simple `/setup` screen for assigning machine labels and sites
+- stores firmware release metadata so the repo can grow into OTA safely
+
+The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
 
 ## Stack
 
@@ -12,6 +17,7 @@ The incoming `timestamp` is the ESP32 `millis()` value, not a wall-clock Unix ti
 - Railway PostgreSQL
 - Bun
 - Direct SQL with `pg`
+- ESP32 Arduino sketch in `gym_motion/gym_motion.ino`
 
 ## Required environment variables
 
@@ -21,8 +27,7 @@ Create `.env.local` with:
 DATABASE_PUBLIC_URL=postgresql://USER:PASSWORD@HOST:PORT/railway
 ```
 
-Railway will also provide `DATABASE_PUBLIC_URL` in production.
-You can copy `.env.example` as a starting point.
+Railway should provide `DATABASE_PUBLIC_URL` to the web service in production.
 
 ## Local setup
 
@@ -32,132 +37,238 @@ bun run db:setup
 bun dev
 ```
 
-Open `http://localhost:3000`.
+Open:
+
+- live dashboard: `http://localhost:3000`
+- setup screen: `http://localhost:3000/setup`
 
 ## Database setup
 
-Schema file:
-
-- `sql/001_init.sql`
-
-Apply it locally or against Railway with either of these:
+Apply the schema reset:
 
 ```bash
 bun run db:setup
 ```
 
-Or with `psql`:
+Or:
 
 ```bash
 psql "$DATABASE_PUBLIC_URL" -f sql/001_init.sql
 ```
 
-This schema reset drops and recreates both tables for the MVP.
+This is still an MVP-style destructive schema reset.
 
-## SQL to create the tables
+## SQL schema
 
 ```sql
 drop table if exists motion_events;
+drop table if exists firmware_releases;
 drop table if exists devices;
 
 create table if not exists devices (
   id text primary key,
-  last_state text not null,
-  last_seen_at bigint not null,
+  last_state text not null default 'still',
+  last_seen_at bigint not null default 0,
   last_delta integer,
-  updated_at timestamp not null default now()
+  updated_at timestamp not null default now(),
+  hardware_id text,
+  boot_id text,
+  firmware_version text not null default 'unknown',
+  machine_label text,
+  site_id text,
+  provisioning_state text not null default 'unassigned',
+  update_status text not null default 'idle',
+  last_event_received_at timestamp,
+  last_heartbeat_at timestamp,
+  wifi_provisioned_at timestamp
 );
 
 create table if not exists motion_events (
   id bigserial primary key,
-  device_id text not null,
+  device_id text not null references devices (id) on delete cascade,
   state text not null,
   delta integer,
   event_timestamp bigint not null,
-  received_at timestamp not null default now()
+  received_at timestamp not null default now(),
+  boot_id text,
+  firmware_version text,
+  hardware_id text
 );
 
-create index if not exists motion_events_device_id_idx
-  on motion_events (device_id, event_timestamp desc);
+create table if not exists firmware_releases (
+  version text primary key,
+  git_sha text not null,
+  asset_url text not null,
+  sha256 text not null,
+  size_bytes bigint not null,
+  rollout_state text not null default 'draft',
+  created_at timestamp not null default now()
+);
 ```
 
 ## API
 
 ### `POST /api/ingest`
 
-Request body:
+Motion state change from the ESP32:
 
 ```json
 {
   "deviceId": "stack-001",
   "state": "moving",
   "timestamp": 123456,
-  "delta": 42
+  "delta": 42,
+  "bootId": "esp32-a1-5f7c1a91",
+  "firmwareVersion": "0.3.0",
+  "hardwareId": "esp32-a1"
 }
 ```
 
-`timestamp` is the device uptime in milliseconds from `millis()`.
+### `POST /api/heartbeat`
 
-Success response:
+Periodic liveness ping from the device:
 
 ```json
 {
-  "ok": true
+  "deviceId": "stack-001",
+  "timestamp": 123999,
+  "bootId": "esp32-a1-5f7c1a91",
+  "firmwareVersion": "0.3.0",
+  "hardwareId": "esp32-a1"
 }
 ```
 
 ### `GET /api/devices`
 
-Returns the latest known state for all devices, including raw device millis and server `updatedAt`.
+Returns live device summaries including:
+
+- health status
+- machine label
+- site ID
+- firmware version
+- boot ID
+- last heartbeat and event receipt times
+
+### `PATCH /api/devices/:deviceId`
+
+Updates setup metadata:
+
+```json
+{
+  "machineLabel": "Leg Press 2",
+  "siteId": "gym-dallas",
+  "hardwareId": "esp32-a1",
+  "provisioningState": "assigned"
+}
+```
 
 ### `GET /api/events`
 
-Returns a small recent-events feed from `motion_events` for dashboard visibility, including raw device millis and server `receivedAt`.
+Returns recent motion events from the database.
+
+### `GET /api/stream`
+
+SSE stream used by the live dashboard and setup screen.
+
+### `GET /api/firmware/check`
+
+Checks whether a device should update:
+
+```text
+/api/firmware/check?deviceId=stack-001&firmwareVersion=0.3.0
+```
+
+### `GET /api/firmware/releases`
+
+Returns stored firmware release metadata.
+
+### `POST /api/firmware/releases`
+
+Stores a firmware release row:
+
+```json
+{
+  "version": "0.3.1",
+  "gitSha": "abc1234",
+  "assetUrl": "https://github.com/owner/repo/releases/download/firmware-v0.3.1/gym_motion.bin",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "sizeBytes": 245760,
+  "rolloutState": "active"
+}
+```
+
+### `POST /api/firmware/report`
+
+Device OTA status report:
+
+```json
+{
+  "deviceId": "stack-001",
+  "status": "booted",
+  "targetVersion": "0.3.1"
+}
+```
+
+## Firmware workflow
+
+Repo source of truth:
+
+- sketch: `gym_motion/gym_motion.ino`
+- Windows Arduino IDE mirror: `C:\Users\adamb\OneDrive\Desktop\gym_esp32_wifi_v1\gym_esp32_wifi_v1.ino`
+
+When the sketch changes, copy the repo version over to the Windows Arduino file before flashing.
+
+Build locally with Arduino CLI:
+
+```bash
+bun run firmware:build
+```
+
+Default board target:
+
+```text
+esp32:esp32:esp32
+```
+
+Override it if needed:
+
+```bash
+FQBN=esp32:esp32:esp32 bun run firmware:build
+```
+
+There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that builds firmware on tag pushes like `firmware-v0.3.1` and uploads the binary as a release asset.
 
 ## Test / seed
 
-Send a sample event to a running app:
+Send a sample event:
 
 ```bash
 bun run seed
-```
-
-Point it at another host if needed:
-
-```bash
-API_URL=https://your-app.up.railway.app bun run seed
 ```
 
 Run tests:
 
 ```bash
 bun test
+bun run lint
+bun run build
 ```
 
 ## Railway deployment
 
-1. Create a new Railway project.
+1. Create a Railway project.
 2. Add a PostgreSQL service.
 3. Add this repo as a web service.
-4. Set `DATABASE_PUBLIC_URL` on the web service using the Postgres connection string.
-5. Run the schema once:
-   - Railway Postgres console or `psql`
-   - or connect locally and run `bun run db:setup`
+4. Set `DATABASE_PUBLIC_URL` on the web service.
+5. Run the schema once with `bun run db:setup` or `psql`.
 6. Deploy.
-
-Railway should detect the Next.js app automatically. If you want explicit commands, use:
-
-```bash
-Install: bun install
-Build: bun run build
-Start: bun run start
-```
 
 ## ESP32 -> API -> DB -> UI flow
 
-1. The ESP32 detects a state change and sends JSON to `POST /api/ingest`.
-2. The backend validates the payload with Zod.
-3. The backend inserts the raw event into `motion_events`.
-4. The backend upserts the current device state into `devices`.
-5. The dashboard polls `GET /api/devices` every 3 seconds.
-6. The UI renders the latest state as `MOVING` or `STILL`, shows server-side "last seen" time, and shows raw device millis underneath for debugging.
+1. The ESP32 sends `POST /api/ingest` on state changes.
+2. The ESP32 sends `POST /api/heartbeat` on a fixed interval.
+3. The backend writes motion events to `motion_events`.
+4. The backend upserts current device status and metadata in `devices`.
+5. The backend broadcasts live changes over `/api/stream`.
+6. The live board shows motion state instantly.
+7. The setup screen shows health, identity, and firmware metadata for installation work.

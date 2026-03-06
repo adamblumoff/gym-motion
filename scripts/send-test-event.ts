@@ -6,6 +6,9 @@ async function main() {
     state: "moving",
     timestamp: 123456,
     delta: 42,
+    bootId: "seed-boot-001",
+    firmwareVersion: "0.3.0",
+    hardwareId: "seed-device-001",
   };
 
   const response = await fetch(`${apiUrl}/api/ingest`, {

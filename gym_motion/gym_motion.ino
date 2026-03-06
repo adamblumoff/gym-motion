@@ -2,14 +2,17 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Wire.h>
+#include <esp_system.h>
 
 // =========================
 // Wi-Fi + API config
 // =========================
 const char* WIFI_SSID = "NEW 2WIRE280";
 const char* WIFI_PASSWORD = "8968012359";
-const char* API_URL = "https://gym-motion-production.up.railway.app/api/ingest";
+const char* INGEST_URL = "https://gym-motion-production.up.railway.app/api/ingest";
+const char* HEARTBEAT_URL = "https://gym-motion-production.up.railway.app/api/heartbeat";
 const char* DEVICE_ID = "stack-001";
+const char* FIRMWARE_VERSION = "0.3.0";
 
 // =========================
 // ADXL345 config
@@ -52,6 +55,8 @@ const char* pendingState = nullptr;
 
 int pendingDelta = 0;
 unsigned long pendingTimestamp = 0;
+String hardwareId;
+String bootId;
 
 // =========================
 // Send / retry state
@@ -153,34 +158,30 @@ void setPendingState(const char* newState, int delta, unsigned long timestamp) {
   Serial.println(timestamp);
 }
 
-void maybeQueueHeartbeat() {
-  unsigned long now = millis();
-  bool shouldQueue = false;
-  const char* detectedSnapshot = nullptr;
+String createHardwareId() {
+  const uint64_t chipId = ESP.getEfuseMac();
+  char buffer[32];
+  snprintf(
+    buffer,
+    sizeof(buffer),
+    "esp32-%04x%08lx",
+    (uint16_t)(chipId >> 32),
+    (uint32_t)chipId
+  );
+  return String(buffer);
+}
 
-  portENTER_CRITICAL(&stateMux);
-  if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS &&
-      strcmp(currentDetectedState, lastSentState) == 0 &&
-      pendingState == nullptr) {
-    pendingState = currentDetectedState;
-    pendingDelta = 0;
-    pendingTimestamp = now;
-    lastHeartbeatMs = now;
-    detectedSnapshot = currentDetectedState;
-    shouldQueue = true;
-  }
-  portEXIT_CRITICAL(&stateMux);
-
-  if (shouldQueue) {
-    Serial.print("Queued heartbeat -> ");
-    Serial.println(detectedSnapshot);
-  }
+String createBootId() {
+  const uint32_t randomValue = esp_random();
+  char buffer[48];
+  snprintf(buffer, sizeof(buffer), "%s-%08lx", hardwareId.c_str(), randomValue);
+  return String(buffer);
 }
 
 // =========================
 // HTTP sender
 // =========================
-bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
+bool postJson(const char* url, const char* payload, const char* label) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Cannot send: Wi-Fi not connected.");
     return false;
@@ -193,23 +194,12 @@ bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setReuse(false);
 
-  if (!http.begin(client, API_URL)) {
+  if (!http.begin(client, url)) {
     Serial.println("HTTP begin failed.");
     return false;
   }
 
   http.addHeader("Content-Type", "application/json");
-
-  char payload[192];
-  snprintf(
-    payload,
-    sizeof(payload),
-    "{\"deviceId\":\"%s\",\"state\":\"%s\",\"timestamp\":%lu,\"delta\":%d}",
-    DEVICE_ID,
-    state,
-    timestamp,
-    delta
-  );
 
   Serial.print("Send attempt -> ");
   Serial.println(payload);
@@ -217,7 +207,7 @@ bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
   const int httpResponseCode = http.POST((uint8_t*)payload, strlen(payload));
 
   Serial.print("POST ");
-  Serial.print(state);
+  Serial.print(label);
   Serial.print(" -> HTTP ");
   Serial.println(httpResponseCode);
 
@@ -237,10 +227,43 @@ bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
   return ok;
 }
 
+bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
+  char payload[320];
+  snprintf(
+    payload,
+    sizeof(payload),
+    "{\"deviceId\":\"%s\",\"state\":\"%s\",\"timestamp\":%lu,\"delta\":%d,\"bootId\":\"%s\",\"firmwareVersion\":\"%s\",\"hardwareId\":\"%s\"}",
+    DEVICE_ID,
+    state,
+    timestamp,
+    delta,
+    bootId.c_str(),
+    FIRMWARE_VERSION,
+    hardwareId.c_str()
+  );
+
+  return postJson(INGEST_URL, payload, state);
+}
+
+bool sendHeartbeat(unsigned long timestamp) {
+  char payload[288];
+  snprintf(
+    payload,
+    sizeof(payload),
+    "{\"deviceId\":\"%s\",\"timestamp\":%lu,\"bootId\":\"%s\",\"firmwareVersion\":\"%s\",\"hardwareId\":\"%s\"}",
+    DEVICE_ID,
+    timestamp,
+    bootId.c_str(),
+    FIRMWARE_VERSION,
+    hardwareId.c_str()
+  );
+
+  return postJson(HEARTBEAT_URL, payload, "heartbeat");
+}
+
 void senderTask(void* parameter) {
   while (true) {
     ensureWiFiConnected();
-    maybeQueueHeartbeat();
 
     const unsigned long now = millis();
     const char* stateToSend = nullptr;
@@ -287,6 +310,13 @@ void senderTask(void* parameter) {
       } else {
         Serial.print("Send failed. retryCount = ");
         Serial.println(retryCount);
+      }
+    }
+
+    if (pendingState == nullptr && now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+      if (sendHeartbeat(now)) {
+        lastHeartbeatMs = now;
+        Serial.println("Heartbeat success.");
       }
     }
 
@@ -341,9 +371,20 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  hardwareId = createHardwareId();
+  bootId = createBootId();
+
   Wire.begin(SDA_PIN, SCL_PIN);
   setupADXL345();
   connectToWiFi();
+  lastHeartbeatMs = millis() - HEARTBEAT_INTERVAL_MS;
+
+  Serial.print("Hardware ID: ");
+  Serial.println(hardwareId);
+  Serial.print("Boot ID: ");
+  Serial.println(bootId);
+  Serial.print("Firmware version: ");
+  Serial.println(FIRMWARE_VERSION);
 
   xTaskCreatePinnedToCore(
     senderTask,

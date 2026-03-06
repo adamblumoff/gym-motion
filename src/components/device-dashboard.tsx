@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type {
@@ -23,11 +24,19 @@ function formatState(state: DeviceSummary["lastState"] | MotionEventSummary["sta
   return state.toUpperCase();
 }
 
-function formatTime(value: string) {
+function formatTime(value: string | null) {
+  if (!value) {
+    return "Never";
+  }
+
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function formatHealthStatus(status: DeviceSummary["healthStatus"]) {
+  return status.toUpperCase();
 }
 
 export function DeviceDashboard() {
@@ -75,11 +84,18 @@ export function DeviceDashboard() {
 
         const event = rawEvent as MessageEvent<string>;
         const payload = JSON.parse(event.data) as MotionStreamPayload;
+        const nextEvent = payload.event;
 
         setDevices((currentDevices) =>
           mergeDeviceUpdate(currentDevices, payload.device),
         );
-        setEvents((currentEvents) => mergeEventUpdate(currentEvents, payload.event));
+
+        if (nextEvent) {
+          setEvents((currentEvents) =>
+            mergeEventUpdate(currentEvents, nextEvent),
+          );
+        }
+
         setError(null);
       });
 
@@ -111,6 +127,13 @@ export function DeviceDashboard() {
     return (
       <section className={styles.page}>
         <div className={styles.shell}>
+          <nav className={styles.topBar}>
+            <span className={styles.topLabel}>Gym Motion</span>
+            <Link className={styles.topLink} href="/setup">
+              Setup
+            </Link>
+          </nav>
+
           <article className={styles.emptyCard}>
             <h2 className={styles.emptyTitle}>No motion data yet</h2>
             <p className={styles.emptyText}>
@@ -127,7 +150,25 @@ export function DeviceDashboard() {
   return (
     <section className={styles.page}>
       <div className={styles.shell}>
-        <div className={styles.deviceId}>{primaryDevice.id}</div>
+        <nav className={styles.topBar}>
+          <span className={styles.topLabel}>Gym Motion</span>
+          <Link className={styles.topLink} href="/setup">
+            Setup
+          </Link>
+        </nav>
+
+        <div className={styles.deviceId}>
+          {primaryDevice.machineLabel ?? primaryDevice.id}
+        </div>
+
+        <div className={styles.healthRow}>
+          <span className={styles.healthBadge} data-health={primaryDevice.healthStatus}>
+            {formatHealthStatus(primaryDevice.healthStatus)}
+          </span>
+          <span className={styles.healthMeta}>
+            firmware {primaryDevice.firmwareVersion}
+          </span>
+        </div>
 
         <div className={styles.statusBoard}>
           <div
@@ -146,10 +187,34 @@ export function DeviceDashboard() {
           </div>
         </div>
 
-        <div className={styles.meta}>
-          <div>
-            Last seen <strong>{formatTime(primaryDevice.updatedAt)}</strong>
+        <div className={styles.metaGrid}>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Device</span>
+            <strong>{primaryDevice.id}</strong>
           </div>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Site</span>
+            <strong>{primaryDevice.siteId ?? "Unassigned"}</strong>
+          </div>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Boot ID</span>
+            <strong>{primaryDevice.bootId ?? "Unknown"}</strong>
+          </div>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Last contact</span>
+            <strong>{formatTime(primaryDevice.updatedAt)}</strong>
+          </div>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Heartbeat</span>
+            <strong>{formatTime(primaryDevice.lastHeartbeatAt)}</strong>
+          </div>
+          <div className={styles.metaCard}>
+            <span className={styles.metaLabel}>Provisioning</span>
+            <strong>{primaryDevice.provisioningState}</strong>
+          </div>
+        </div>
+
+        <div className={styles.debugMeta}>
           <div>
             Device millis <strong>{primaryDevice.lastSeenAt}</strong>
           </div>
@@ -175,6 +240,7 @@ export function DeviceDashboard() {
                   <span className={styles.eventState} data-state={event.state}>
                     {formatState(event.state)}
                   </span>
+                  <span>{event.firmwareVersion ?? "unknown"}</span>
                   <span>millis {event.eventTimestamp}</span>
                   <span>{formatTime(event.receivedAt)}</span>
                 </li>

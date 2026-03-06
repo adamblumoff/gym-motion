@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "test": "bun test",
     "db:setup": "bun run scripts/setup-db.ts",
-    "seed": "bun run scripts/send-test-event.ts"
+    "seed": "bun run scripts/send-test-event.ts",
+    "firmware:build": "./scripts/build-firmware.sh"
   },
   "dependencies": {
     "next": "16.1.6",
