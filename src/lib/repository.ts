@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { deriveHealthStatus } from "@/lib/device-status";
 import type {
   DeviceAssignmentInput,
+  DeviceCleanupResult,
   DeviceSummary,
   FirmwareReleaseInput,
   FirmwareReleaseSummary,
@@ -550,4 +551,39 @@ export async function recordFirmwareReport(
   );
 
   return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;
+}
+
+export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupResult> {
+  const client = await getDb().connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const deletedEvents = await client.query<{ count: string }>(
+      `delete from motion_events
+       where device_id = $1
+       returning 1 as count`,
+      [deviceId],
+    );
+
+    const deletedDevices = await client.query<{ count: string }>(
+      `delete from devices
+       where id = $1
+       returning 1 as count`,
+      [deviceId],
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      deviceId,
+      deletedEvents: deletedEvents.rowCount ?? 0,
+      deletedDevices: deletedDevices.rowCount ?? 0,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }

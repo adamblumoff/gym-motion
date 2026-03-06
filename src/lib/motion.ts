@@ -87,6 +87,12 @@ export type DeviceSummary = {
   healthStatus: HealthStatus;
 };
 
+export type DeviceCleanupResult = {
+  deviceId: string;
+  deletedEvents: number;
+  deletedDevices: number;
+};
+
 export type MotionEventSummary = {
   id: number;
   deviceId: string;

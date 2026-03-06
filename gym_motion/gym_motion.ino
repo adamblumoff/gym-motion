@@ -17,7 +17,7 @@ const char* HEARTBEAT_URL = "https://gym-motion-production.up.railway.app/api/he
 const char* FIRMWARE_CHECK_URL = "https://gym-motion-production.up.railway.app/api/firmware/check";
 const char* FIRMWARE_REPORT_URL = "https://gym-motion-production.up.railway.app/api/firmware/report";
 const char* DEVICE_ID = "stack-001";
-const char* FIRMWARE_VERSION = "0.4.0";
+const char* FIRMWARE_VERSION = "0.4.1";
 
 // =========================
 // ADXL345 config

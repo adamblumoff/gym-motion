@@ -70,6 +70,9 @@ export function SetupDashboard() {
   });
   const [status, setStatus] = useState<string | null>(null);
 
+  const activeRelease =
+    releases.find((release) => release.rolloutState === "active") ?? null;
+
   useEffect(() => {
     let cancelled = false;
     const eventSource = new EventSource("/api/stream");
@@ -192,8 +195,8 @@ export function SetupDashboard() {
       <div className={styles.shell}>
         <nav className={styles.topBar}>
           <div>
-            <div className={styles.eyebrow}>Installer</div>
-            <h1 className={styles.title}>Device setup and release control</h1>
+            <div className={styles.eyebrow}>Ops dashboard</div>
+            <h1 className={styles.title}>Device health and rollout control</h1>
           </div>
           <Link className={styles.topLink} href="/">
             Back to live board
@@ -205,7 +208,20 @@ export function SetupDashboard() {
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <h2>Devices</h2>
-            <p>Assign site labels, keep hardware IDs straight, and confirm devices are online.</p>
+            <p>
+              This page is for labeling devices, watching fleet health, and seeing
+              which devices are behind the active firmware release.
+            </p>
+          </div>
+
+          <div className={styles.rolloutBanner}>
+            <span className={styles.rolloutLabel}>Active release</span>
+            <strong>{activeRelease?.version ?? "None"}</strong>
+            <span className={styles.rolloutHint}>
+              {activeRelease
+                ? "Devices that report an older version should pull the update on their next check-in."
+                : "No active release is published yet."}
+            </span>
           </div>
 
           <div className={styles.deviceList}>
@@ -230,6 +246,19 @@ export function SetupDashboard() {
                           {device.firmwareVersion}
                         </div>
                       </div>
+                      <div className={styles.deviceActions}>
+                        <span
+                          className={styles.rolloutBadge}
+                          data-state={
+                            activeRelease && activeRelease.version !== device.firmwareVersion
+                              ? "behind"
+                              : "current"
+                          }
+                        >
+                          {activeRelease && activeRelease.version !== device.firmwareVersion
+                            ? `Behind ${activeRelease.version}`
+                            : "Up to date"}
+                        </span>
                       <button
                         className={styles.saveButton}
                         onClick={() => void handleDeviceSave(device.id)}
@@ -237,6 +266,7 @@ export function SetupDashboard() {
                       >
                         Save
                       </button>
+                      </div>
                     </div>
 
                     <div className={styles.formGrid}>
@@ -315,6 +345,9 @@ export function SetupDashboard() {
                       <span>Heartbeat {formatTime(device.lastHeartbeatAt)}</span>
                       <span>Last event {formatTime(device.lastEventReceivedAt)}</span>
                       <span>Update status {device.updateStatus}</span>
+                      <span>
+                        Target firmware {activeRelease?.version ?? "none"}
+                      </span>
                     </div>
                   </article>
                 );
@@ -326,7 +359,10 @@ export function SetupDashboard() {
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <h2>Firmware releases</h2>
-            <p>Store the GitHub release metadata the OTA check endpoint will serve back to devices.</p>
+            <p>
+              Store the GitHub release metadata the OTA check endpoint serves back
+              to devices. Leave a release active until all devices catch up.
+            </p>
           </div>
 
           <form className={styles.releaseForm} onSubmit={(event) => void handleReleaseSubmit(event)}>

@@ -10,6 +10,7 @@ The web app now does four jobs:
 - manages OTA firmware releases and device update status
 
 The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
+The `/setup` page is an operations dashboard, not the future Wi-Fi provisioning flow.
 
 ## Stack
 
@@ -266,6 +267,12 @@ Run tests:
 bun test
 bun run lint
 bun run build
+```
+
+Purge one device's historical rows before an OTA test:
+
+```bash
+DEVICE_ID=stack-001 bun run device:purge
 ```
 
 ## Railway deployment
