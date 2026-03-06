@@ -30,7 +30,13 @@ type Props = {
   onComplete?: (device: DeviceSummary) => void;
 };
 
-type Step = "connect" | "network" | "details" | "provisioning" | "done";
+type Step =
+  | "connect"
+  | "bluetooth"
+  | "network"
+  | "details"
+  | "provisioning"
+  | "done";
 
 function uniqueNetworkList(networks: string[]) {
   return Array.from(new Set(networks.filter(Boolean))).sort((left, right) =>
@@ -75,6 +81,7 @@ export function DeviceProvisioningWizard({
     null,
   );
   const awaitingDeviceReconnect = useRef(false);
+  const connectAttemptId = useRef(0);
 
   useEffect(() => {
     setStoredProfile(loadStoredWiFiProfile());
@@ -170,8 +177,11 @@ export function DeviceProvisioningWizard({
   }
 
   function handleBackToConnect() {
+    connectAttemptId.current += 1;
     setError(null);
     setStatus("Reconnect when you are ready.");
+    setBluetoothConnected(false);
+    setControlCharacteristic(null);
     setStep("connect");
   }
 
@@ -182,15 +192,33 @@ export function DeviceProvisioningWizard({
   }
 
   async function handleConnect() {
+    const attemptId = connectAttemptId.current + 1;
+    connectAttemptId.current = attemptId;
+
     try {
       setError(null);
       awaitingDeviceReconnect.current = false;
+      setStep("bluetooth");
       setStatus("Opening the Bluetooth chooser…");
       const device = await requestProvisioningDevice();
+
+      if (connectAttemptId.current !== attemptId) {
+        return;
+      }
+
+      setStatus("Connecting to the sensor over Bluetooth…");
       const connection = await connectProvisioningDevice(device);
+
+      if (connectAttemptId.current !== attemptId) {
+        return;
+      }
+
       const cleanup = subscribeToProvisioningStatus(
         connection.status,
         (message) => {
+          if (connectAttemptId.current !== attemptId) {
+            return;
+          }
           void handleProvisioningMessage(message);
         },
       );
@@ -199,6 +227,11 @@ export function DeviceProvisioningWizard({
         "gattserverdisconnected",
         () => {
           cleanup();
+
+          if (connectAttemptId.current !== attemptId) {
+            return;
+          }
+
           setBluetoothConnected(false);
           setControlCharacteristic(null);
 
@@ -222,13 +255,19 @@ export function DeviceProvisioningWizard({
         type: "scan",
       });
     } catch (nextError) {
+      if (connectAttemptId.current !== attemptId) {
+        return;
+      }
+
       if (looksLikeUserDismissedBluetoothDialog(nextError)) {
+        setStep("connect");
         setStatus("Bluetooth chooser closed. Connect again when you are ready.");
         return;
       }
 
       console.error(nextError);
       setError("Could not connect to the device over Bluetooth.");
+      setStep("connect");
       setStatus(null);
     }
   }
@@ -345,10 +384,11 @@ export function DeviceProvisioningWizard({
 
       <div className={styles.steps}>
         <span data-active={step === "connect"}>1. Connect</span>
-        <span data-active={step === "network"}>2. Network</span>
-        <span data-active={step === "details"}>3. Details</span>
+        <span data-active={step === "bluetooth"}>2. Bluetooth</span>
+        <span data-active={step === "network"}>3. Network</span>
+        <span data-active={step === "details"}>4. Details</span>
         <span data-active={step === "provisioning" || step === "done"}>
-          4. Provision
+          5. Provision
         </span>
       </div>
 
@@ -382,6 +422,26 @@ export function DeviceProvisioningWizard({
               Web Bluetooth is not available in this browser. Use Chrome or Edge.
             </p>
           ) : null}
+        </div>
+      ) : null}
+
+      {step === "bluetooth" ? (
+        <div className={styles.panel}>
+          <p className={styles.copy}>
+            We are connecting to the sensor over Bluetooth and asking it to scan
+            nearby Wi-Fi networks. This can take a few seconds.
+          </p>
+          <div className={styles.waitingPulse} />
+          <div className={styles.actions}>
+            <button className={styles.secondaryButton} onClick={handleBackToConnect} type="button">
+              Back
+            </button>
+            {onCancel ? (
+              <button className={styles.secondaryButton} onClick={onCancel} type="button">
+                Cancel
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
