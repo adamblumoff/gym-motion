@@ -29,6 +29,31 @@ export type MotionEventSummary = {
   receivedAt: string;
 };
 
+export type MotionStreamPayload = {
+  device: DeviceSummary;
+  event: MotionEventSummary;
+};
+
+export function mergeDeviceUpdate(
+  devices: DeviceSummary[],
+  device: DeviceSummary,
+): DeviceSummary[] {
+  const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
+
+  return nextDevices.sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
+}
+
+export function mergeEventUpdate(
+  events: MotionEventSummary[],
+  event: MotionEventSummary,
+  limit = 12,
+): MotionEventSummary[] {
+  return [event, ...events.filter((item) => item.id !== event.id)].slice(0, limit);
+}
+
 export function parseIngestPayload(input: unknown) {
   return ingestPayloadSchema.safeParse(input);
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { formatZodError, parseIngestPayload } from "@/lib/motion";
+import { broadcastMotionUpdate } from "@/lib/motion-stream";
 import { recordMotionEvent } from "@/lib/repository";
 
 export const runtime = "nodejs";
@@ -27,7 +28,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await recordMotionEvent(parsedPayload.data);
+    const motionUpdate = await recordMotionEvent(parsedPayload.data);
+    broadcastMotionUpdate(motionUpdate);
   } catch (error) {
     console.error("Failed to ingest motion event", error);
 

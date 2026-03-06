@@ -39,30 +39,58 @@ export async function recordMotionEvent(payload: IngestPayload) {
   try {
     await client.query("BEGIN");
 
-    await client.query(
+    const insertedEvent = await client.query<MotionEventRow>(
       `insert into motion_events (device_id, state, delta, event_timestamp)
-       values ($1, $2, $3, $4)`,
+       values ($1, $2, $3, $4)
+       returning id, device_id, state, delta, event_timestamp, received_at`,
       [payload.deviceId, payload.state, delta, payload.timestamp],
     );
 
-    await client.query(
+    const upsertedDevice = await client.query<DeviceRow>(
       `insert into devices (id, last_state, last_seen_at, last_delta, updated_at)
        values ($1, $2, $3, $4, now())
        on conflict (id) do update
        set last_state = excluded.last_state,
            last_seen_at = excluded.last_seen_at,
            last_delta = excluded.last_delta,
-           updated_at = now()`,
+           updated_at = now()
+       returning id, last_state, last_seen_at, last_delta, updated_at`,
       [payload.deviceId, payload.state, payload.timestamp, delta],
     );
 
     await client.query("COMMIT");
+
+    return {
+      device: mapDeviceRow(upsertedDevice.rows[0]),
+      event: mapMotionEventRow(insertedEvent.rows[0]),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
+}
+
+function mapDeviceRow(row: DeviceRow): DeviceSummary {
+  return {
+    id: row.id,
+    lastState: row.last_state,
+    lastSeenAt: toSafeNumber(row.last_seen_at),
+    lastDelta: row.last_delta,
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapMotionEventRow(row: MotionEventRow): MotionEventSummary {
+  return {
+    id: toSafeNumber(row.id),
+    deviceId: row.device_id,
+    state: row.state,
+    delta: row.delta,
+    eventTimestamp: toSafeNumber(row.event_timestamp),
+    receivedAt: row.received_at.toISOString(),
+  };
 }
 
 export async function listDevices(): Promise<DeviceSummary[]> {
@@ -72,13 +100,7 @@ export async function listDevices(): Promise<DeviceSummary[]> {
      order by updated_at desc, id asc`,
   );
 
-  return result.rows.map((row) => ({
-    id: row.id,
-    lastState: row.last_state,
-    lastSeenAt: toSafeNumber(row.last_seen_at),
-    lastDelta: row.last_delta,
-    updatedAt: row.updated_at.toISOString(),
-  }));
+  return result.rows.map(mapDeviceRow);
 }
 
 export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]> {
@@ -90,12 +112,5 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
     [limit],
   );
 
-  return result.rows.map((row) => ({
-    id: toSafeNumber(row.id),
-    deviceId: row.device_id,
-    state: row.state,
-    delta: row.delta,
-    eventTimestamp: toSafeNumber(row.event_timestamp),
-    receivedAt: row.received_at.toISOString(),
-  }));
+  return result.rows.map(mapMotionEventRow);
 }

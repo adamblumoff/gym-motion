@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 
-import type { DeviceSummary, MotionEventSummary } from "@/lib/motion";
+import type {
+  DeviceSummary,
+  MotionEventSummary,
+  MotionStreamPayload,
+} from "@/lib/motion";
+import { mergeDeviceUpdate, mergeEventUpdate } from "@/lib/motion";
 
 import styles from "./device-dashboard.module.css";
-
-const POLL_INTERVAL_MS = 1000;
 
 type DeviceResponse = {
   devices: DeviceSummary[];
@@ -34,8 +37,9 @@ export function DeviceDashboard() {
 
   useEffect(() => {
     let cancelled = false;
+    let eventSource: EventSource | null = null;
 
-    async function loadData() {
+    async function loadInitialData() {
       try {
         const [devicesResponse, eventsResponse] = await Promise.all([
           fetch("/api/devices", { cache: "no-store" }),
@@ -61,15 +65,43 @@ export function DeviceDashboard() {
       }
     }
 
-    void loadData();
+    function connectStream() {
+      eventSource = new EventSource("/api/stream");
 
-    const intervalId = window.setInterval(() => {
-      void loadData();
-    }, POLL_INTERVAL_MS);
+      eventSource.addEventListener("motion-update", (rawEvent) => {
+        if (cancelled) {
+          return;
+        }
+
+        const event = rawEvent as MessageEvent<string>;
+        const payload = JSON.parse(event.data) as MotionStreamPayload;
+
+        setDevices((currentDevices) =>
+          mergeDeviceUpdate(currentDevices, payload.device),
+        );
+        setEvents((currentEvents) => mergeEventUpdate(currentEvents, payload.event));
+        setError(null);
+      });
+
+      eventSource.onerror = () => {
+        if (!cancelled) {
+          setError("Live connection lost. Reconnecting...");
+        }
+      };
+
+      eventSource.onopen = () => {
+        if (!cancelled) {
+          setError(null);
+        }
+      };
+    }
+
+    void loadInitialData();
+    connectStream();
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      eventSource?.close();
     };
   }, []);
 
@@ -83,7 +115,7 @@ export function DeviceDashboard() {
             <h2 className={styles.emptyTitle}>No motion data yet</h2>
             <p className={styles.emptyText}>
               Send an event to <code>/api/ingest</code> and the dashboard will
-              light up on the next poll.
+              light up as soon as the live stream receives it.
             </p>
             {error ? <p className={styles.pollingNote}>{error}</p> : null}
           </article>
@@ -151,7 +183,7 @@ export function DeviceDashboard() {
           )}
         </section>
 
-        <p className={styles.pollingNote}>Polling every second.</p>
+        <p className={styles.pollingNote}>Live updates via stream.</p>
       </div>
     </section>
   );
