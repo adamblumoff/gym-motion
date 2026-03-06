@@ -36,12 +36,12 @@ export async function GET(request: Request) {
         ok: true,
         updateAvailable: result.updateAvailable,
         device: result.device,
-        release: result.release,
         version: result.release?.version ?? null,
         assetUrl: resolvedAssetUrl,
         sha256: result.release?.sha256 ?? null,
         md5: result.release?.md5 ?? null,
         sizeBytes: result.release?.sizeBytes ?? null,
+        rolloutState: result.release?.rolloutState ?? null,
       },
       {
         headers: {
