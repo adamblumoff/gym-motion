@@ -2,6 +2,14 @@ name: Firmware Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Firmware version to publish (for example 0.4.2)
+        required: true
+      rollout_state:
+        description: Rollout state to register in the API
+        required: false
+        default: active
   push:
     tags:
       - "firmware-v*"
@@ -9,13 +17,40 @@ on:
 jobs:
   build-firmware:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
+      - name: Resolve firmware version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "FIRMWARE_VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+            echo "ROLLOUT_STATE=${{ github.event.inputs.rollout_state }}" >> "$GITHUB_ENV"
+          else
+            echo "FIRMWARE_VERSION=${GITHUB_REF_NAME#firmware-v}" >> "$GITHUB_ENV"
+            echo "ROLLOUT_STATE=active" >> "$GITHUB_ENV"
+          fi
+
       - name: Set up Arduino CLI
         uses: arduino/setup-arduino-cli@v2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install app dependencies
+        run: bun install --frozen-lockfile
 
       - name: Install ESP32 core
         run: |
@@ -38,5 +73,9 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gym-motion-firmware
+          name: gym-motion-firmware-${{ env.FIRMWARE_VERSION }}
           path: build/firmware
+
+      - name: Publish firmware to Railway bucket and API
+        run: |
+          bun run firmware:publish -- --version "$FIRMWARE_VERSION" --rollout "$ROLLOUT_STATE"

@@ -291,9 +291,33 @@ Override it if needed:
 FQBN=esp32:esp32:esp32 PARTITIONS=min_spiffs bun run firmware:build
 ```
 
-There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that builds the firmware artifact on tag pushes like `firmware-v0.3.1`.
+There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that can fully publish firmware on tag pushes like `firmware-v0.4.2`.
 
-Publish a built firmware binary to the private Railway bucket and register it as the active release:
+For full automation, add these GitHub repository secrets:
+
+- `API_URL`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_ENDPOINT_URL`
+- `AWS_DEFAULT_REGION`
+- `AWS_S3_BUCKET_NAME`
+
+Then this flow is fully automatic:
+
+```bash
+git tag firmware-v0.4.2
+git push origin firmware-v0.4.2
+```
+
+The workflow will:
+
+- build the firmware binary
+- generate checksums
+- upload the workflow artifact
+- publish the binary to the private Railway bucket
+- register the firmware release in the API
+
+You can still publish a built firmware binary manually if needed:
 
 ```bash
 railway run bun run firmware:publish -- --version 0.4.1 --rollout active
