@@ -38,6 +38,14 @@ function uniqueNetworkList(networks: string[]) {
   );
 }
 
+function looksLikeUserDismissedBluetoothDialog(error: unknown) {
+  if (!(error instanceof DOMException)) {
+    return false;
+  }
+
+  return error.name === "NotFoundError" || error.name === "NotAllowedError";
+}
+
 export function DeviceProvisioningWizard({
   mode,
   onCancel,
@@ -111,6 +119,7 @@ export function DeviceProvisioningWizard({
         payload.device.id === pendingProvisionDeviceId &&
         payload.device.provisioningState === "provisioned"
       ) {
+        awaitingDeviceReconnect.current = false;
         setCompletedDevice(payload.device);
         setStep("done");
         setStatus(`${payload.device.id} is online and provisioned.`);
@@ -160,6 +169,18 @@ export function DeviceProvisioningWizard({
     }
   }
 
+  function handleBackToConnect() {
+    setError(null);
+    setStatus("Reconnect when you are ready.");
+    setStep("connect");
+  }
+
+  function handleBackToNetwork() {
+    setError(null);
+    setStatus("Review the Wi-Fi details and continue when ready.");
+    setStep("network");
+  }
+
   async function handleConnect() {
     try {
       setError(null);
@@ -201,6 +222,11 @@ export function DeviceProvisioningWizard({
         type: "scan",
       });
     } catch (nextError) {
+      if (looksLikeUserDismissedBluetoothDialog(nextError)) {
+        setStatus("Bluetooth chooser closed. Connect again when you are ready.");
+        return;
+      }
+
       console.error(nextError);
       setError("Could not connect to the device over Bluetooth.");
       setStatus(null);
@@ -267,6 +293,7 @@ export function DeviceProvisioningWizard({
         });
       }
 
+      awaitingDeviceReconnect.current = true;
       await sendProvisioningCommand(controlCharacteristic, {
         type: "provision",
         deviceId,
@@ -275,10 +302,17 @@ export function DeviceProvisioningWizard({
         wifiPassword,
       });
 
-      awaitingDeviceReconnect.current = true;
       setPendingProvisionDeviceId(deviceId);
       setStatus("Waiting for the device to join Wi-Fi and report online…");
     } catch (nextError) {
+      if (awaitingDeviceReconnect.current) {
+        setPendingProvisionDeviceId(deviceId);
+        setStatus(
+          "The sensor is restarting into Wi-Fi mode. Waiting for it to appear online…",
+        );
+        return;
+      }
+
       awaitingDeviceReconnect.current = false;
       console.error(nextError);
       setError("Provisioning failed before the device finished setup.");
@@ -403,7 +437,14 @@ export function DeviceProvisioningWizard({
 
           <div className={styles.actions}>
             <button className={styles.primaryButton} onClick={() => void handleContinueToDetails()} type="button">
-              Continue
+              Next
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleBackToConnect}
+              type="button"
+            >
+              Back
             </button>
             {storedProfile ? (
               <button
@@ -458,7 +499,7 @@ export function DeviceProvisioningWizard({
             <button className={styles.primaryButton} onClick={() => void handleProvision()} type="button">
               Save and provision
             </button>
-            <button className={styles.secondaryButton} onClick={() => setStep("network")} type="button">
+            <button className={styles.secondaryButton} onClick={handleBackToNetwork} type="button">
               Back
             </button>
           </div>
