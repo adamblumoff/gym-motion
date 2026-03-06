@@ -16,6 +16,7 @@ export const updateStatusSchema = z.enum([
   "rolled_back",
 ]);
 export const healthStatusSchema = z.enum(["online", "stale", "offline"]);
+export const deviceLogLevelSchema = z.enum(["info", "warn", "error"]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
@@ -59,15 +60,34 @@ export const firmwareReportSchema = z.object({
   detail: z.string().trim().min(1).max(280).optional(),
 });
 
+export const deviceLogSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  level: deviceLogLevelSchema,
+  code: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(280),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  firmwareVersion: z.string().trim().min(1).max(120).optional(),
+  hardwareId: z.string().trim().min(1).max(120).optional(),
+  timestamp: z.number().int().nonnegative().optional(),
+  metadata: z.record(z.string(), z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+  ])).optional(),
+});
+
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
 export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
 export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
 export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
+export type DeviceLogInput = z.infer<typeof deviceLogSchema>;
 export type MotionState = z.infer<typeof motionStateSchema>;
 export type ProvisioningState = z.infer<typeof provisioningStateSchema>;
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
+export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -105,9 +125,27 @@ export type MotionEventSummary = {
   hardwareId: string | null;
 };
 
+export type DeviceLogSummary = {
+  id: number;
+  deviceId: string;
+  level: DeviceLogLevel;
+  code: string;
+  message: string;
+  bootId: string | null;
+  firmwareVersion: string | null;
+  hardwareId: string | null;
+  deviceTimestamp: number | null;
+  metadata: Record<string, string | number | boolean | null> | null;
+  receivedAt: string;
+};
+
 export type MotionStreamPayload = {
   device: DeviceSummary;
   event?: MotionEventSummary;
+};
+
+export type DeviceLogStreamPayload = {
+  log: DeviceLogSummary;
 };
 
 export type FirmwareReleaseSummary = {
@@ -159,6 +197,18 @@ export function parseFirmwareRelease(input: unknown) {
 
 export function parseFirmwareReport(input: unknown) {
   return firmwareReportSchema.safeParse(input);
+}
+
+export function parseDeviceLog(input: unknown) {
+  return deviceLogSchema.safeParse(input);
+}
+
+export function mergeLogUpdate(
+  logs: DeviceLogSummary[],
+  log: DeviceLogSummary,
+  limit = 100,
+): DeviceLogSummary[] {
+  return [log, ...logs.filter((item) => item.id !== log.id)].slice(0, limit);
 }
 
 export function formatZodError(message: z.ZodError) {

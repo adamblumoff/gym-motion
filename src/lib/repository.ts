@@ -3,6 +3,8 @@ import { deriveHealthStatus } from "@/lib/device-status";
 import type {
   DeviceAssignmentInput,
   DeviceCleanupResult,
+  DeviceLogInput,
+  DeviceLogSummary,
   DeviceSummary,
   FirmwareReleaseInput,
   FirmwareReleaseSummary,
@@ -57,6 +59,20 @@ type FirmwareReleaseRow = {
 type FirmwareCheckInput = {
   deviceId: string;
   firmwareVersion: string | null;
+};
+
+type DeviceLogRow = {
+  id: string | number;
+  device_id: string;
+  level: DeviceLogSummary["level"];
+  code: string;
+  message: string;
+  boot_id: string | null;
+  firmware_version: string | null;
+  hardware_id: string | null;
+  device_timestamp: string | number | null;
+  metadata: DeviceLogSummary["metadata"];
+  received_at: Date;
 };
 
 function toSafeNumber(value: string | number) {
@@ -115,6 +131,23 @@ function mapFirmwareReleaseRow(row: FirmwareReleaseRow): FirmwareReleaseSummary 
     sizeBytes: toSafeNumber(row.size_bytes),
     rolloutState: row.rollout_state,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
+  return {
+    id: toSafeNumber(row.id),
+    deviceId: row.device_id,
+    level: row.level,
+    code: row.code,
+    message: row.message,
+    bootId: row.boot_id,
+    firmwareVersion: row.firmware_version,
+    hardwareId: row.hardware_id,
+    deviceTimestamp:
+      row.device_timestamp === null ? null : toSafeNumber(row.device_timestamp),
+    metadata: row.metadata ?? null,
+    receivedAt: row.received_at.toISOString(),
   };
 }
 
@@ -324,6 +357,98 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
   );
 
   return result.rows.map(mapMotionEventRow);
+}
+
+export async function recordDeviceLog(
+  input: DeviceLogInput,
+): Promise<DeviceLogSummary> {
+  const result = await getDb().query<DeviceLogRow>(
+    `insert into device_logs (
+       device_id,
+       level,
+       code,
+       message,
+       boot_id,
+       firmware_version,
+       hardware_id,
+       device_timestamp,
+       metadata
+     )
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     returning
+       id,
+       device_id,
+       level,
+       code,
+       message,
+       boot_id,
+       firmware_version,
+       hardware_id,
+       device_timestamp,
+       metadata,
+       received_at`,
+    [
+      input.deviceId,
+      input.level,
+      input.code,
+      input.message,
+      input.bootId ?? null,
+      input.firmwareVersion ?? null,
+      input.hardwareId ?? null,
+      input.timestamp ?? null,
+      input.metadata ?? null,
+    ],
+  );
+
+  return mapDeviceLogRow(result.rows[0]);
+}
+
+export async function listDeviceLogs(options?: {
+  deviceId?: string | null;
+  limit?: number;
+}): Promise<DeviceLogSummary[]> {
+  const limit = Math.min(Math.max(options?.limit ?? 100, 1), 250);
+
+  const result = options?.deviceId
+    ? await getDb().query<DeviceLogRow>(
+        `select
+           id,
+           device_id,
+           level,
+           code,
+           message,
+           boot_id,
+           firmware_version,
+           hardware_id,
+           device_timestamp,
+           metadata,
+           received_at
+         from device_logs
+         where device_id = $1
+         order by received_at desc, id desc
+         limit $2`,
+        [options.deviceId, limit],
+      )
+    : await getDb().query<DeviceLogRow>(
+        `select
+           id,
+           device_id,
+           level,
+           code,
+           message,
+           boot_id,
+           firmware_version,
+           hardware_id,
+           device_timestamp,
+           metadata,
+           received_at
+         from device_logs
+         order by received_at desc, id desc
+         limit $1`,
+        [limit],
+      );
+
+  return result.rows.map(mapDeviceLogRow);
 }
 
 export async function updateDeviceAssignment(
@@ -563,6 +688,12 @@ export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupRe
       `delete from motion_events
        where device_id = $1
        returning 1 as count`,
+      [deviceId],
+    );
+
+    await client.query(
+      `delete from device_logs
+       where device_id = $1`,
       [deviceId],
     );
 

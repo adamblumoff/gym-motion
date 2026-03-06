@@ -8,6 +8,7 @@ The web app now does four jobs:
 - tracks device health with server-side `ONLINE` / `STALE` / `OFFLINE`
 - gives you a simple `/setup` screen for assigning machine labels and sites
 - manages OTA firmware releases and device update status
+- exposes a separate `/logs` view for per-device remote logs
 
 The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
 The `/setup` page is an operations dashboard, not the future Wi-Fi provisioning flow.
@@ -48,6 +49,7 @@ Open:
 
 - live dashboard: `http://localhost:3000`
 - setup screen: `http://localhost:3000/setup`
+- device logs: `http://localhost:3000/logs`
 
 ## Database setup
 
@@ -69,6 +71,7 @@ This is still an MVP-style destructive schema reset.
 
 ```sql
 drop table if exists motion_events;
+drop table if exists device_logs;
 drop table if exists firmware_releases;
 drop table if exists devices;
 
@@ -112,6 +115,20 @@ create table if not exists firmware_releases (
   rollout_state text not null default 'draft',
   created_at timestamp not null default now()
 );
+
+create table if not exists device_logs (
+  id bigserial primary key,
+  device_id text not null,
+  level text not null,
+  code text not null,
+  message text not null,
+  boot_id text,
+  firmware_version text,
+  hardware_id text,
+  device_timestamp bigint,
+  metadata jsonb,
+  received_at timestamp not null default now()
+);
 ```
 
 ## API
@@ -127,7 +144,7 @@ Motion state change from the ESP32:
   "timestamp": 123456,
   "delta": 42,
   "bootId": "esp32-a1-5f7c1a91",
-  "firmwareVersion": "0.3.0",
+  "firmwareVersion": "0.4.2",
   "hardwareId": "esp32-a1"
 }
 ```
@@ -141,7 +158,7 @@ Periodic liveness ping from the device:
   "deviceId": "stack-001",
   "timestamp": 123999,
   "bootId": "esp32-a1-5f7c1a91",
-  "firmwareVersion": "0.3.0",
+  "firmwareVersion": "0.4.2",
   "hardwareId": "esp32-a1"
 }
 ```
@@ -174,16 +191,44 @@ Updates setup metadata:
 
 Returns recent motion events from the database.
 
+### `GET /api/device-logs`
+
+Returns remote logs, optionally filtered by device:
+
+```text
+/api/device-logs?deviceId=stack-001&limit=100
+```
+
+### `POST /api/device-logs`
+
+Structured device log from the ESP32:
+
+```json
+{
+  "deviceId": "stack-001",
+  "level": "warn",
+  "code": "ota.failed",
+  "message": "OTA update failed.",
+  "bootId": "esp32-a1-5f7c1a91",
+  "firmwareVersion": "0.4.2",
+  "hardwareId": "esp32-a1",
+  "timestamp": 45678,
+  "metadata": {
+    "reason": "http-begin-failed"
+  }
+}
+```
+
 ### `GET /api/stream`
 
-SSE stream used by the live dashboard and setup screen.
+SSE stream used by the live dashboard, setup screen, and `/logs`.
 
 ### `GET /api/firmware/check`
 
 Checks whether a device should update:
 
 ```text
-/api/firmware/check?deviceId=stack-001&firmwareVersion=0.3.0
+/api/firmware/check?deviceId=stack-001&firmwareVersion=0.4.2
 ```
 
 ### `GET /api/firmware/releases`
@@ -198,7 +243,7 @@ Stores a firmware release row:
 {
   "version": "0.3.1",
   "gitSha": "abc1234",
-  "assetUrl": "https://github.com/owner/repo/releases/download/firmware-v0.3.1/gym_motion.bin",
+  "assetUrl": "firmware/0.4.2/gym_motion.ino.bin",
   "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "md5": "0123456789abcdef0123456789abcdef",
   "sizeBytes": 245760,
@@ -264,6 +309,7 @@ The publish script uploads `build/firmware/gym_motion.ino.bin` to the private Ra
 4. If the backend advertises a newer active release, the device downloads the `.bin` from a short-lived presigned Railway bucket URL over HTTPS.
 5. The device verifies the image checksum, writes it to the inactive OTA app slot, reports `applied`, and restarts.
 6. On the next boot, the device reports `booted` and continues normal motion tracking.
+7. The device also posts structured lifecycle logs to `/api/device-logs`, and the `/logs` page streams them live by device.
 
 The release workflow still generates `.sha256` and `.md5` files alongside the firmware binary. The bucket stays private; devices only see temporary presigned URLs.
 
@@ -307,3 +353,4 @@ DEVICE_ID=stack-001 bun run device:purge
 5. The backend broadcasts live changes over `/api/stream`.
 6. The live board shows motion state instantly.
 7. The setup screen shows health, identity, and firmware metadata for installation work.
+8. The logs screen shows OTA, Wi-Fi, heartbeat, and motion lifecycle logs per device.

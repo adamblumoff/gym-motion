@@ -18,6 +18,11 @@
   display: flex;
 }
 
+.topLinks {
+  display: flex;
+  gap: 10px;
+}
+
 .topBar,
 .deviceHeader {
   align-items: center;

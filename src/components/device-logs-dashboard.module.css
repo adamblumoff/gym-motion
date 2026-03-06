@@ -1,0 +1,247 @@
+.page {
+  min-height: 100vh;
+  padding: 48px 24px 72px;
+}
+
+.shell {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 24px;
+}
+
+.topBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 8px 0 0;
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(2.2rem, 4vw, 3.8rem);
+  line-height: 0.96;
+}
+
+.topLinks {
+  display: flex;
+  gap: 12px;
+}
+
+.topLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(7, 16, 26, 0.82);
+  text-decoration: none;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: rgba(10, 22, 34, 0.76);
+  backdrop-filter: blur(16px);
+}
+
+.controlLabel {
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.select {
+  flex: 1;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid rgba(77, 226, 197, 0.24);
+  border-radius: 14px;
+  background: rgba(4, 10, 16, 0.82);
+  color: var(--text);
+}
+
+.liveBadge {
+  min-width: 108px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 122, 89, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 122, 89, 0.08);
+  color: #ffb7a5;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.liveBadge[data-live="true"] {
+  border-color: rgba(77, 226, 197, 0.28);
+  background: rgba(77, 226, 197, 0.1);
+  color: var(--still);
+}
+
+.summaryCard,
+.logPanel {
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background: linear-gradient(180deg, rgba(11, 24, 36, 0.92), rgba(6, 12, 19, 0.94));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+}
+
+.summaryCard {
+  display: grid;
+  gap: 10px;
+  padding: 20px 22px;
+}
+
+.summaryLabel,
+.panelHeader {
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.summaryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: rgba(239, 246, 255, 0.82);
+  font-size: 0.92rem;
+}
+
+.status {
+  margin: 0;
+  color: #ffb7a5;
+}
+
+.logPanel {
+  overflow: hidden;
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.emptyState {
+  padding: 28px 20px;
+  color: rgba(239, 246, 255, 0.78);
+}
+
+.logList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.logRow {
+  padding: 18px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.logHeader,
+.logMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.logTime,
+.logMeta {
+  color: rgba(239, 246, 255, 0.72);
+  font-size: 0.9rem;
+}
+
+.logLevel,
+.logCode {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.logLevel {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(77, 226, 197, 0.12);
+  color: var(--still);
+}
+
+.logLevel[data-level="warn"] {
+  background: rgba(255, 122, 89, 0.14);
+  color: #ffb08d;
+}
+
+.logLevel[data-level="error"] {
+  background: rgba(255, 90, 90, 0.18);
+  color: #ff8585;
+}
+
+.logCode {
+  color: var(--muted);
+}
+
+.logMessage {
+  margin: 10px 0 12px;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.logMetadata {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(3, 8, 13, 0.82);
+  color: rgba(239, 246, 255, 0.82);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 28px 16px 56px;
+  }
+
+  .topBar,
+  .controls,
+  .panelHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topLinks {
+    width: 100%;
+  }
+
+  .topLink {
+    flex: 1;
+  }
+
+  .liveBadge {
+    width: 100%;
+  }
+}

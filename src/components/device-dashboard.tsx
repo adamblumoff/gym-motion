@@ -129,9 +129,14 @@ export function DeviceDashboard() {
         <div className={styles.shell}>
           <nav className={styles.topBar}>
             <span className={styles.topLabel}>Gym Motion</span>
-            <Link className={styles.topLink} href="/setup">
-              Setup
-            </Link>
+            <div className={styles.topLinks}>
+              <Link className={styles.topLink} href="/logs">
+                Logs
+              </Link>
+              <Link className={styles.topLink} href="/setup">
+                Setup
+              </Link>
+            </div>
           </nav>
 
           <article className={styles.emptyCard}>
@@ -152,9 +157,14 @@ export function DeviceDashboard() {
       <div className={styles.shell}>
         <nav className={styles.topBar}>
           <span className={styles.topLabel}>Gym Motion</span>
-          <Link className={styles.topLink} href="/setup">
-            Setup
-          </Link>
+          <div className={styles.topLinks}>
+            <Link className={styles.topLink} href="/logs">
+              Logs
+            </Link>
+            <Link className={styles.topLink} href="/setup">
+              Setup
+            </Link>
+          </div>
         </nav>
 
         <div className={styles.deviceId}>

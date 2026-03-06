@@ -1,4 +1,5 @@
 drop table if exists motion_events;
+drop table if exists device_logs;
 drop table if exists firmware_releases;
 drop table if exists devices;
 
@@ -43,6 +44,20 @@ create table if not exists firmware_releases (
   created_at timestamp not null default now()
 );
 
+create table if not exists device_logs (
+  id bigserial primary key,
+  device_id text not null,
+  level text not null,
+  code text not null,
+  message text not null,
+  boot_id text,
+  firmware_version text,
+  hardware_id text,
+  device_timestamp bigint,
+  metadata jsonb,
+  received_at timestamp not null default now()
+);
+
 create index if not exists devices_updated_at_idx
   on devices (updated_at desc);
 
@@ -54,3 +69,9 @@ create index if not exists motion_events_device_id_idx
 
 create index if not exists firmware_releases_rollout_state_idx
   on firmware_releases (rollout_state, created_at desc);
+
+create index if not exists device_logs_device_id_idx
+  on device_logs (device_id, received_at desc);
+
+create index if not exists device_logs_received_at_idx
+  on device_logs (received_at desc);

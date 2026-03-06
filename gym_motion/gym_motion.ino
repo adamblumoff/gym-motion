@@ -16,8 +16,9 @@ const char* INGEST_URL = "https://gym-motion-production.up.railway.app/api/inges
 const char* HEARTBEAT_URL = "https://gym-motion-production.up.railway.app/api/heartbeat";
 const char* FIRMWARE_CHECK_URL = "https://gym-motion-production.up.railway.app/api/firmware/check";
 const char* FIRMWARE_REPORT_URL = "https://gym-motion-production.up.railway.app/api/firmware/report";
+const char* DEVICE_LOG_URL = "https://gym-motion-production.up.railway.app/api/device-logs";
 const char* DEVICE_ID = "stack-001";
-const char* FIRMWARE_VERSION = "0.4.1";
+const char* FIRMWARE_VERSION = "0.4.2";
 
 // =========================
 // ADXL345 config
@@ -88,6 +89,14 @@ struct FirmwareReleaseInfo {
   String md5;
   size_t sizeBytes = 0;
 };
+
+bool sendDeviceLog(
+  const char* level,
+  const char* code,
+  const String& message,
+  unsigned long timestamp = 0,
+  const String& metadata = ""
+);
 
 // =========================
 // OTA rollback helpers
@@ -180,8 +189,10 @@ void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Connected. IP: ");
     Serial.println(WiFi.localIP());
+    sendDeviceLog("info", "wifi.connected", "Wi-Fi connected.", millis());
   } else {
     Serial.println("Wi-Fi connect timed out.");
+    sendDeviceLog("warn", "wifi.connect_timeout", "Wi-Fi connect timed out.", millis());
   }
 }
 
@@ -193,6 +204,7 @@ void ensureWiFiConnected() {
 
   lastWifiReconnectAttemptMs = now;
   Serial.println("Wi-Fi disconnected. Retrying...");
+  sendDeviceLog("warn", "wifi.reconnect", "Wi-Fi disconnected. Retrying.", now);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
@@ -236,6 +248,38 @@ String createBootId() {
 String toLowerCopy(String value) {
   value.toLowerCase();
   return value;
+}
+
+String escapeJsonString(const String& value) {
+  String escaped;
+  escaped.reserve(value.length() + 16);
+
+  for (size_t index = 0; index < value.length(); index++) {
+    const char character = value[index];
+
+    switch (character) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped += character;
+        break;
+    }
+  }
+
+  return escaped;
 }
 
 String bytesToHex(const uint8_t* bytes, size_t length) {
@@ -519,6 +563,35 @@ bool sendFirmwareReport(const char* status, const String& targetVersion = "", co
   return postJson(FIRMWARE_REPORT_URL, payload, status, HTTP_TIMEOUT_MS);
 }
 
+bool sendDeviceLog(
+  const char* level,
+  const char* code,
+  const String& message,
+  unsigned long timestamp,
+  const String& metadata
+) {
+  String payload = "{";
+  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  payload += "\"level\":\"" + String(level) + "\",";
+  payload += "\"code\":\"" + String(code) + "\",";
+  payload += "\"message\":\"" + escapeJsonString(message) + "\",";
+  payload += "\"bootId\":\"" + escapeJsonString(bootId) + "\",";
+  payload += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
+  payload += "\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"";
+
+  if (timestamp > 0) {
+    payload += ",\"timestamp\":" + String(timestamp);
+  }
+
+  if (metadata.length() > 0) {
+    payload += ",\"metadata\":" + metadata;
+  }
+
+  payload += "}";
+
+  return postJson(DEVICE_LOG_URL, payload.c_str(), code, HTTP_TIMEOUT_MS);
+}
+
 // =========================
 // OTA helpers
 // =========================
@@ -527,6 +600,8 @@ bool fetchFirmwareRelease(FirmwareReleaseInfo& release) {
   String url = String(FIRMWARE_CHECK_URL) +
     "?deviceId=" + String(DEVICE_ID) +
     "&firmwareVersion=" + String(FIRMWARE_VERSION);
+
+  sendDeviceLog("info", "ota.check", "Checking for firmware updates.", millis());
 
   if (!getJson(url, response)) {
     return false;
@@ -542,7 +617,7 @@ bool fetchFirmwareRelease(FirmwareReleaseInfo& release) {
   return true;
 }
 
-bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
+bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release, String& failureReason) {
   WiFiClientSecure client;
   client.setInsecure();
 
@@ -552,6 +627,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
 
   if (!http.begin(client, release.assetUrl)) {
     Serial.println("OTA HTTP begin failed.");
+    failureReason = "http-begin-failed";
     return false;
   }
 
@@ -559,6 +635,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
   if (httpResponseCode != HTTP_CODE_OK) {
     Serial.print("OTA download failed -> HTTP ");
     Serial.println(httpResponseCode);
+    failureReason = "http-status-" + String(httpResponseCode);
     if (httpResponseCode > 0) {
       Serial.println(http.getString());
     } else {
@@ -571,12 +648,14 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
   const int contentLength = http.getSize();
   if (contentLength <= 0) {
     Serial.println("OTA content length missing.");
+    failureReason = "content-length-missing";
     http.end();
     return false;
   }
 
   if (release.sizeBytes > 0 && (size_t)contentLength != release.sizeBytes) {
     Serial.println("OTA content length did not match release metadata.");
+    failureReason = "content-length-mismatch";
     http.end();
     return false;
   }
@@ -584,6 +663,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
   if (!Update.begin((size_t)contentLength)) {
     Serial.println("Update.begin failed.");
     Update.printError(Serial);
+    failureReason = "update-begin-failed";
     http.end();
     return false;
   }
@@ -611,6 +691,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
 
       if (millis() - idleSince > OTA_HTTP_TIMEOUT_MS) {
         Serial.println("OTA download stalled.");
+        failureReason = "download-stalled";
         Update.abort();
         mbedtls_sha256_free(&shaContext);
         http.end();
@@ -634,6 +715,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
     if (Update.write(buffer, bytesRead) != bytesRead) {
       Serial.println("Update.write failed.");
       Update.printError(Serial);
+      failureReason = "update-write-failed";
       Update.abort();
       mbedtls_sha256_free(&shaContext);
       http.end();
@@ -650,6 +732,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
 
   if (totalWritten != (size_t)contentLength) {
     Serial.println("OTA download did not finish.");
+    failureReason = "download-incomplete";
     Update.abort();
     return false;
   }
@@ -657,6 +740,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
   const String actualSha256 = bytesToHex(digest, sizeof(digest));
   if (release.sha256.length() > 0 && actualSha256 != release.sha256) {
     Serial.println("OTA SHA-256 mismatch.");
+    failureReason = "sha256-mismatch";
     Update.abort();
     return false;
   }
@@ -664,11 +748,13 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release) {
   if (!Update.end()) {
     Serial.println("Update.end failed.");
     Update.printError(Serial);
+    failureReason = "update-end-failed";
     return false;
   }
 
   if (!Update.isFinished()) {
     Serial.println("OTA update was not marked finished.");
+    failureReason = "update-not-finished";
     return false;
   }
 
@@ -682,19 +768,42 @@ bool performOtaUpdate(const FirmwareReleaseInfo& release) {
     Serial.println("Could not report OTA downloading state.");
   }
 
+  sendDeviceLog(
+    "info",
+    "ota.download.start",
+    "Starting OTA download.",
+    millis(),
+    "{\"targetVersion\":\"" + escapeJsonString(release.version) + "\"}"
+  );
+
   if (!acquireNetworkLock(10000)) {
     Serial.println("Could not acquire network lock for OTA.");
+    sendDeviceLog("error", "ota.lock_failed", "Could not acquire network lock for OTA.", millis());
     return false;
   }
 
-  const bool ok = downloadAndApplyFirmwareUnlocked(release);
+  String failureReason;
+  const bool ok = downloadAndApplyFirmwareUnlocked(release, failureReason);
   releaseNetworkLock();
 
   if (!ok) {
     sendFirmwareReport("failed", release.version, "download-or-verify-failed");
+    String metadata = "{\"targetVersion\":\"" + escapeJsonString(release.version) + "\"";
+    if (failureReason.length() > 0) {
+      metadata += ",\"reason\":\"" + escapeJsonString(failureReason) + "\"";
+    }
+    metadata += "}";
+    sendDeviceLog("error", "ota.failed", "OTA update failed.", millis(), metadata);
     return false;
   }
 
+  sendDeviceLog(
+    "info",
+    "ota.applied",
+    "OTA image written successfully. Rebooting.",
+    millis(),
+    "{\"targetVersion\":\"" + escapeJsonString(release.version) + "\"}"
+  );
   sendFirmwareReport("applied", release.version);
   delay(500);
   ESP.restart();
@@ -716,6 +825,7 @@ void senderTask(void* parameter) {
     if (bootReportPending && WiFi.status() == WL_CONNECTED) {
       if (sendFirmwareReport("booted", FIRMWARE_VERSION)) {
         bootReportPending = false;
+        sendDeviceLog("info", "firmware.booted", "Firmware booted and checked in.", millis());
       }
     }
 
@@ -761,6 +871,13 @@ void senderTask(void* parameter) {
       if (ok) {
         Serial.print("Send success. lastSentState -> ");
         Serial.println(stateToSend);
+        sendDeviceLog(
+          "info",
+          "motion.state",
+          String("State update sent: ") + stateToSend,
+          timestampToSend,
+          "{\"state\":\"" + String(stateToSend) + "\",\"delta\":" + String(deltaToSend) + "}"
+        );
       } else {
         Serial.print("Send failed. retryCount = ");
         Serial.println(retryCount);
@@ -771,6 +888,9 @@ void senderTask(void* parameter) {
       if (sendHeartbeat(now)) {
         lastHeartbeatMs = now;
         Serial.println("Heartbeat success.");
+        sendDeviceLog("info", "heartbeat.success", "Heartbeat sent successfully.", now);
+      } else {
+        sendDeviceLog("warn", "heartbeat.failed", "Heartbeat failed.", now);
       }
     }
 
@@ -809,6 +929,13 @@ void otaTask(void* parameter) {
 
     Serial.print("Firmware update available -> ");
     Serial.println(release.version);
+    sendDeviceLog(
+      "info",
+      "ota.available",
+      "Firmware update available.",
+      now,
+      "{\"targetVersion\":\"" + escapeJsonString(release.version) + "\"}"
+    );
 
     portENTER_CRITICAL(&stateMux);
     otaInProgress = true;
@@ -892,6 +1019,7 @@ void setup() {
   Serial.println(bootId);
   Serial.print("Firmware version: ");
   Serial.println(FIRMWARE_VERSION);
+  sendDeviceLog("info", "device.boot", "Device boot complete.", millis());
 
   const BaseType_t senderResult = xTaskCreatePinnedToCore(
     senderTask,

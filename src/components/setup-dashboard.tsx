@@ -198,9 +198,14 @@ export function SetupDashboard() {
             <div className={styles.eyebrow}>Ops dashboard</div>
             <h1 className={styles.title}>Device health and rollout control</h1>
           </div>
-          <Link className={styles.topLink} href="/">
-            Back to live board
-          </Link>
+          <div className={styles.topLinks}>
+            <Link className={styles.topLink} href="/logs">
+              Logs
+            </Link>
+            <Link className={styles.topLink} href="/">
+              Back to live board
+            </Link>
+          </div>
         </nav>
 
         {status ? <p className={styles.status}>{status}</p> : null}

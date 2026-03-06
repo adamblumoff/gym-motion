@@ -1,4 +1,7 @@
-import { subscribeToMotionUpdates } from "@/lib/motion-stream";
+import {
+  subscribeToDeviceLogs,
+  subscribeToMotionUpdates,
+} from "@/lib/motion-stream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +13,8 @@ function formatEvent(event: string, payload: unknown) {
 }
 
 export async function GET(request: Request) {
-  let cleanup = () => {};
+  let cleanupMotion = () => {};
+  let cleanupLogs = () => {};
 
   const stream = new ReadableStream({
     start(controller) {
@@ -20,15 +24,19 @@ export async function GET(request: Request) {
 
       controller.enqueue(formatEvent("connected", { ok: true }));
 
-      cleanup = subscribeToMotionUpdates((payload) => {
+      cleanupMotion = subscribeToMotionUpdates((payload) => {
         controller.enqueue(formatEvent("motion-update", payload));
+      });
+      cleanupLogs = subscribeToDeviceLogs((payload) => {
+        controller.enqueue(formatEvent("device-log", payload));
       });
 
       const pingInterval = setInterval(sendPing, 15000);
 
       const close = () => {
         clearInterval(pingInterval);
-        cleanup();
+        cleanupMotion();
+        cleanupLogs();
         try {
           controller.close();
         } catch {}
@@ -37,7 +45,8 @@ export async function GET(request: Request) {
       request.signal.addEventListener("abort", close, { once: true });
     },
     cancel() {
-      cleanup();
+      cleanupMotion();
+      cleanupLogs();
     },
   });
 

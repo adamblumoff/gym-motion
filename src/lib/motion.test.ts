@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  mergeLogUpdate,
+  parseDeviceLog,
   parseDeviceAssignment,
   parseFirmwareRelease,
   parseHeartbeatPayload,
@@ -85,5 +87,63 @@ describe("parseFirmwareRelease", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe("parseDeviceLog", () => {
+  it("accepts a structured device log payload", () => {
+    const result = parseDeviceLog({
+      deviceId: "stack-001",
+      level: "warn",
+      code: "ota.failed",
+      message: "OTA update failed.",
+      bootId: "boot-001",
+      firmwareVersion: "0.4.2",
+      hardwareId: "esp32-a1",
+      timestamp: 45678,
+      metadata: {
+        reason: "http-begin-failed",
+        attempt: 1,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("mergeLogUpdate", () => {
+  it("prepends new logs and de-duplicates by id", () => {
+    const merged = mergeLogUpdate(
+      [
+        {
+          id: 1,
+          deviceId: "stack-001",
+          level: "info",
+          code: "device.boot",
+          message: "Device booted.",
+          bootId: "boot-001",
+          firmwareVersion: "0.4.1",
+          hardwareId: "esp32-a1",
+          deviceTimestamp: 12,
+          metadata: null,
+          receivedAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+        },
+      ],
+      {
+        id: 2,
+        deviceId: "stack-001",
+        level: "warn",
+        code: "ota.failed",
+        message: "OTA update failed.",
+        bootId: "boot-001",
+        firmwareVersion: "0.4.2",
+        hardwareId: "esp32-a1",
+        deviceTimestamp: 18,
+        metadata: { reason: "http-begin-failed" },
+        receivedAt: new Date("2026-03-06T05:01:00.000Z").toISOString(),
+      },
+    );
+
+    expect(merged.map((item) => item.id)).toEqual([2, 1]);
   });
 });
