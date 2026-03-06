@@ -19,6 +19,8 @@
 
 # production
 /build
+/gym_motion/build
+/bin/arduino-cli
 
 # misc
 .DS_Store

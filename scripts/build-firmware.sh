@@ -4,14 +4,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARDUINO_CLI="${ARDUINO_CLI:-$REPO_ROOT/bin/arduino-cli}"
+REPO_ARDUINO_CLI="$REPO_ROOT/bin/arduino-cli"
+
+if [[ -n "${ARDUINO_CLI:-}" ]]; then
+  ARDUINO_CLI_BIN="$ARDUINO_CLI"
+elif [[ -x "$REPO_ARDUINO_CLI" ]]; then
+  ARDUINO_CLI_BIN="$REPO_ARDUINO_CLI"
+elif command -v arduino-cli >/dev/null 2>&1; then
+  ARDUINO_CLI_BIN="$(command -v arduino-cli)"
+else
+  echo "arduino-cli is required. Install it or place an executable at $REPO_ARDUINO_CLI." >&2
+  exit 1
+fi
 
 FQBN="${FQBN:-esp32:esp32:esp32}"
 SKETCH_PATH="${SKETCH_PATH:-gym_motion/gym_motion.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
-"$ARDUINO_CLI" compile \
+"$ARDUINO_CLI_BIN" compile \
   --fqbn "$FQBN" \
   --board-options "PartitionScheme=$PARTITIONS" \
   --export-binaries \
