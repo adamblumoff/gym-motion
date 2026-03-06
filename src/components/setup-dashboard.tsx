@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   DeviceSummary,
-  FirmwareReleaseSummary,
   MotionStreamPayload,
 } from "@/lib/motion";
 import { mergeDeviceUpdate } from "@/lib/motion";
@@ -18,7 +17,10 @@ type DevicesResponse = {
 };
 
 type ReleasesResponse = {
-  releases: FirmwareReleaseSummary[];
+  releases: Array<{
+    version: string;
+    rolloutState: "draft" | "active" | "paused";
+  }>;
 };
 
 type Drafts = Record<
@@ -27,7 +29,6 @@ type Drafts = Record<
     machineLabel: string;
     siteId: string;
     hardwareId: string;
-    provisioningState: DeviceSummary["provisioningState"];
   }
 >;
 
@@ -39,7 +40,6 @@ function createDrafts(devices: DeviceSummary[]): Drafts {
         machineLabel: device.machineLabel ?? "",
         siteId: device.siteId ?? "",
         hardwareId: device.hardwareId ?? "",
-        provisioningState: device.provisioningState,
       },
     ]),
   );
@@ -59,16 +59,7 @@ function formatTime(value: string | null) {
 export function SetupDashboard() {
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [drafts, setDrafts] = useState<Drafts>({});
-  const [releases, setReleases] = useState<FirmwareReleaseSummary[]>([]);
-  const [releaseForm, setReleaseForm] = useState({
-    version: "",
-    gitSha: "",
-    assetUrl: "",
-    sha256: "",
-    md5: "",
-    sizeBytes: "",
-    rolloutState: "draft",
-  });
+  const [releases, setReleases] = useState<ReleasesResponse["releases"]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [showProvisioningWizard, setShowProvisioningWizard] = useState(false);
 
@@ -114,7 +105,6 @@ export function SetupDashboard() {
           machineLabel: payload.device.machineLabel ?? "",
           siteId: payload.device.siteId ?? "",
           hardwareId: payload.device.hardwareId ?? "",
-          provisioningState: payload.device.provisioningState,
         },
       }));
     });
@@ -143,7 +133,6 @@ export function SetupDashboard() {
         machineLabel: draft.machineLabel || null,
         siteId: draft.siteId || null,
         hardwareId: draft.hardwareId || null,
-        provisioningState: draft.provisioningState,
       }),
     });
 
@@ -160,7 +149,7 @@ export function SetupDashboard() {
 
   async function handleDeviceDelete(deviceId: string) {
     const confirmed = window.confirm(
-      `Delete ${deviceId} from the app? After deletion, hold the ESP32 BOOT button while tapping EN (reset) so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
+      `Delete ${deviceId} from the app? After deletion, hold IO0 while tapping EN so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
     );
 
     if (!confirmed) {
@@ -191,42 +180,8 @@ export function SetupDashboard() {
       setShowProvisioningWizard(true);
     }
     setStatus(
-      `Deleted ${deviceId}. To provision the same sensor again, hold BOOT on the ESP32 while tapping EN so it clears saved Wi-Fi and re-enters BLE setup mode.`,
+      `Deleted ${deviceId}. Hold IO0 while tapping EN so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
     );
-  }
-
-  async function handleReleaseSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const response = await fetch("/api/firmware/releases", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...releaseForm,
-        sizeBytes: Number(releaseForm.sizeBytes),
-      }),
-    });
-
-    if (!response.ok) {
-      setStatus("Failed to save firmware release.");
-      return;
-    }
-
-    const data = (await response.json()) as { release: FirmwareReleaseSummary };
-
-    setReleases((currentReleases) => [data.release, ...currentReleases]);
-        setReleaseForm({
-          version: "",
-          gitSha: "",
-          assetUrl: "",
-          sha256: "",
-          md5: "",
-          sizeBytes: "",
-          rolloutState: "draft",
-        });
-    setStatus(`Saved firmware ${data.release.version}.`);
   }
 
   return (
@@ -287,11 +242,13 @@ export function SetupDashboard() {
 
           <div className={styles.rolloutBanner}>
             <span className={styles.rolloutLabel}>Re-provision</span>
-            <strong>Delete + BOOT/EN reset</strong>
+            <strong>IO0 + EN reset</strong>
             <span className={styles.rolloutHint}>
-              Deleting a device only forgets it in the app. To run setup again on the
-              same ESP32, hold <strong>BOOT</strong> and tap <strong>EN</strong> so it
-              clears saved Wi-Fi and comes back in BLE setup mode.
+              App labels do not reset the hardware. To run setup again on the same
+              ESP32, hold <strong>IO0</strong> while tapping <strong>EN</strong> so it
+              clears saved Wi-Fi and comes back in BLE setup mode. On many boards,
+              that IO0 button is silkscreened as <strong>IO0</strong>, <strong>0</strong>,
+              or something that can look like <strong>100</strong>.
             </span>
           </div>
 
@@ -314,7 +271,6 @@ export function SetupDashboard() {
                   machineLabel: device.machineLabel ?? "",
                   siteId: device.siteId ?? "",
                   hardwareId: device.hardwareId ?? "",
-                  provisioningState: device.provisioningState,
                 };
 
                 return (
@@ -407,32 +363,13 @@ export function SetupDashboard() {
                         />
                       </label>
 
-                      <label className={styles.field}>
-                        <span>Provisioning state</span>
-                        <select
-                          value={draft.provisioningState}
-                          onChange={(inputEvent) =>
-                            setDrafts((currentDrafts) => ({
-                              ...currentDrafts,
-                              [device.id]: {
-                                ...draft,
-                                provisioningState:
-                                  inputEvent.target.value as DeviceSummary["provisioningState"],
-                              },
-                            }))
-                          }
-                        >
-                          <option value="unassigned">unassigned</option>
-                          <option value="assigned">assigned</option>
-                          <option value="provisioned">provisioned</option>
-                        </select>
-                      </label>
                     </div>
 
                     <div className={styles.deviceMeta}>
                       <span>Boot ID {device.bootId ?? "unknown"}</span>
                       <span>Heartbeat {formatTime(device.lastHeartbeatAt)}</span>
                       <span>Last event {formatTime(device.lastEventReceivedAt)}</span>
+                      <span>Provisioning state {device.provisioningState}</span>
                       <span>Update status {device.updateStatus}</span>
                       <span>
                         Target firmware {activeRelease?.version ?? "none"}
@@ -445,130 +382,6 @@ export function SetupDashboard() {
           </div>
         </section>
 
-        <section className={styles.section}>
-          <div className={styles.sectionHeader}>
-            <h2>Firmware releases</h2>
-            <p>
-              Store the GitHub release metadata the OTA check endpoint serves back
-              to devices. Leave a release active until all devices catch up.
-            </p>
-          </div>
-
-          <form className={styles.releaseForm} onSubmit={(event) => void handleReleaseSubmit(event)}>
-            <label className={styles.field}>
-              <span>Version</span>
-              <input
-                required
-                value={releaseForm.version}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    version: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Git SHA</span>
-              <input
-                required
-                value={releaseForm.gitSha}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    gitSha: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Asset URL or object key</span>
-              <input
-                required
-                value={releaseForm.assetUrl}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    assetUrl: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>SHA-256</span>
-              <input
-                required
-                value={releaseForm.sha256}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    sha256: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>MD5</span>
-              <input
-                value={releaseForm.md5}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    md5: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Size in bytes</span>
-              <input
-                required
-                inputMode="numeric"
-                value={releaseForm.sizeBytes}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    sizeBytes: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Rollout state</span>
-              <select
-                value={releaseForm.rolloutState}
-                onChange={(event) =>
-                  setReleaseForm((currentForm) => ({
-                    ...currentForm,
-                    rolloutState: event.target.value,
-                  }))
-                }
-              >
-                <option value="draft">draft</option>
-                <option value="active">active</option>
-                <option value="paused">paused</option>
-              </select>
-            </label>
-            <button className={styles.saveButton} type="submit">
-              Save release
-            </button>
-          </form>
-
-          <div className={styles.releaseList}>
-            {releases.length === 0 ? (
-              <div className={styles.emptyCard}>No firmware releases stored yet.</div>
-            ) : (
-              releases.map((release) => (
-                <article className={styles.releaseCard} key={release.version}>
-                  <strong>{release.version}</strong>
-                  <div>{release.rolloutState}</div>
-                  <div>{release.gitSha}</div>
-                  <div>{formatTime(release.createdAt)}</div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
       </div>
     </section>
   );
