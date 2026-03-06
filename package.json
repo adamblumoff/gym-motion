@@ -11,6 +11,7 @@
     "db:setup": "bun run scripts/setup-db.ts",
     "seed": "bun run scripts/send-test-event.ts",
     "firmware:build": "./scripts/build-firmware.sh",
+    "firmware:upload": "./scripts/upload-firmware.sh",
     "firmware:publish": "bun run scripts/publish-firmware.ts",
     "device:purge": "bun run scripts/purge-device.ts"
   },

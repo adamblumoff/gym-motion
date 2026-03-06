@@ -84,6 +84,8 @@ unsigned long pendingTimestamp = 0;
 bool otaInProgress = false;
 bool bootReportPending = true;
 bool provisioningMode = false;
+size_t lastOtaRequiredBytes = 0;
+size_t lastOtaAvailableBytes = 0;
 String hardwareId;
 String bootId;
 String configuredDeviceId;
@@ -141,6 +143,7 @@ bool sendDeviceLog(
   unsigned long timestamp = 0,
   const String& metadata = ""
 );
+String describeOtaUpdateBeginFailure(size_t requiredBytes);
 
 // =========================
 // OTA rollback helpers
@@ -936,6 +939,8 @@ bool fetchFirmwareRelease(FirmwareReleaseInfo& release) {
 bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release, String& failureReason) {
   WiFiClientSecure client;
   client.setInsecure();
+  lastOtaRequiredBytes = 0;
+  lastOtaAvailableBytes = 0;
 
   HTTPClient http;
   http.setTimeout(OTA_HTTP_TIMEOUT_MS);
@@ -979,7 +984,7 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release, String
   if (!Update.begin((size_t)contentLength)) {
     Serial.println("Update.begin failed.");
     Update.printError(Serial);
-    failureReason = "update-begin-failed";
+    failureReason = describeOtaUpdateBeginFailure((size_t)contentLength);
     http.end();
     return false;
   }
@@ -1079,6 +1084,17 @@ bool downloadAndApplyFirmwareUnlocked(const FirmwareReleaseInfo& release, String
   return true;
 }
 
+String describeOtaUpdateBeginFailure(size_t requiredBytes) {
+  lastOtaRequiredBytes = requiredBytes;
+  lastOtaAvailableBytes = ESP.getFreeSketchSpace();
+
+  if (lastOtaAvailableBytes > 0 && requiredBytes > lastOtaAvailableBytes) {
+    return "slot-too-small-requires-usb-migration";
+  }
+
+  return "update-begin-failed";
+}
+
 bool performOtaUpdate(const FirmwareReleaseInfo& release) {
   if (!sendFirmwareReport("downloading", release.version)) {
     Serial.println("Could not report OTA downloading state.");
@@ -1103,10 +1119,19 @@ bool performOtaUpdate(const FirmwareReleaseInfo& release) {
   releaseNetworkLock();
 
   if (!ok) {
-    sendFirmwareReport("failed", release.version, "download-or-verify-failed");
+    const String reportDetail = failureReason.length() > 0
+      ? failureReason
+      : "download-or-verify-failed";
+    sendFirmwareReport("failed", release.version, reportDetail);
     String metadata = "{\"targetVersion\":\"" + escapeJsonString(release.version) + "\"";
     if (failureReason.length() > 0) {
       metadata += ",\"reason\":\"" + escapeJsonString(failureReason) + "\"";
+    }
+    if (lastOtaRequiredBytes > 0) {
+      metadata += ",\"requiredBytes\":" + String((unsigned long)lastOtaRequiredBytes);
+    }
+    if (lastOtaAvailableBytes > 0) {
+      metadata += ",\"availableBytes\":" + String((unsigned long)lastOtaAvailableBytes);
     }
     metadata += "}";
     sendDeviceLog("error", "ota.failed", "OTA update failed.", millis(), metadata);

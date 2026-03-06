@@ -292,6 +292,12 @@ Build locally with Arduino CLI:
 bun run firmware:build
 ```
 
+Upload over USB with the same board settings used in CI and OTA:
+
+```bash
+bun run firmware:upload -- --port /dev/ttyUSB0
+```
+
 The repo ships its own `arduino-cli` binary in `bin/arduino-cli`, so `bun run firmware:build` uses the repo toolchain instead of relying on your shell `PATH`.
 
 One-time local setup for a fresh machine:
@@ -321,6 +327,19 @@ bun run lint
 bun run build
 bun run firmware:build
 ```
+
+Recommended wired migration / bench flash flow:
+
+```bash
+bun run firmware:upload -- --port /dev/ttyUSB0
+```
+
+If you need to use the Arduino IDE as a fallback, make sure the board menus match the repo build:
+
+- Board: `ESP32 Dev Module`
+- Partition Scheme: `Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)`
+
+The default Arduino IDE partition scheme only gives you a `1.2MB` app slot, which is too small for the current BLE provisioning firmware and will fail with `Sketch too big`.
 
 There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that can fully publish firmware on tag pushes like `firmware-v0.4.2`.
 
@@ -367,6 +386,8 @@ The publish script uploads `build/firmware/gym_motion.ino.bin` to the private Ra
 7. The device also posts structured lifecycle logs to `/api/device-logs`, and the `/logs` page streams them live by device.
 
 The release workflow still generates `.sha256` and `.md5` files alongside the firmware binary. The bucket stays private; devices only see temporary presigned URLs.
+
+If a device reports `ota.failed` with reason `slot-too-small-requires-usb-migration`, it is still on the older `1.2MB` partition layout and needs one wired flash with the `min_spiffs` partition scheme before larger OTA updates will work.
 
 ## BLE provisioning flow
 
