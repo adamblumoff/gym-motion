@@ -305,7 +305,9 @@ bool hasProvisioningConfig() {
 }
 
 String createProvisioningDeviceName() {
-  const int suffixStart = max(0, hardwareId.length() - 6);
+  const int suffixStart = hardwareId.length() > 6
+    ? static_cast<int>(hardwareId.length() - 6)
+    : 0;
   return "GymMotion-" + hardwareId.substring(suffixStart);
 }
 
@@ -623,13 +625,13 @@ class ProvisioningServerCallbacks : public BLEServerCallbacks {
 
 class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
-    const std::string rawValue = characteristic->getValue();
+    const String rawValue = characteristic->getValue();
 
     if (rawValue.empty()) {
       return;
     }
 
-    const String value(rawValue.c_str());
+    const String value(rawValue);
 
     if (value.startsWith("BEGIN:")) {
       provisioningCommandBuffer = "";
