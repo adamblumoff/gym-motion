@@ -52,8 +52,7 @@ export async function recordMotionEvent(payload: IngestPayload) {
        set last_state = excluded.last_state,
            last_seen_at = excluded.last_seen_at,
            last_delta = excluded.last_delta,
-           updated_at = now()
-       where excluded.last_seen_at >= devices.last_seen_at`,
+           updated_at = now()`,
       [payload.deviceId, payload.state, payload.timestamp, delta],
     );
 
@@ -70,7 +69,7 @@ export async function listDevices(): Promise<DeviceSummary[]> {
   const result = await getDb().query<DeviceRow>(
     `select id, last_state, last_seen_at, last_delta, updated_at
      from devices
-     order by last_seen_at desc, id asc`,
+     order by updated_at desc, id asc`,
   );
 
   return result.rows.map((row) => ({
@@ -86,7 +85,7 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
   const result = await getDb().query<MotionEventRow>(
     `select id, device_id, state, delta, event_timestamp, received_at
      from motion_events
-     order by event_timestamp desc, id desc
+     order by received_at desc, id desc
      limit $1`,
     [limit],
   );
