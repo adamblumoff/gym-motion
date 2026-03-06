@@ -22,7 +22,7 @@ const int SCL_PIN = 22;
 // Motion tuning
 // =========================
 const int MOTION_THRESHOLD = 70;
-const unsigned long STOP_TIMEOUT_MS = 900;
+const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 
 // =========================
@@ -32,7 +32,6 @@ const unsigned long RETRY_INTERVAL_MS = 750;
 const unsigned long HEARTBEAT_INTERVAL_MS = 30000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
 const uint16_t HTTP_TIMEOUT_MS = 1500;
-const unsigned long DEBUG_PRINT_INTERVAL_MS = 250;
 
 // =========================
 // Motion state
@@ -60,7 +59,6 @@ unsigned long pendingTimestamp = 0;
 unsigned long lastSendAttemptMs = 0;
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastWifiReconnectAttemptMs = 0;
-unsigned long lastDebugPrintMs = 0;
 int retryCount = 0;
 TaskHandle_t senderTaskHandle = nullptr;
 
@@ -329,18 +327,6 @@ void updateMotionState() {
     currentDetectedState = "still";
     Serial.println("Detected -> STILL");
     setPendingState("still", delta, now);
-  }
-
-  if (now - lastDebugPrintMs >= DEBUG_PRINT_INTERVAL_MS) {
-    lastDebugPrintMs = now;
-    Serial.print("delta: ");
-    Serial.print(delta);
-    Serial.print(" | detected: ");
-    Serial.print(currentDetectedState);
-    Serial.print(" | lastSent: ");
-    Serial.print(lastSentState);
-    Serial.print(" | pending: ");
-    Serial.println(pendingState == nullptr ? "none" : pendingState);
   }
 
   lastX = x;
