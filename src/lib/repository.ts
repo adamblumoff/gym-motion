@@ -4,26 +4,35 @@ import type {
   IngestPayload,
   MotionEventSummary,
 } from "@/lib/motion";
-import { toEventDate } from "@/lib/motion";
 
 type DeviceRow = {
   id: string;
   last_state: DeviceSummary["lastState"];
-  last_seen_at: Date;
+  last_seen_at: string | number;
   last_delta: number | null;
+  updated_at: Date;
 };
 
 type MotionEventRow = {
-  id: number;
+  id: string | number;
   device_id: string;
   state: MotionEventSummary["state"];
   delta: number | null;
-  event_timestamp: Date;
+  event_timestamp: string | number;
   received_at: Date;
 };
 
+function toSafeNumber(value: string | number) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isSafeInteger(numericValue)) {
+    throw new Error(`Value is not a safe integer: ${value}`);
+  }
+
+  return numericValue;
+}
+
 export async function recordMotionEvent(payload: IngestPayload) {
-  const eventDate = toEventDate(payload.timestamp);
   const delta = payload.delta ?? null;
   const client = await getDb().connect();
 
@@ -33,7 +42,7 @@ export async function recordMotionEvent(payload: IngestPayload) {
     await client.query(
       `insert into motion_events (device_id, state, delta, event_timestamp)
        values ($1, $2, $3, $4)`,
-      [payload.deviceId, payload.state, delta, eventDate],
+      [payload.deviceId, payload.state, delta, payload.timestamp],
     );
 
     await client.query(
@@ -45,7 +54,7 @@ export async function recordMotionEvent(payload: IngestPayload) {
            last_delta = excluded.last_delta,
            updated_at = now()
        where excluded.last_seen_at >= devices.last_seen_at`,
-      [payload.deviceId, payload.state, eventDate, delta],
+      [payload.deviceId, payload.state, payload.timestamp, delta],
     );
 
     await client.query("COMMIT");
@@ -59,7 +68,7 @@ export async function recordMotionEvent(payload: IngestPayload) {
 
 export async function listDevices(): Promise<DeviceSummary[]> {
   const result = await getDb().query<DeviceRow>(
-    `select id, last_state, last_seen_at, last_delta
+    `select id, last_state, last_seen_at, last_delta, updated_at
      from devices
      order by last_seen_at desc, id asc`,
   );
@@ -67,8 +76,9 @@ export async function listDevices(): Promise<DeviceSummary[]> {
   return result.rows.map((row) => ({
     id: row.id,
     lastState: row.last_state,
-    lastSeenAt: row.last_seen_at.toISOString(),
+    lastSeenAt: toSafeNumber(row.last_seen_at),
     lastDelta: row.last_delta,
+    updatedAt: row.updated_at.toISOString(),
   }));
 }
 
@@ -82,11 +92,11 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
   );
 
   return result.rows.map((row) => ({
-    id: row.id,
+    id: toSafeNumber(row.id),
     deviceId: row.device_id,
     state: row.state,
     delta: row.delta,
-    eventTimestamp: row.event_timestamp.toISOString(),
+    eventTimestamp: toSafeNumber(row.event_timestamp),
     receivedAt: row.received_at.toISOString(),
   }));
 }

@@ -1,7 +1,10 @@
+drop table if exists motion_events;
+drop table if exists devices;
+
 create table if not exists devices (
   id text primary key,
   last_state text not null,
-  last_seen_at timestamp not null,
+  last_seen_at bigint not null,
   last_delta integer,
   updated_at timestamp not null default now()
 );
@@ -11,7 +14,7 @@ create table if not exists motion_events (
   device_id text not null,
   state text not null,
   delta integer,
-  event_timestamp timestamp not null,
+  event_timestamp bigint not null,
   received_at timestamp not null default now()
 );
 

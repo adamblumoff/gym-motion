@@ -15,8 +15,9 @@ export type MotionState = z.infer<typeof motionStateSchema>;
 export type DeviceSummary = {
   id: string;
   lastState: MotionState;
-  lastSeenAt: string;
+  lastSeenAt: number;
   lastDelta: number | null;
+  updatedAt: string;
 };
 
 export type MotionEventSummary = {
@@ -24,22 +25,12 @@ export type MotionEventSummary = {
   deviceId: string;
   state: MotionState;
   delta: number | null;
-  eventTimestamp: string;
+  eventTimestamp: number;
   receivedAt: string;
 };
 
 export function parseIngestPayload(input: unknown) {
   return ingestPayloadSchema.safeParse(input);
-}
-
-export function toEventDate(timestamp: number) {
-  const eventDate = new Date(timestamp);
-
-  if (Number.isNaN(eventDate.getTime())) {
-    throw new Error("Invalid timestamp.");
-  }
-
-  return eventDate;
 }
 
 export function formatZodError(message: z.ZodError) {

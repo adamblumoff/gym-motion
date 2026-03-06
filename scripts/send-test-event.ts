@@ -4,7 +4,7 @@ async function main() {
   const payload = {
     deviceId: "stack-001",
     state: "moving",
-    timestamp: Date.now(),
+    timestamp: 123456,
     delta: 42,
   };
 

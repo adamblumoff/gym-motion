@@ -116,7 +116,10 @@ export function DeviceDashboard() {
 
         <div className={styles.meta}>
           <div>
-            Last seen <strong>{formatTime(primaryDevice.lastSeenAt)}</strong>
+            Last seen <strong>{formatTime(primaryDevice.updatedAt)}</strong>
+          </div>
+          <div>
+            Device millis <strong>{primaryDevice.lastSeenAt}</strong>
           </div>
           <div>
             Delta <strong>{primaryDevice.lastDelta ?? "N/A"}</strong>
@@ -140,8 +143,8 @@ export function DeviceDashboard() {
                   <span className={styles.eventState} data-state={event.state}>
                     {formatState(event.state)}
                   </span>
-                  <span>delta {event.delta ?? "N/A"}</span>
-                  <span>{formatTime(event.eventTimestamp)}</span>
+                  <span>millis {event.eventTimestamp}</span>
+                  <span>{formatTime(event.receivedAt)}</span>
                 </li>
               ))}
             </ul>
