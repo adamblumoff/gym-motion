@@ -393,7 +393,7 @@ export function SetupDashboard() {
               />
             </label>
             <label className={styles.field}>
-              <span>Asset URL</span>
+              <span>Asset URL or object key</span>
               <input
                 required
                 value={releaseForm.assetUrl}

@@ -45,7 +45,7 @@ export const deviceAssignmentSchema = z.object({
 export const firmwareReleaseSchema = z.object({
   version: z.string().trim().min(1).max(120),
   gitSha: z.string().trim().min(1).max(120),
-  assetUrl: z.string().url(),
+  assetUrl: z.string().trim().min(1).max(512),
   sha256: z.string().trim().min(32).max(128),
   md5: z.string().trim().length(32).optional(),
   sizeBytes: z.number().int().positive(),

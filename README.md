@@ -26,9 +26,15 @@ Create `.env.local` with:
 
 ```bash
 DATABASE_PUBLIC_URL=postgresql://USER:PASSWORD@HOST:PORT/railway
+AWS_S3_BUCKET_NAME=your-private-firmware-bucket
+AWS_ENDPOINT_URL=https://your-bucket-endpoint
+AWS_DEFAULT_REGION=iad
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
 Railway should provide `DATABASE_PUBLIC_URL` to the web service in production.
+Railway Buckets also provide the `AWS_*` variables to the web service.
 
 ## Local setup
 
@@ -240,18 +246,26 @@ Override it if needed:
 FQBN=esp32:esp32:esp32 PARTITIONS=min_spiffs bun run firmware:build
 ```
 
-There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that builds firmware on tag pushes like `firmware-v0.3.1` and uploads the binary as a release asset.
+There is also a GitHub Actions workflow at `.github/workflows/firmware-release.yml` that builds the firmware artifact on tag pushes like `firmware-v0.3.1`.
+
+Publish a built firmware binary to the private Railway bucket and register it as the active release:
+
+```bash
+railway run bun run firmware:publish -- --version 0.4.1 --rollout active
+```
+
+The publish script uploads `build/firmware/gym_motion.ino.bin` to the private Railway bucket and stores the object key in the database. The OTA check endpoint then turns that object key into a short-lived presigned download URL for devices.
 
 ## OTA firmware flow
 
 1. Flash the ESP32 once over USB with the OTA-capable sketch and `min_spiffs` partition scheme.
 2. The device sends normal motion events plus heartbeats with `firmwareVersion`, `bootId`, and `hardwareId`.
 3. A background OTA task on the device checks `/api/firmware/check` every few minutes while the device is idle.
-4. If the backend advertises a newer active release, the device downloads the `.bin` from GitHub Releases over HTTPS.
+4. If the backend advertises a newer active release, the device downloads the `.bin` from a short-lived presigned Railway bucket URL over HTTPS.
 5. The device verifies the image checksum, writes it to the inactive OTA app slot, reports `applied`, and restarts.
 6. On the next boot, the device reports `booted` and continues normal motion tracking.
 
-The release workflow now also generates `.sha256` and `.md5` files alongside the firmware binary.
+The release workflow still generates `.sha256` and `.md5` files alongside the firmware binary. The bucket stays private; devices only see temporary presigned URLs.
 
 ## Test / seed
 
