@@ -3,6 +3,11 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <Update.h>
+#include <Preferences.h>
+#include <BLE2902.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 #include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
@@ -10,15 +15,26 @@
 // =========================
 // Wi-Fi + API config
 // =========================
-const char* WIFI_SSID = "NEW 2WIRE280";
-const char* WIFI_PASSWORD = "8968012359";
 const char* INGEST_URL = "https://gym-motion-production.up.railway.app/api/ingest";
 const char* HEARTBEAT_URL = "https://gym-motion-production.up.railway.app/api/heartbeat";
 const char* FIRMWARE_CHECK_URL = "https://gym-motion-production.up.railway.app/api/firmware/check";
 const char* FIRMWARE_REPORT_URL = "https://gym-motion-production.up.railway.app/api/firmware/report";
 const char* DEVICE_LOG_URL = "https://gym-motion-production.up.railway.app/api/device-logs";
-const char* DEVICE_ID = "stack-001";
-const char* FIRMWARE_VERSION = "0.4.2";
+const char* FIRMWARE_VERSION = "0.4.3";
+const int PROVISION_RESET_PIN = 0;
+const char* PREFS_NAMESPACE = "gym-motion";
+const char* PREF_WIFI_SSID = "wifi_ssid";
+const char* PREF_WIFI_PASSWORD = "wifi_password";
+const char* PREF_DEVICE_ID = "device_id";
+const char* PREF_SITE_ID = "site_id";
+const char* PREF_MACHINE_LABEL = "machine_label";
+
+// =========================
+// BLE provisioning config
+// =========================
+const char* PROVISIONING_SERVICE_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c201";
+const char* PROVISIONING_CONTROL_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c202";
+const char* PROVISIONING_STATUS_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c203";
 
 // =========================
 // ADXL345 config
@@ -67,8 +83,20 @@ int pendingDelta = 0;
 unsigned long pendingTimestamp = 0;
 bool otaInProgress = false;
 bool bootReportPending = true;
+bool provisioningMode = false;
 String hardwareId;
 String bootId;
+String configuredDeviceId;
+String configuredSiteId;
+String configuredMachineLabel;
+String wifiSsid;
+String wifiPassword;
+Preferences preferences;
+BLEServer* provisioningServer = nullptr;
+BLECharacteristic* provisioningControlCharacteristic = nullptr;
+BLECharacteristic* provisioningStatusCharacteristic = nullptr;
+String provisioningCommandBuffer;
+bool provisioningBleConnected = false;
 
 // =========================
 // Send / retry state
@@ -89,6 +117,22 @@ struct FirmwareReleaseInfo {
   String md5;
   size_t sizeBytes = 0;
 };
+
+bool connectToWiFi();
+void startProvisioningMode();
+void sendProvisioningStatus(const String& payload);
+void handleProvisioningCommand(const String& payload);
+void sendProvisioningReady();
+void runWifiScan();
+void loadProvisioningConfig();
+void clearProvisioningConfig();
+void saveProvisioningConfig(
+  const String& nextDeviceId,
+  const String& nextSiteId,
+  const String& nextMachineLabel,
+  const String& nextWifiSsid,
+  const String& nextWifiPassword
+);
 
 bool sendDeviceLog(
   const char* level,
@@ -171,10 +215,15 @@ void setupADXL345() {
 // =========================
 // Wi-Fi helpers
 // =========================
-void connectToWiFi() {
+bool connectToWiFi() {
+  if (wifiSsid.length() == 0 || wifiPassword.length() == 0) {
+    Serial.println("Wi-Fi credentials are not configured.");
+    return false;
+  }
+
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
 
   Serial.print("Connecting to Wi-Fi");
   unsigned long start = millis();
@@ -190,9 +239,11 @@ void connectToWiFi() {
     Serial.print("Connected. IP: ");
     Serial.println(WiFi.localIP());
     sendDeviceLog("info", "wifi.connected", "Wi-Fi connected.", millis());
+    return true;
   } else {
     Serial.println("Wi-Fi connect timed out.");
     sendDeviceLog("warn", "wifi.connect_timeout", "Wi-Fi connect timed out.", millis());
+    return false;
   }
 }
 
@@ -205,7 +256,9 @@ void ensureWiFiConnected() {
   lastWifiReconnectAttemptMs = now;
   Serial.println("Wi-Fi disconnected. Retrying...");
   sendDeviceLog("warn", "wifi.reconnect", "Wi-Fi disconnected. Retrying.", now);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  if (wifiSsid.length() > 0 && wifiPassword.length() > 0) {
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  }
 }
 
 bool acquireNetworkLock(uint32_t timeoutMs = 5000) {
@@ -243,6 +296,17 @@ String createBootId() {
   char buffer[48];
   snprintf(buffer, sizeof(buffer), "%s-%08lx", hardwareId.c_str(), randomValue);
   return String(buffer);
+}
+
+bool hasProvisioningConfig() {
+  return configuredDeviceId.length() > 0 &&
+    wifiSsid.length() > 0 &&
+    wifiPassword.length() > 0;
+}
+
+String createProvisioningDeviceName() {
+  const int suffixStart = max(0, hardwareId.length() - 6);
+  return "GymMotion-" + hardwareId.substring(suffixStart);
 }
 
 String toLowerCopy(String value) {
@@ -296,6 +360,47 @@ String bytesToHex(const uint8_t* bytes, size_t length) {
 
   result.toLowerCase();
   return result;
+}
+
+void loadProvisioningConfig() {
+  configuredDeviceId = preferences.getString(PREF_DEVICE_ID, "");
+  configuredSiteId = preferences.getString(PREF_SITE_ID, "");
+  configuredMachineLabel = preferences.getString(PREF_MACHINE_LABEL, "");
+  wifiSsid = preferences.getString(PREF_WIFI_SSID, "");
+  wifiPassword = preferences.getString(PREF_WIFI_PASSWORD, "");
+}
+
+void clearProvisioningConfig() {
+  preferences.remove(PREF_DEVICE_ID);
+  preferences.remove(PREF_SITE_ID);
+  preferences.remove(PREF_MACHINE_LABEL);
+  preferences.remove(PREF_WIFI_SSID);
+  preferences.remove(PREF_WIFI_PASSWORD);
+  configuredDeviceId = "";
+  configuredSiteId = "";
+  configuredMachineLabel = "";
+  wifiSsid = "";
+  wifiPassword = "";
+}
+
+void saveProvisioningConfig(
+  const String& nextDeviceId,
+  const String& nextSiteId,
+  const String& nextMachineLabel,
+  const String& nextWifiSsid,
+  const String& nextWifiPassword
+) {
+  preferences.putString(PREF_DEVICE_ID, nextDeviceId);
+  preferences.putString(PREF_SITE_ID, nextSiteId);
+  preferences.putString(PREF_MACHINE_LABEL, nextMachineLabel);
+  preferences.putString(PREF_WIFI_SSID, nextWifiSsid);
+  preferences.putString(PREF_WIFI_PASSWORD, nextWifiPassword);
+
+  configuredDeviceId = nextDeviceId;
+  configuredSiteId = nextSiteId;
+  configuredMachineLabel = nextMachineLabel;
+  wifiSsid = nextWifiSsid;
+  wifiPassword = nextWifiPassword;
 }
 
 String extractJsonString(const String& json, const char* key) {
@@ -387,6 +492,195 @@ void setPendingState(const char* newState, int delta, unsigned long timestamp) {
   Serial.print(delta);
   Serial.print(" | millis: ");
   Serial.println(timestamp);
+}
+
+void sendProvisioningStatus(const String& payload) {
+  Serial.print("BLE -> ");
+  Serial.println(payload);
+
+  if (provisioningStatusCharacteristic == nullptr || !provisioningBleConnected) {
+    return;
+  }
+
+  provisioningStatusCharacteristic->setValue(payload.c_str());
+  provisioningStatusCharacteristic->notify();
+  delay(40);
+}
+
+void sendProvisioningReady() {
+  sendProvisioningStatus(
+    "{\"type\":\"ready\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
+    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"deviceName\":\"" + escapeJsonString(createProvisioningDeviceName()) + "\"}"
+  );
+}
+
+void runWifiScan() {
+  sendProvisioningStatus(
+    "{\"type\":\"phase\",\"phase\":\"scanning\",\"message\":\"Scanning nearby Wi-Fi networks.\"}"
+  );
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  const int networkCount = WiFi.scanNetworks(false, true);
+  String seen = "|";
+
+  for (int index = 0; index < networkCount; index++) {
+    const String ssid = WiFi.SSID(index);
+
+    if (ssid.length() == 0 || seen.indexOf("|" + ssid + "|") >= 0) {
+      continue;
+    }
+
+    seen += ssid + "|";
+    sendProvisioningStatus(
+      "{\"type\":\"scan-result\",\"ssid\":\"" + escapeJsonString(ssid) +
+      "\",\"rssi\":" + String(WiFi.RSSI(index)) + "}"
+    );
+  }
+
+  WiFi.scanDelete();
+  sendProvisioningStatus("{\"type\":\"scan-complete\"}");
+}
+
+void startProvisioningMode();
+
+void handleProvisioningCommand(const String& payload) {
+  const String type = extractJsonString(payload, "type");
+
+  if (type == "scan") {
+    sendProvisioningReady();
+    runWifiScan();
+    return;
+  }
+
+  if (type != "provision") {
+    sendProvisioningStatus(
+      "{\"type\":\"error\",\"message\":\"Unsupported provisioning command.\"}"
+    );
+    return;
+  }
+
+  const String nextDeviceId = extractJsonString(payload, "deviceId");
+  const String nextSiteId = extractJsonString(payload, "siteId");
+  const String nextWifiSsid = extractJsonString(payload, "wifiSsid");
+  const String nextWifiPassword = extractJsonString(payload, "wifiPassword");
+
+  if (nextDeviceId.length() == 0 || nextWifiSsid.length() == 0 || nextWifiPassword.length() == 0) {
+    sendProvisioningStatus(
+      "{\"type\":\"error\",\"message\":\"Device ID and Wi-Fi credentials are required.\"}"
+    );
+    return;
+  }
+
+  sendProvisioningStatus(
+    "{\"type\":\"phase\",\"phase\":\"saving\",\"message\":\"Saving Wi-Fi credentials on the device.\"}"
+  );
+  saveProvisioningConfig(
+    nextDeviceId,
+    nextSiteId,
+    "",
+    nextWifiSsid,
+    nextWifiPassword
+  );
+
+  sendProvisioningStatus(
+    "{\"type\":\"phase\",\"phase\":\"wifi-connecting\",\"message\":\"Joining the Wi-Fi network now.\"}"
+  );
+
+  if (!connectToWiFi()) {
+    clearProvisioningConfig();
+    startProvisioningMode();
+    sendProvisioningStatus(
+      "{\"type\":\"error\",\"message\":\"Could not join the Wi-Fi network.\"}"
+    );
+    return;
+  }
+
+  sendProvisioningStatus(
+    "{\"type\":\"provisioned\",\"deviceId\":\"" + escapeJsonString(nextDeviceId) +
+    "\",\"siteId\":\"" + escapeJsonString(nextSiteId) + "\"}"
+  );
+  sendProvisioningStatus(
+    "{\"type\":\"phase\",\"phase\":\"restarting\",\"message\":\"Restarting into normal motion mode.\"}"
+  );
+  delay(600);
+  ESP.restart();
+}
+
+class ProvisioningServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
+    provisioningBleConnected = true;
+  }
+
+  void onDisconnect(BLEServer* server) override {
+    provisioningBleConnected = false;
+    server->getAdvertising()->start();
+  }
+};
+
+class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* characteristic) override {
+    const std::string rawValue = characteristic->getValue();
+
+    if (rawValue.empty()) {
+      return;
+    }
+
+    const String value(rawValue.c_str());
+
+    if (value.startsWith("BEGIN:")) {
+      provisioningCommandBuffer = "";
+      return;
+    }
+
+    if (value == "END") {
+      const String command = provisioningCommandBuffer;
+      provisioningCommandBuffer = "";
+      handleProvisioningCommand(command);
+      return;
+    }
+
+    provisioningCommandBuffer += value;
+  }
+};
+
+void startProvisioningMode() {
+  provisioningMode = true;
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_MODE_NULL);
+
+  if (provisioningServer != nullptr) {
+    return;
+  }
+
+  BLEDevice::init(createProvisioningDeviceName().c_str());
+  provisioningServer = BLEDevice::createServer();
+  provisioningServer->setCallbacks(new ProvisioningServerCallbacks());
+
+  BLEService* service = provisioningServer->createService(PROVISIONING_SERVICE_UUID);
+  provisioningControlCharacteristic = service->createCharacteristic(
+    PROVISIONING_CONTROL_UUID,
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  provisioningStatusCharacteristic = service->createCharacteristic(
+    PROVISIONING_STATUS_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  provisioningControlCharacteristic->setCallbacks(new ProvisioningControlCallbacks());
+  provisioningStatusCharacteristic->addDescriptor(new BLE2902());
+  provisioningStatusCharacteristic->setValue(
+    "{\"type\":\"phase\",\"phase\":\"ble-connected\",\"message\":\"Ready for Bluetooth provisioning.\"}"
+  );
+
+  service->start();
+  provisioningServer->getAdvertising()->addServiceUUID(PROVISIONING_SERVICE_UUID);
+  provisioningServer->getAdvertising()->start();
+
+  Serial.println("BLE provisioning mode ready.");
 }
 
 // =========================
@@ -495,12 +789,16 @@ bool getJson(const String& url, String& body, uint16_t timeoutMs = HTTP_TIMEOUT_
 }
 
 bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
+  if (configuredDeviceId.length() == 0) {
+    return false;
+  }
+
   char payload[320];
   snprintf(
     payload,
     sizeof(payload),
     "{\"deviceId\":\"%s\",\"state\":\"%s\",\"timestamp\":%lu,\"delta\":%d,\"bootId\":\"%s\",\"firmwareVersion\":\"%s\",\"hardwareId\":\"%s\"}",
-    DEVICE_ID,
+    configuredDeviceId.c_str(),
     state,
     timestamp,
     delta,
@@ -513,12 +811,16 @@ bool sendStateToServer(const char* state, int delta, unsigned long timestamp) {
 }
 
 bool sendHeartbeat(unsigned long timestamp) {
+  if (configuredDeviceId.length() == 0) {
+    return false;
+  }
+
   char payload[288];
   snprintf(
     payload,
     sizeof(payload),
     "{\"deviceId\":\"%s\",\"timestamp\":%lu,\"bootId\":\"%s\",\"firmwareVersion\":\"%s\",\"hardwareId\":\"%s\"}",
-    DEVICE_ID,
+    configuredDeviceId.c_str(),
     timestamp,
     bootId.c_str(),
     FIRMWARE_VERSION,
@@ -529,6 +831,10 @@ bool sendHeartbeat(unsigned long timestamp) {
 }
 
 bool sendFirmwareReport(const char* status, const String& targetVersion = "", const String& detail = "") {
+  if (configuredDeviceId.length() == 0) {
+    return false;
+  }
+
   char payload[384];
 
   if (detail.length() > 0) {
@@ -536,7 +842,7 @@ bool sendFirmwareReport(const char* status, const String& targetVersion = "", co
       payload,
       sizeof(payload),
       "{\"deviceId\":\"%s\",\"status\":\"%s\",\"targetVersion\":\"%s\",\"detail\":\"%s\"}",
-      DEVICE_ID,
+      configuredDeviceId.c_str(),
       status,
       targetVersion.c_str(),
       detail.c_str()
@@ -546,7 +852,7 @@ bool sendFirmwareReport(const char* status, const String& targetVersion = "", co
       payload,
       sizeof(payload),
       "{\"deviceId\":\"%s\",\"status\":\"%s\",\"targetVersion\":\"%s\"}",
-      DEVICE_ID,
+      configuredDeviceId.c_str(),
       status,
       targetVersion.c_str()
     );
@@ -555,7 +861,7 @@ bool sendFirmwareReport(const char* status, const String& targetVersion = "", co
       payload,
       sizeof(payload),
       "{\"deviceId\":\"%s\",\"status\":\"%s\"}",
-      DEVICE_ID,
+      configuredDeviceId.c_str(),
       status
     );
   }
@@ -570,8 +876,12 @@ bool sendDeviceLog(
   unsigned long timestamp,
   const String& metadata
 ) {
+  if (configuredDeviceId.length() == 0) {
+    return false;
+  }
+
   String payload = "{";
-  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  payload += "\"deviceId\":\"" + escapeJsonString(configuredDeviceId) + "\",";
   payload += "\"level\":\"" + String(level) + "\",";
   payload += "\"code\":\"" + String(code) + "\",";
   payload += "\"message\":\"" + escapeJsonString(message) + "\",";
@@ -596,9 +906,13 @@ bool sendDeviceLog(
 // OTA helpers
 // =========================
 bool fetchFirmwareRelease(FirmwareReleaseInfo& release) {
+  if (configuredDeviceId.length() == 0) {
+    return false;
+  }
+
   String response;
   String url = String(FIRMWARE_CHECK_URL) +
-    "?deviceId=" + String(DEVICE_ID) +
+    "?deviceId=" + configuredDeviceId +
     "&firmwareVersion=" + String(FIRMWARE_VERSION);
 
   sendDeviceLog("info", "ota.check", "Checking for firmware updates.", millis());
@@ -1002,11 +1316,25 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  pinMode(PROVISION_RESET_PIN, INPUT_PULLUP);
   hardwareId = createHardwareId();
   bootId = createBootId();
   networkMutex = xSemaphoreCreateMutex();
+  preferences.begin(PREFS_NAMESPACE, false);
+  loadProvisioningConfig();
+
+  if (digitalRead(PROVISION_RESET_PIN) == LOW) {
+    Serial.println("Provision reset button held. Clearing saved Wi-Fi.");
+    clearProvisioningConfig();
+  }
 
   Wire.begin(SDA_PIN, SCL_PIN);
+  if (!hasProvisioningConfig()) {
+    startProvisioningMode();
+    finalizePendingRollback(true);
+    return;
+  }
+
   setupADXL345();
   connectToWiFi();
 
@@ -1052,6 +1380,11 @@ void setup() {
 }
 
 void loop() {
+  if (provisioningMode) {
+    delay(50);
+    return;
+  }
+
   updateMotionState();
   delay(LOOP_DELAY_MS);
 }

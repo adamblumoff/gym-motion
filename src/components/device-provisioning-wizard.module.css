@@ -1,0 +1,196 @@
+.card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(77, 226, 197, 0.1), transparent 26%),
+    linear-gradient(180deg, rgba(11, 24, 36, 0.94), rgba(6, 12, 18, 0.96));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+  padding: 26px;
+  display: grid;
+  gap: 20px;
+}
+
+.header,
+.badges,
+.steps,
+.actions,
+.summaryGrid,
+.formGrid {
+  display: flex;
+}
+
+.header,
+.actions {
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.badges,
+.steps,
+.summaryGrid,
+.formGrid {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.eyebrow,
+.steps,
+.summaryLabel,
+.badge {
+  font-family: var(--font-mono), monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.eyebrow,
+.summaryLabel,
+.steps {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.title {
+  margin: 6px 0 0;
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(2rem, 6vw, 3.5rem);
+  line-height: 0.95;
+}
+
+.badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.72rem;
+}
+
+.badge[data-state="live"] {
+  color: var(--still);
+  border-color: rgba(77, 226, 197, 0.3);
+  background: rgba(77, 226, 197, 0.1);
+}
+
+.steps span {
+  opacity: 0.55;
+}
+
+.steps span[data-active="true"] {
+  opacity: 1;
+  color: var(--text);
+}
+
+.status,
+.error,
+.copy,
+.hint {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.status {
+  color: rgba(239, 246, 255, 0.86);
+}
+
+.error {
+  color: #ff9c9c;
+}
+
+.panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.summaryGrid > div,
+.formGrid > label {
+  min-width: 180px;
+  flex: 1;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span,
+.toggle {
+  color: rgba(239, 246, 255, 0.82);
+  font-size: 0.94rem;
+}
+
+.field input,
+.field select {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(4, 10, 16, 0.8);
+  color: var(--text);
+}
+
+.toggle {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.primaryButton,
+.secondaryButton {
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  color: var(--text);
+}
+
+.primaryButton {
+  background: linear-gradient(90deg, rgba(77, 226, 197, 0.2), rgba(77, 226, 197, 0.1));
+  border-color: rgba(77, 226, 197, 0.28);
+}
+
+.secondaryButton {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.waitingPulse {
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(77, 226, 197, 0.6), rgba(77, 226, 197, 0.06));
+  box-shadow: 0 0 0 0 rgba(77, 226, 197, 0.35);
+  animation: pulse 1.8s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(77, 226, 197, 0.35);
+    transform: scale(0.96);
+  }
+
+  70% {
+    box-shadow: 0 0 0 24px rgba(77, 226, 197, 0);
+    transform: scale(1);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(77, 226, 197, 0);
+    transform: scale(0.98);
+  }
+}
+
+@media (max-width: 720px) {
+  .card {
+    padding: 20px;
+  }
+
+  .header,
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

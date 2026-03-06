@@ -11,6 +11,7 @@ import type {
 import { mergeDeviceUpdate } from "@/lib/motion";
 
 import styles from "./setup-dashboard.module.css";
+import { DeviceProvisioningWizard } from "./device-provisioning-wizard";
 
 type DevicesResponse = {
   devices: DeviceSummary[];
@@ -69,6 +70,7 @@ export function SetupDashboard() {
     rolloutState: "draft",
   });
   const [status, setStatus] = useState<string | null>(null);
+  const [showProvisioningWizard, setShowProvisioningWizard] = useState(false);
 
   const activeRelease =
     releases.find((release) => release.rolloutState === "active") ?? null;
@@ -210,6 +212,17 @@ export function SetupDashboard() {
 
         {status ? <p className={styles.status}>{status}</p> : null}
 
+        {showProvisioningWizard ? (
+          <DeviceProvisioningWizard
+            mode="add-device"
+            onCancel={() => setShowProvisioningWizard(false)}
+            onComplete={() => {
+              setShowProvisioningWizard(false);
+              setStatus("Device provisioned successfully.");
+            }}
+          />
+        ) : null}
+
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <h2>Devices</h2>
@@ -217,6 +230,22 @@ export function SetupDashboard() {
               This page is for labeling devices, watching fleet health, and seeing
               which devices are behind the active firmware release.
             </p>
+          </div>
+
+          <div className={styles.rolloutBanner}>
+            <span className={styles.rolloutLabel}>Add device</span>
+            <strong>BLE provisioning</strong>
+            <span className={styles.rolloutHint}>
+              Pair a fresh sensor over Bluetooth, send it the remembered gym Wi-Fi,
+              and wait for it to appear online automatically.
+            </span>
+            <button
+              className={styles.saveButton}
+              onClick={() => setShowProvisioningWizard(true)}
+              type="button"
+            >
+              Add device
+            </button>
           </div>
 
           <div className={styles.rolloutBanner}>

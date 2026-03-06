@@ -43,6 +43,14 @@ export const deviceAssignmentSchema = z.object({
   provisioningState: provisioningStateSchema.optional(),
 });
 
+export const deviceRegistrationSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  machineLabel: z.string().trim().min(1).max(120).nullable().optional(),
+  siteId: z.string().trim().min(1).max(120).nullable().optional(),
+  hardwareId: z.string().trim().min(1).max(120).nullable().optional(),
+  provisioningState: provisioningStateSchema.default("assigned"),
+});
+
 export const firmwareReleaseSchema = z.object({
   version: z.string().trim().min(1).max(120),
   gitSha: z.string().trim().min(1).max(120),
@@ -80,6 +88,7 @@ export const deviceLogSchema = z.object({
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
 export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
+export type DeviceRegistrationInput = z.infer<typeof deviceRegistrationSchema>;
 export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
 export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
 export type DeviceLogInput = z.infer<typeof deviceLogSchema>;
@@ -189,6 +198,10 @@ export function parseHeartbeatPayload(input: unknown) {
 
 export function parseDeviceAssignment(input: unknown) {
   return deviceAssignmentSchema.safeParse(input);
+}
+
+export function parseDeviceRegistration(input: unknown) {
+  return deviceRegistrationSchema.safeParse(input);
 }
 
 export function parseFirmwareRelease(input: unknown) {

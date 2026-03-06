@@ -5,6 +5,7 @@ import type {
   DeviceCleanupResult,
   DeviceLogInput,
   DeviceLogSummary,
+  DeviceRegistrationInput,
   DeviceSummary,
   FirmwareReleaseInput,
   FirmwareReleaseSummary,
@@ -182,7 +183,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
            boot_id = coalesce(excluded.boot_id, devices.boot_id),
            firmware_version = excluded.firmware_version,
            provisioning_state = case
-             when devices.provisioning_state = 'unassigned' then 'provisioned'
+             when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
              else devices.provisioning_state
            end,
            last_event_received_at = now()
@@ -281,7 +282,7 @@ export async function recordHeartbeat(payload: HeartbeatPayload): Promise<Motion
          boot_id = coalesce(excluded.boot_id, devices.boot_id),
          firmware_version = excluded.firmware_version,
          provisioning_state = case
-           when devices.provisioning_state = 'unassigned' then 'provisioned'
+           when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
            else devices.provisioning_state
          end,
          last_heartbeat_at = now()
@@ -449,6 +450,56 @@ export async function listDeviceLogs(options?: {
       );
 
   return result.rows.map(mapDeviceLogRow);
+}
+
+export async function createOrUpdateDeviceRegistration(
+  input: DeviceRegistrationInput,
+): Promise<DeviceSummary> {
+  const result = await getDb().query<DeviceRow>(
+    `insert into devices (
+       id,
+       last_state,
+       last_seen_at,
+       last_delta,
+       updated_at,
+       hardware_id,
+       firmware_version,
+       machine_label,
+       site_id,
+       provisioning_state
+     )
+     values ($1, 'still', 0, null, now(), $2, 'unknown', $3, $4, $5)
+     on conflict (id) do update
+     set updated_at = now(),
+         hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
+         machine_label = coalesce(excluded.machine_label, devices.machine_label),
+         site_id = coalesce(excluded.site_id, devices.site_id),
+         provisioning_state = excluded.provisioning_state
+     returning
+       id,
+       last_state,
+       last_seen_at,
+       last_delta,
+       updated_at,
+       hardware_id,
+       boot_id,
+       firmware_version,
+       machine_label,
+       site_id,
+       provisioning_state,
+       update_status,
+       last_heartbeat_at,
+       last_event_received_at`,
+    [
+      input.deviceId,
+      input.hardwareId ?? null,
+      input.machineLabel ?? null,
+      input.siteId ?? null,
+      input.provisioningState,
+    ],
+  );
+
+  return mapDeviceRow(result.rows[0]);
 }
 
 export async function updateDeviceAssignment(

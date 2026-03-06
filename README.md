@@ -6,12 +6,12 @@ The web app now does four jobs:
 
 - shows live `MOVING` / `STILL` state over SSE
 - tracks device health with server-side `ONLINE` / `STALE` / `OFFLINE`
-- gives you a simple `/setup` screen for assigning machine labels and sites
+- gives you a `/setup` screen for assigning machine labels, adding devices, and provisioning fresh hardware over BLE
 - manages OTA firmware releases and device update status
 - exposes a separate `/logs` view for per-device remote logs
 
 The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
-The `/setup` page is an operations dashboard, not the future Wi-Fi provisioning flow.
+The BLE setup flow is v1 and optimized for Chrome or Edge over HTTPS.
 
 ## Stack
 
@@ -173,6 +173,20 @@ Returns live device summaries including:
 - firmware version
 - boot ID
 - last heartbeat and event receipt times
+
+### `POST /api/devices`
+
+Creates or updates a placeholder device row before BLE provisioning finishes:
+
+```json
+{
+  "deviceId": "stack-001",
+  "machineLabel": "Leg Press 2",
+  "siteId": "gym-dallas",
+  "hardwareId": "esp32-a1",
+  "provisioningState": "assigned"
+}
+```
 
 ### `PATCH /api/devices/:deviceId`
 
@@ -336,6 +350,16 @@ The publish script uploads `build/firmware/gym_motion.ino.bin` to the private Ra
 7. The device also posts structured lifecycle logs to `/api/device-logs`, and the `/logs` page streams them live by device.
 
 The release workflow still generates `.sha256` and `.md5` files alongside the firmware binary. The bucket stays private; devices only see temporary presigned URLs.
+
+## BLE provisioning flow
+
+1. If the app sees zero devices in the database, it shows the setup wizard instead of the live board.
+2. The installer uses Chrome or Edge, clicks once, and picks the unprovisioned device from the Bluetooth chooser.
+3. The device scans nearby Wi-Fi networks over BLE and sends the SSID list back to the browser.
+4. The installer picks the gym network, optionally reuses the locally remembered Wi-Fi profile, and assigns `deviceId` / `siteId`.
+5. The browser creates a placeholder device row with `provisioningState = "assigned"`.
+6. The browser sends Wi-Fi credentials and identity to the ESP32 over BLE.
+7. The ESP32 stores the config in NVS, joins Wi-Fi, reboots into normal mode, and appears online as `provisioned`.
 
 ## Test / seed
 

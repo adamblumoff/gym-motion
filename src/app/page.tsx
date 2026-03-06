@@ -1,9 +1,5 @@
-import { DeviceDashboard } from "@/components/device-dashboard";
+import { HomeShell } from "@/components/home-shell";
 
 export default function Home() {
-  return (
-    <main>
-      <DeviceDashboard />
-    </main>
-  );
+  return <HomeShell />;
 }

@@ -4,6 +4,7 @@ import {
   mergeLogUpdate,
   parseDeviceLog,
   parseDeviceAssignment,
+  parseDeviceRegistration,
   parseFirmwareRelease,
   parseHeartbeatPayload,
   parseIngestPayload,
@@ -67,6 +68,20 @@ describe("parseDeviceAssignment", () => {
       machineLabel: "Leg Press 2",
       siteId: "gym-dallas",
       hardwareId: "esp32-a1",
+      provisioningState: "assigned",
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("parseDeviceRegistration", () => {
+  it("accepts a device placeholder registration", () => {
+    const result = parseDeviceRegistration({
+      deviceId: "stack-004",
+      machineLabel: "Lat Pulldown 1",
+      siteId: "gym-dallas",
+      hardwareId: "esp32-a4",
       provisioningState: "assigned",
     });
 
