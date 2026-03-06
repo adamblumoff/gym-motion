@@ -18,10 +18,10 @@ The incoming `timestamp` is the ESP32 `millis()` value, not a wall-clock Unix ti
 Create `.env.local` with:
 
 ```bash
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/railway
+DATABASE_PUBLIC_URL=postgresql://USER:PASSWORD@HOST:PORT/railway
 ```
 
-Railway will also provide `DATABASE_URL` in production.
+Railway will also provide `DATABASE_PUBLIC_URL` in production.
 You can copy `.env.example` as a starting point.
 
 ## Local setup
@@ -49,7 +49,7 @@ bun run db:setup
 Or with `psql`:
 
 ```bash
-psql "$DATABASE_URL" -f sql/001_init.sql
+psql "$DATABASE_PUBLIC_URL" -f sql/001_init.sql
 ```
 
 This schema reset drops and recreates both tables for the MVP.
@@ -139,7 +139,7 @@ bun test
 1. Create a new Railway project.
 2. Add a PostgreSQL service.
 3. Add this repo as a web service.
-4. Set `DATABASE_URL` on the web service using the Postgres connection string.
+4. Set `DATABASE_PUBLIC_URL` on the web service using the Postgres connection string.
 5. Run the schema once:
    - Railway Postgres console or `psql`
    - or connect locally and run `bun run db:setup`

@@ -5,10 +5,10 @@ declare global {
 }
 
 function getDatabaseUrl() {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_PUBLIC_URL;
 
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required.");
+    throw new Error("DATABASE_PUBLIC_URL is required.");
   }
 
   return databaseUrl;
