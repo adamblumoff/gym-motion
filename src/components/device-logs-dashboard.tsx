@@ -204,21 +204,24 @@ export function DeviceLogsDashboard() {
           <label className={styles.controlLabel} htmlFor="device-select">
             Device
           </label>
-          <select
-            className={styles.select}
-            id="device-select"
-            onChange={(event) => handleDeviceChange(event.target.value)}
-            value={selectedDeviceId ?? ""}
-          >
-            <option value="" disabled>
-              Select a device
-            </option>
-            {devices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.machineLabel ? `${device.machineLabel} (${device.id})` : device.id}
+          <div className={styles.selectWrap}>
+            <select
+              className={styles.select}
+              id="device-select"
+              onChange={(event) => handleDeviceChange(event.target.value)}
+              value={selectedDeviceId ?? ""}
+            >
+              <option value="" disabled>
+                Select a device
               </option>
-            ))}
-          </select>
+              {devices.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.machineLabel ? `${device.machineLabel} (${device.id})` : device.id}
+                </option>
+              ))}
+            </select>
+            <span aria-hidden="true" className={styles.selectChevron} />
+          </div>
         </div>
 
         <div className={styles.liveBadge} data-live={liveStatus === "Live"}>

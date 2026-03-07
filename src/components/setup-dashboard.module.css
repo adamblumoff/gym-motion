@@ -1,250 +1,307 @@
-.page {
-  min-height: 100vh;
-  padding: 28px 18px 40px;
-}
-
-.shell {
-  width: min(1100px, 100%);
-  margin: 0 auto;
+.layout {
   display: grid;
-  gap: 22px;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 18px;
 }
 
-.topBar,
-.deviceHeader,
-.deviceMeta,
-.releaseList,
-.deviceActions {
+.heroStatus,
+.rosterButton,
+.detailHeader,
+.detailBadges,
+.detailActions {
   display: flex;
 }
 
-.topLinks {
-  display: flex;
-  gap: 10px;
-}
-
-.topBar,
-.deviceHeader {
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.eyebrow,
-.topLink,
-.status {
+.heroStatus,
+.banner,
+.panelEyebrow,
+.healthBadge,
+.detailChip,
+.telemetryLabel {
   font-family: var(--font-mono), monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.eyebrow {
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.title {
-  margin: 6px 0 0;
-  font-family: var(--font-display), sans-serif;
-  font-size: clamp(2.2rem, 8vw, 4.2rem);
-  line-height: 0.96;
-  letter-spacing: -0.06em;
-}
-
-.topLink,
-.saveButton {
-  padding: 10px 14px;
-  border-radius: 999px;
-  text-decoration: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
-}
-
-.saveButton {
-  cursor: pointer;
-}
-
-.saveButton[data-variant="danger"] {
-  border-color: rgba(255, 93, 93, 0.32);
-  background: rgba(255, 93, 93, 0.08);
-  color: #ffd3d3;
-}
-
-.status,
-.section,
-.deviceCard,
-.releaseCard,
-.emptyCard {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.status {
-  margin: 0;
+.heroStatus {
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
   padding: 12px 14px;
+  border: 1px solid var(--border);
   border-radius: 18px;
-  color: var(--muted);
-  font-size: 0.78rem;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
 }
 
-.section,
-.deviceCard,
-.releaseCard,
-.emptyCard {
-  border-radius: 24px;
+.heroStatusDivider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
 }
 
-.section {
-  padding: 20px;
+.heroStatusLabel,
+.panelEyebrow,
+.telemetryLabel {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.banner,
+.panel,
+.detailPanel,
+.emptyDetail {
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.banner {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--warning);
+}
+
+.sidebar,
+.mainPane {
   display: grid;
   gap: 18px;
 }
 
-.sectionHeader h2 {
-  margin: 0;
-  font-size: 1.2rem;
+.panel,
+.detailPanel,
+.emptyDetail {
+  padding: 22px;
 }
 
-.sectionHeader p {
-  margin: 6px 0 0;
-  color: var(--muted);
+.panelTitle,
+.detailTitle {
+  margin: 12px 0 0;
+  font-family: var(--font-display), sans-serif;
+  line-height: 0.96;
+  letter-spacing: -0.05em;
 }
 
-.deviceList,
-.releaseList {
-  flex-direction: column;
-  gap: 14px;
+.panelTitle {
+  font-size: 1.8rem;
 }
 
-.deviceCard,
-.releaseCard,
-.emptyCard {
-  padding: 16px;
+.detailTitle {
+  font-size: clamp(2rem, 4vw, 3rem);
 }
 
-.deviceSubline,
-.deviceMeta {
-  color: var(--muted);
+.panelCopy,
+.detailCopy,
+.rosterEmpty {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  line-height: 1.7;
 }
 
-.deviceActions {
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1;
 }
 
-.rolloutBanner {
+.primaryButton {
+  background: var(--surface-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.secondaryButton {
+  background: var(--surface-inset);
+}
+
+.rosterList {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.rosterButton {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-inset);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rosterIdentity {
   display: grid;
   gap: 6px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid rgba(77, 226, 197, 0.2);
-  background: rgba(77, 226, 197, 0.08);
+  min-width: 0;
 }
 
-.rolloutLabel {
-  color: var(--muted);
-  font-family: var(--font-mono), monospace;
-  font-size: 0.78rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.rosterButton[data-active="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
-.rolloutHint {
-  color: var(--muted);
+.rosterButton strong,
+.rosterButton span {
+  display: block;
 }
 
-.rolloutBadge {
-  padding: 8px 12px;
+.rosterIdentity strong {
+  line-height: 1.05;
+}
+
+.rosterIdentity > span {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.1;
+}
+
+.healthBadge,
+.detailChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  font-family: var(--font-mono), monospace;
-  font-size: 0.74rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.rolloutBadge[data-state="behind"] {
-  color: #ffcc70;
-  border-color: rgba(255, 204, 112, 0.34);
-  background: rgba(255, 204, 112, 0.1);
+.healthBadge[data-health="online"] {
+  color: var(--success);
+  background: var(--success-soft);
 }
 
-.rolloutBadge[data-state="current"] {
-  color: var(--still);
-  border-color: rgba(77, 226, 197, 0.3);
-  background: rgba(77, 226, 197, 0.08);
+.healthBadge[data-health="stale"] {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.healthBadge[data-health="offline"] {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.detailChip {
+  color: var(--text-muted);
+  background: var(--surface-inset);
+}
+
+.detailHeader {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.detailBadges {
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .formGrid {
-  margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 24px;
 }
 
 .field {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .field span {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 0.88rem;
 }
 
-.field input,
-.field select {
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
-  background: rgba(3, 8, 14, 0.7);
+.field input {
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-inset);
   color: var(--text);
+  line-height: 1.2;
 }
 
-.deviceMeta {
-  margin-top: 14px;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 0.9rem;
-}
-
-.releaseForm {
+.telemetryGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 18px 14px;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
 }
 
-.releaseCard {
+.telemetryGrid strong {
+  display: block;
+  margin-top: 8px;
+}
+
+.detailActions {
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.detailActions button {
+  flex: 0 0 auto;
+}
+
+.emptyDetail {
   display: grid;
-  grid-template-columns: 0.9fr 0.9fr 1.2fr 1fr;
-  gap: 12px;
+  gap: 14px;
+  align-content: start;
 }
 
-@media (max-width: 900px) {
-  .formGrid,
-  .releaseForm,
-  .releaseCard {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .page {
-    padding: 18px 12px 28px;
-  }
-
-  .topBar,
-  .deviceHeader,
-  .deviceActions {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .formGrid,
-  .releaseForm,
-  .releaseCard {
+@media (max-width: 980px) {
+  .layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .detailHeader,
+  .detailActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rosterButton {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+
+  .formGrid,
+  .telemetryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .panelTitle {
+    font-size: 1.55rem;
+  }
+
+  .detailTitle {
+    font-size: 2rem;
   }
 }

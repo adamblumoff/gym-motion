@@ -1,0 +1,166 @@
+.page {
+  min-height: 100vh;
+  padding: 24px 20px 48px;
+}
+
+.shell {
+  width: min(1380px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 24px;
+}
+
+.topRail,
+.railControls,
+.nav {
+  display: flex;
+  align-items: center;
+}
+
+.topRail,
+.hero {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.topRail {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.brandBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.brand,
+.environment,
+.eyebrow,
+.navLink {
+  font-family: var(--font-mono), monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.brand {
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+.environment,
+.eyebrow {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.railControls {
+  gap: 14px;
+}
+
+.nav {
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-inset);
+}
+
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.74rem;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.navLink[data-active="true"] {
+  background: var(--surface-elevated);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.hero {
+  display: flex;
+  align-items: flex-end;
+}
+
+.heroCopy {
+  max-width: 780px;
+}
+
+.title {
+  margin: 8px 0 0;
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(2.8rem, 6vw, 5.75rem);
+  line-height: 0.92;
+  letter-spacing: -0.07em;
+  color: var(--text);
+}
+
+.description {
+  max-width: 62ch;
+  margin: 16px 0 0;
+  color: var(--text-muted);
+  font-size: 1.02rem;
+  line-height: 1.6;
+}
+
+.statusSlot {
+  flex-shrink: 0;
+}
+
+.content {
+  display: grid;
+  gap: 18px;
+}
+
+@media (max-width: 900px) {
+  .topRail,
+  .railControls,
+  .hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .railControls {
+    gap: 12px;
+  }
+
+  .nav {
+    width: 100%;
+  }
+
+  .navLink {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 18px 14px 32px;
+  }
+
+  .topRail {
+    padding: 14px;
+  }
+
+  .title {
+    font-size: clamp(2.15rem, 11vw, 3.55rem);
+  }
+
+  .description {
+    font-size: 0.96rem;
+  }
+}

@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Sora, Urbanist } from "next/font/google";
+import { Archivo, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+
+import { themeBootstrapScript } from "@/lib/theme";
 
 import "./globals.css";
 
-const displayFont = Urbanist({
+const displayFont = Archivo({
   subsets: ["latin"],
   variable: "--font-display",
 });
 
-const bodyFont = Sora({
+const bodyFont = IBM_Plex_Sans({
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
   variable: "--font-body",
 });
 
@@ -30,7 +33,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <meta content="dark light" name="color-scheme" />
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
+      </head>
       <body
         className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}
       >

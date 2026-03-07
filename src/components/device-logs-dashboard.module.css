@@ -1,107 +1,119 @@
-.page {
-  min-height: 100vh;
-  padding: 48px 24px 72px;
-}
-
-.shell {
-  width: min(1080px, 100%);
-  margin: 0 auto;
-  display: grid;
-  gap: 24px;
-}
-
-.topBar {
+.heroStatus,
+.controls,
+.panelHeader,
+.logHeader,
+.logMeta,
+.summaryMeta,
+.summaryTopRow {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
 }
 
-.eyebrow {
-  color: var(--muted);
+.heroStatus,
+.banner,
+.panelHeader,
+.summaryLabel,
+.controlLabel,
+.liveBadge,
+.logLevel,
+.logCode,
+.heroStatusLabel {
   font-family: var(--font-mono), monospace;
-  font-size: 0.74rem;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.title {
-  margin: 8px 0 0;
-  font-family: var(--font-display), sans-serif;
-  font-size: clamp(2.2rem, 4vw, 3.8rem);
-  line-height: 0.96;
-}
-
-.topLinks {
-  display: flex;
-  gap: 12px;
-}
-
-.topLink {
-  display: inline-flex;
+.heroStatus {
+  gap: 10px;
   align-items: center;
-  justify-content: center;
-  min-height: 42px;
-  padding: 0 16px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(7, 16, 26, 0.82);
-  text-decoration: none;
+  border-radius: 18px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
 }
 
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: rgba(10, 22, 34, 0.76);
-  backdrop-filter: blur(16px);
-}
-
+.heroStatusLabel,
+.panelHeader,
+.summaryLabel,
 .controlLabel {
-  color: var(--muted);
-  font-family: var(--font-mono), monospace;
-  font-size: 0.78rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  color: var(--text-muted);
+  font-size: 0.74rem;
 }
 
-.select {
-  flex: 1;
-  min-height: 46px;
-  padding: 0 16px;
-  border: 1px solid rgba(77, 226, 197, 0.24);
-  border-radius: 14px;
-  background: rgba(4, 10, 16, 0.82);
-  color: var(--text);
-}
-
-.liveBadge {
-  min-width: 108px;
-  padding: 10px 14px;
-  border: 1px solid rgba(255, 122, 89, 0.24);
-  border-radius: 999px;
-  background: rgba(255, 122, 89, 0.08);
-  color: #ffb7a5;
-  font-family: var(--font-mono), monospace;
-  font-size: 0.78rem;
-  text-align: center;
-}
-
-.liveBadge[data-live="true"] {
-  border-color: rgba(77, 226, 197, 0.28);
-  background: rgba(77, 226, 197, 0.1);
-  color: var(--still);
-}
-
+.banner,
+.controls,
 .summaryCard,
 .logPanel {
   border: 1px solid var(--border);
-  border-radius: 26px;
-  background: linear-gradient(180deg, rgba(11, 24, 36, 0.92), rgba(6, 12, 19, 0.94));
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+  border-radius: 28px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.banner {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--warning);
+}
+
+.controls {
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.controlBlock {
+  display: grid;
+  gap: 8px;
+  min-width: min(100%, 460px);
+}
+
+.selectWrap {
+  position: relative;
+  width: min(100%, 460px);
+}
+
+.select {
+  appearance: none;
+  min-height: 52px;
+  width: 100%;
+  padding: 0 52px 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-inset);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.1;
+}
+
+.selectChevron {
+  position: absolute;
+  top: 50%;
+  right: 18px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  transform: translateY(-62%) rotate(45deg);
+  pointer-events: none;
+}
+
+.liveBadge {
+  min-width: 120px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.liveBadge[data-live="true"] {
+  color: var(--still);
+  background: var(--still-soft);
 }
 
 .summaryCard {
@@ -110,26 +122,47 @@
   padding: 20px 22px;
 }
 
-.summaryLabel,
-.panelHeader {
-  color: var(--muted);
-  font-family: var(--font-mono), monospace;
-  font-size: 0.74rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+.summaryTopRow {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .summaryMeta {
-  display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  color: rgba(239, 246, 255, 0.82);
+  color: var(--text-muted);
   font-size: 0.92rem;
 }
 
-.status {
-  margin: 0;
-  color: #ffb7a5;
+.healthBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.healthBadge[data-health="online"] {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.healthBadge[data-health="stale"] {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.healthBadge[data-health="offline"] {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .logPanel {
@@ -137,16 +170,15 @@
 }
 
 .panelHeader {
-  display: flex;
   justify-content: space-between;
   gap: 12px;
   padding: 18px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border);
 }
 
 .emptyState {
   padding: 28px 20px;
-  color: rgba(239, 246, 255, 0.78);
+  color: var(--text-muted);
 }
 
 .logList {
@@ -157,12 +189,11 @@
 
 .logRow {
   padding: 18px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid var(--border);
 }
 
 .logHeader,
 .logMeta {
-  display: flex;
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
@@ -170,37 +201,49 @@
 
 .logTime,
 .logMeta {
-  color: rgba(239, 246, 255, 0.72);
+  color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.logTimeLabel {
+  color: var(--text-muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .logLevel,
 .logCode {
-  font-family: var(--font-mono), monospace;
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .logLevel {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(77, 226, 197, 0.12);
+  background: var(--still-soft);
   color: var(--still);
 }
 
 .logLevel[data-level="warn"] {
-  background: rgba(255, 122, 89, 0.14);
-  color: #ffb08d;
+  background: var(--moving-soft);
+  color: var(--moving);
 }
 
 .logLevel[data-level="error"] {
-  background: rgba(255, 90, 90, 0.18);
-  color: #ff8585;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .logCode {
-  color: var(--muted);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
 }
 
 .logMessage {
@@ -213,8 +256,8 @@
   margin: 12px 0 0;
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(3, 8, 13, 0.82);
-  color: rgba(239, 246, 255, 0.82);
+  background: var(--surface-inset);
+  color: var(--text-soft);
   font-family: var(--font-mono), monospace;
   font-size: 0.82rem;
   white-space: pre-wrap;
@@ -222,26 +265,24 @@
 }
 
 @media (max-width: 720px) {
-  .page {
-    padding: 28px 16px 56px;
-  }
-
-  .topBar,
   .controls,
   .panelHeader {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .topLinks {
-    width: 100%;
-  }
-
-  .topLink {
-    flex: 1;
+  .summaryTopRow {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .liveBadge {
     width: 100%;
+  }
+
+  .controlBlock,
+  .selectWrap {
+    width: 100%;
+    min-width: 0;
   }
 }

@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 
 import type { DeviceSummary } from "@/lib/motion";
 
+import { AppShell } from "./app-shell";
 import { DeviceDashboard } from "./device-dashboard";
 import { DeviceProvisioningWizard } from "./device-provisioning-wizard";
+import styles from "./home-shell.module.css";
 
 type DevicesResponse = {
   devices: DeviceSummary[];
@@ -48,20 +50,38 @@ export function HomeShell() {
   }, []);
 
   if (devices === null) {
-    return <main>Loading…</main>;
+    return (
+      <AppShell
+        description="Initializing the live board and checking for provisioned devices."
+        eyebrow="Live board"
+        title="Motion status"
+      >
+        <section className={styles.loadingPanel}>
+          <div aria-hidden="true" className={styles.loadingPulse} />
+          <div>
+            <strong>Loading device state</strong>
+            <p>Pulling the latest device summary and opening the live stream.</p>
+          </div>
+        </section>
+      </AppShell>
+    );
   }
 
   if (devices.length === 0) {
     return (
-      <main>
+      <AppShell
+        description="No device has checked in yet, so the app starts in provisioning mode. Pair the sensor over Bluetooth, choose the gym Wi-Fi, and the live board will take over automatically."
+        eyebrow="First device"
+        title="Provision the first sensor"
+      >
         <DeviceProvisioningWizard
           mode="first-device"
           onComplete={() => {
             window.location.reload();
           }}
         />
-        {error ? <p>{error}</p> : null}
-      </main>
+        {error ? <p className={styles.error}>{error}</p> : null}
+      </AppShell>
     );
   }
 

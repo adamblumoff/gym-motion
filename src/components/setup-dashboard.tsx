@@ -268,18 +268,16 @@ export function SetupDashboard() {
                         }}
                         type="button"
                       >
-                        <div>
+                        <div className={styles.rosterIdentity}>
                           <strong>{device.machineLabel ?? device.id}</strong>
                           <span>{device.id}</span>
                         </div>
-                        <div className={styles.rosterMeta}>
-                          <span className={styles.healthBadge} data-health={device.healthStatus}>
-                            {device.healthStatus}
-                          </span>
-                          <span className={styles.detailChip}>
-                            fw {device.firmwareVersion}
-                          </span>
-                        </div>
+                        <span className={styles.healthBadge} data-health={device.healthStatus}>
+                          {device.healthStatus}
+                        </span>
+                        <span className={styles.detailChip}>
+                          fw {device.firmwareVersion}
+                        </span>
                       </button>
                     </li>
                   );

@@ -1,95 +1,90 @@
-.page {
-  min-height: 100vh;
-  padding: 32px 18px 40px;
-  display: grid;
-  align-items: center;
-  background:
-    radial-gradient(circle at top, rgba(255, 122, 89, 0.12), transparent 24%),
-    radial-gradient(circle at bottom, rgba(77, 226, 197, 0.12), transparent 22%),
-    linear-gradient(180deg, #09121b 0%, #04080c 100%);
-}
-
-.shell {
-  width: min(980px, 100%);
-  margin: 0 auto;
-  display: grid;
-  gap: 22px;
-}
-
-.topBar {
+.heroStatus,
+.healthRow,
+.eventsHeader {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
-.topLinks {
-  display: flex;
-  gap: 10px;
-}
-
-.topLabel,
-.deviceId,
+.heroStatus,
+.healthBadge,
 .eventsHeader,
+.banner,
 .metaLabel,
-.topLink {
+.topLabel,
+.deviceId {
   font-family: var(--font-mono), monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.topLabel,
-.deviceId {
-  color: var(--muted);
-  font-size: 0.82rem;
+.heroStatus {
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
 }
 
-.topLink {
-  padding: 8px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  color: var(--text);
-  text-decoration: none;
-  font-size: 0.76rem;
+.heroStatusLabel,
+.deviceId,
+.eventsHeader,
+.metaLabel {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.banner,
+.metaCard,
+.events,
+.emptyCard {
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.banner {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  color: var(--warning);
+}
+
+.deviceId {
+  margin-top: 4px;
 }
 
 .healthRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
+  gap: 12px;
 }
 
 .healthBadge {
   padding: 8px 14px;
   border-radius: 999px;
-  font-family: var(--font-mono), monospace;
   font-size: 0.78rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-inset);
 }
 
 .healthBadge[data-health="online"] {
   color: var(--still);
-  border-color: rgba(77, 226, 197, 0.4);
-  background: rgba(77, 226, 197, 0.12);
+  background: var(--still-soft);
 }
 
 .healthBadge[data-health="stale"] {
-  color: #ffcc70;
-  border-color: rgba(255, 204, 112, 0.4);
-  background: rgba(255, 204, 112, 0.12);
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 
 .healthBadge[data-health="offline"] {
   color: var(--moving);
-  border-color: rgba(255, 122, 89, 0.4);
-  background: rgba(255, 122, 89, 0.12);
+  background: var(--moving-soft);
 }
 
 .healthMeta {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .statusBoard {
@@ -100,10 +95,10 @@
 .statusLine {
   display: block;
   padding: 22px 20px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
   border-radius: 28px;
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(239, 246, 255, 0.24);
+  background: var(--surface-raised);
+  color: rgba(245, 245, 242, 0.24);
   font-family: var(--font-display), sans-serif;
   font-size: clamp(4rem, 16vw, 10rem);
   line-height: 0.9;
@@ -120,33 +115,23 @@
 
 .statusLine[data-active="true"] {
   transform: scale(1.01);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .statusLine[data-state="moving"][data-active="true"] {
   color: var(--moving);
-  border-color: rgba(255, 122, 89, 0.5);
-  background: rgba(255, 122, 89, 0.12);
-  box-shadow: 0 0 0 1px rgba(255, 122, 89, 0.1), 0 24px 80px rgba(255, 122, 89, 0.18);
+  background: var(--surface-accent);
 }
 
 .statusLine[data-state="still"][data-active="true"] {
   color: var(--still);
-  border-color: rgba(77, 226, 197, 0.5);
-  background: rgba(77, 226, 197, 0.1);
-  box-shadow: 0 0 0 1px rgba(77, 226, 197, 0.08), 0 24px 80px rgba(77, 226, 197, 0.16);
+  background: var(--surface-accent);
 }
 
 .metaGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-}
-
-.metaCard,
-.events,
-.emptyCard {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
 }
 
 .metaCard {
@@ -160,15 +145,10 @@
   font-weight: 600;
 }
 
-.metaLabel {
-  color: var(--muted);
-  font-size: 0.72rem;
-}
-
 .debugMeta {
   display: grid;
   gap: 6px;
-  color: var(--muted);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -183,10 +163,10 @@
 }
 
 .eventsHeader {
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--muted);
-  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .eventsList {
@@ -197,7 +177,7 @@
 
 .eventsEmpty {
   padding: 14px 16px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .eventRow {
@@ -205,8 +185,9 @@
   grid-template-columns: 1.1fr 0.8fr 0.8fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 12px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border);
   font-size: 0.92rem;
+  align-items: center;
 }
 
 .eventRow:first-child {
@@ -214,16 +195,27 @@
 }
 
 .eventState {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.74rem;
 }
 
 .eventState[data-state="moving"] {
   color: var(--moving);
+  background: var(--moving-soft);
 }
 
 .eventState[data-state="still"] {
   color: var(--still);
+  background: var(--still-soft);
 }
 
 .emptyCard {
@@ -241,15 +233,8 @@
   text-transform: uppercase;
 }
 
-.emptyText,
-.pollingNote {
-  color: var(--muted);
-}
-
-.pollingNote {
-  margin: 0;
-  text-align: center;
-  font-size: 0.88rem;
+.emptyText {
+  color: var(--text-muted);
 }
 
 @media (max-width: 800px) {
@@ -258,20 +243,22 @@
   }
 
   .eventRow {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 640px) {
-  .page {
-    padding: 18px 12px 28px;
-  }
-
-  .statusLine {
-    padding: 18px 14px;
+  .eventsHeader,
+  .healthRow {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .metaGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .eventRow {
     grid-template-columns: 1fr;
   }
 }
