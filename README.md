@@ -9,6 +9,7 @@ The web app now does four jobs:
 - gives you a `/setup` screen for assigning machine labels, adding devices, and provisioning fresh hardware over BLE
 - manages OTA firmware releases and device update status
 - exposes a separate `/logs` view for per-device remote logs
+- defaults to dark mode with a built-in `dark / system / light` theme switcher
 
 The incoming `timestamp` is still the ESP32 `millis()` value. Human-readable recency comes from server receipt time, not device time.
 The BLE setup flow is v1 and optimized for Chrome or Edge over HTTPS.

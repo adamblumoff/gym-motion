@@ -18,3 +18,8 @@
   - create and push a `firmware-vX.Y.Z` tag
   - let the GitHub `Firmware Release` workflow build, publish to the Railway bucket, and register the release
 - The Windows Arduino IDE mirror is still needed for local bench compile/flash/debug, but it is not the primary deployment path for fleet updates.
+
+## Environment Note
+
+- Future environment strategy options and trade-offs are documented in `/home/adamblumoff/gym-motion/docs/development-environments.md`.
+- Read this before changing how local dev, staging, production DBs, or production devices interact.
