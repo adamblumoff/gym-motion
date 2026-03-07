@@ -19,4 +19,10 @@ describe("deriveHealthStatus", () => {
       deriveHealthStatus(new Date(Date.now() - 5 * 60_000).toISOString()),
     ).toBe("offline");
   });
+
+  it("treats impossible future contact times as offline", () => {
+    expect(
+      deriveHealthStatus(new Date(Date.now() + 10 * 60_000).toISOString()),
+    ).toBe("offline");
+  });
 });

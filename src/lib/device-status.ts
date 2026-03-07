@@ -8,13 +8,27 @@ export function deriveHealthStatus(lastContactAt: string | null): HealthStatus {
     return "offline";
   }
 
-  const ageMs = Date.now() - new Date(lastContactAt).getTime();
+  const lastContactMs = new Date(lastContactAt).getTime();
 
-  if (ageMs <= ONLINE_THRESHOLD_MS) {
+  if (Number.isNaN(lastContactMs)) {
+    return "offline";
+  }
+
+  const ageMs = Date.now() - lastContactMs;
+
+  // Future timestamps indicate bad source data. Treat them as offline instead
+  // of pinning a dead device to "online" forever.
+  if (ageMs < -5_000) {
+    return "offline";
+  }
+
+  const normalizedAgeMs = Math.max(ageMs, 0);
+
+  if (normalizedAgeMs <= ONLINE_THRESHOLD_MS) {
     return "online";
   }
 
-  if (ageMs <= STALE_THRESHOLD_MS) {
+  if (normalizedAgeMs <= STALE_THRESHOLD_MS) {
     return "stale";
   }
 

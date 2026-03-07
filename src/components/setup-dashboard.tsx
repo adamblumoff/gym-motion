@@ -1,26 +1,17 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type {
-  DeviceSummary,
-  MotionStreamPayload,
-} from "@/lib/motion";
+import { formatLocalTime } from "@/lib/format-time";
+import type { DeviceSummary, MotionStreamPayload } from "@/lib/motion";
 import { mergeDeviceUpdate } from "@/lib/motion";
 
-import styles from "./setup-dashboard.module.css";
+import { AppShell } from "./app-shell";
 import { DeviceProvisioningWizard } from "./device-provisioning-wizard";
+import styles from "./setup-dashboard.module.css";
 
 type DevicesResponse = {
   devices: DeviceSummary[];
-};
-
-type ReleasesResponse = {
-  releases: Array<{
-    version: string;
-    rolloutState: "draft" | "active" | "paused";
-  }>;
 };
 
 type Drafts = Record<
@@ -45,49 +36,37 @@ function createDrafts(devices: DeviceSummary[]): Drafts {
   );
 }
 
-function formatTime(value: string | null) {
-  if (!value) {
-    return "Never";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date(value));
-}
-
 export function SetupDashboard() {
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [drafts, setDrafts] = useState<Drafts>({});
-  const [releases, setReleases] = useState<ReleasesResponse["releases"]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [showProvisioningWizard, setShowProvisioningWizard] = useState(false);
-
-  const activeRelease =
-    releases.find((release) => release.rolloutState === "active") ?? null;
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const eventSource = new EventSource("/api/stream");
 
     async function loadData() {
-      const [devicesResponse, releasesResponse] = await Promise.all([
-        fetch("/api/devices", { cache: "no-store" }),
-        fetch("/api/firmware/releases", { cache: "no-store" }),
-      ]);
+      const devicesResponse = await fetch("/api/devices", { cache: "no-store" });
 
-      if (!devicesResponse.ok || !releasesResponse.ok) {
-        throw new Error("Failed to load setup data.");
+      if (!devicesResponse.ok) {
+        throw new Error("Failed to load devices.");
       }
 
       const deviceData = (await devicesResponse.json()) as DevicesResponse;
-      const releaseData = (await releasesResponse.json()) as ReleasesResponse;
 
-      if (!cancelled) {
-        setDevices(deviceData.devices);
-        setDrafts(createDrafts(deviceData.devices));
-        setReleases(releaseData.releases);
+      if (cancelled) {
+        return;
       }
+
+      setDevices(deviceData.devices);
+      setDrafts(createDrafts(deviceData.devices));
+      setSelectedDeviceId((currentSelectedId) =>
+        currentSelectedId && deviceData.devices.some((device) => device.id === currentSelectedId)
+          ? currentSelectedId
+          : (deviceData.devices[0]?.id ?? null),
+      );
     }
 
     eventSource.addEventListener("motion-update", (rawEvent) => {
@@ -98,7 +77,12 @@ export function SetupDashboard() {
       const event = rawEvent as MessageEvent<string>;
       const payload = JSON.parse(event.data) as MotionStreamPayload;
 
-      setDevices((currentDevices) => mergeDeviceUpdate(currentDevices, payload.device));
+      setDevices((currentDevices) =>
+        mergeDeviceUpdate(currentDevices, payload.device),
+      );
+      setSelectedDeviceId((currentSelectedId) =>
+        currentSelectedId ?? payload.device.id,
+      );
       setDrafts((currentDrafts) => ({
         ...currentDrafts,
         [payload.device.id]: currentDrafts[payload.device.id] ?? {
@@ -111,7 +95,7 @@ export function SetupDashboard() {
 
     void loadData().catch(() => {
       if (!cancelled) {
-        setStatus("Could not load setup data.");
+        setStatus("Could not load devices.");
       }
     });
 
@@ -120,6 +104,38 @@ export function SetupDashboard() {
       eventSource.close();
     };
   }, []);
+
+  const selectedDevice = useMemo(
+    () => devices.find((device) => device.id === selectedDeviceId) ?? null,
+    [devices, selectedDeviceId],
+  );
+
+  const selectedDraft = selectedDevice ? drafts[selectedDevice.id] : null;
+  const onlineCount = devices.filter((device) => device.healthStatus === "online").length;
+  const fleetStatus =
+    devices.length === 1
+      ? "1 device tracked"
+      : `${devices.length} devices tracked`;
+  const fleetHealth =
+    onlineCount === 1 ? "1 online" : `${onlineCount} online`;
+
+  function updateDraft(
+    deviceId: string,
+    nextField: keyof Drafts[string],
+    value: string,
+  ) {
+    setDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [deviceId]: {
+        ...(currentDrafts[deviceId] ?? {
+          machineLabel: "",
+          siteId: "",
+          hardwareId: "",
+        }),
+        [nextField]: value,
+      },
+    }));
+  }
 
   async function handleDeviceSave(deviceId: string) {
     const draft = drafts[deviceId];
@@ -165,10 +181,11 @@ export function SetupDashboard() {
       return;
     }
 
-    let remainingDeviceCount = 0;
+    let nextSelectedDeviceId: string | null = null;
+
     setDevices((currentDevices) => {
       const nextDevices = currentDevices.filter((device) => device.id !== deviceId);
-      remainingDeviceCount = nextDevices.length;
+      nextSelectedDeviceId = nextDevices[0]?.id ?? null;
       return nextDevices;
     });
     setDrafts((currentDrafts) => {
@@ -176,213 +193,226 @@ export function SetupDashboard() {
       delete nextDrafts[deviceId];
       return nextDrafts;
     });
-    if (remainingDeviceCount === 0) {
+    setSelectedDeviceId(nextSelectedDeviceId);
+
+    if (!nextSelectedDeviceId) {
       setShowProvisioningWizard(true);
     }
+
     setStatus(
       `Deleted ${deviceId}. Hold IO0 while tapping EN so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
     );
   }
 
   return (
-    <section className={styles.page}>
-      <div className={styles.shell}>
-        <nav className={styles.topBar}>
-          <div>
-            <div className={styles.eyebrow}>Ops dashboard</div>
-            <h1 className={styles.title}>Device health and rollout control</h1>
-          </div>
-          <div className={styles.topLinks}>
-            <Link className={styles.topLink} href="/logs">
-              Logs
-            </Link>
-            <Link className={styles.topLink} href="/">
-              Back to live board
-            </Link>
-          </div>
-        </nav>
+    <AppShell
+      description="Add sensors, label installed machines, and check provisioning health without leaving the operator console."
+      eyebrow="Setup"
+      status={
+        <div className={styles.heroStatus}>
+          <span className={styles.heroStatusLabel}>Fleet</span>
+          <strong>{fleetStatus}</strong>
+          <span className={styles.heroStatusDivider} />
+          <strong>{fleetHealth}</strong>
+        </div>
+      }
+      title="Provision & manage sensors"
+    >
+      {status ? <p className={styles.banner}>{status}</p> : null}
 
-        {status ? <p className={styles.status}>{status}</p> : null}
-
-        {showProvisioningWizard ? (
-          <DeviceProvisioningWizard
-            mode="add-device"
-            onCancel={() => setShowProvisioningWizard(false)}
-            onComplete={() => {
-              setShowProvisioningWizard(false);
-              setStatus("Device provisioned successfully.");
-            }}
-          />
-        ) : null}
-
-        <section className={styles.section}>
-          <div className={styles.sectionHeader}>
-            <h2>Devices</h2>
-            <p>
-              This page is for labeling devices, watching fleet health, and seeing
-              which devices are behind the active firmware release.
+      <div className={styles.layout}>
+        <aside className={styles.sidebar}>
+          <section className={styles.panel}>
+            <div className={styles.panelEyebrow}>Primary action</div>
+            <h2 className={styles.panelTitle}>Add or re-add a device</h2>
+            <p className={styles.panelCopy}>
+              Provisioning uses Bluetooth from this browser and reuses the last
+              remembered gym Wi-Fi profile when available.
             </p>
-          </div>
-
-          <div className={styles.rolloutBanner}>
-            <span className={styles.rolloutLabel}>Add device</span>
-            <strong>BLE provisioning</strong>
-            <span className={styles.rolloutHint}>
-              Pair a fresh sensor over Bluetooth, send it the remembered gym Wi-Fi,
-              and wait for it to appear online automatically.
-            </span>
             <button
-              className={styles.saveButton}
+              className={styles.primaryButton}
               onClick={() => setShowProvisioningWizard(true)}
               type="button"
             >
               Add device
             </button>
-          </div>
+          </section>
 
-          <div className={styles.rolloutBanner}>
-            <span className={styles.rolloutLabel}>Re-provision</span>
-            <strong>IO0 + EN reset</strong>
-            <span className={styles.rolloutHint}>
-              App labels do not reset the hardware. To run setup again on the same
-              ESP32, hold <strong>IO0</strong> while tapping <strong>EN</strong> so it
-              clears saved Wi-Fi and comes back in BLE setup mode. On many boards,
-              that IO0 button is silkscreened as <strong>IO0</strong>, <strong>0</strong>,
-              or something that can look like <strong>100</strong>.
-            </span>
-          </div>
+          <section className={styles.panel}>
+            <div className={styles.panelEyebrow}>Re-provision</div>
+            <h2 className={styles.panelTitle}>IO0 + EN reset</h2>
+            <p className={styles.panelCopy}>
+              Deleting a device in the app only removes the server record. To run
+              setup again on the same ESP32, hold <strong>IO0</strong> while tapping{" "}
+              <strong>EN</strong> so it clears saved Wi-Fi and returns to BLE setup
+              mode. On some boards that IO0 button can look like <strong>0</strong> or{" "}
+              <strong>100</strong>.
+            </p>
+          </section>
 
-          <div className={styles.rolloutBanner}>
-            <span className={styles.rolloutLabel}>Active release</span>
-            <strong>{activeRelease?.version ?? "None"}</strong>
-            <span className={styles.rolloutHint}>
-              {activeRelease
-                ? "Devices that report an older version should pull the update on their next check-in."
-                : "No active release is published yet."}
-            </span>
-          </div>
-
-          <div className={styles.deviceList}>
-            {devices.length === 0 ? (
-              <div className={styles.emptyCard}>No devices have checked in yet.</div>
-            ) : (
-              devices.map((device) => {
-                const draft = drafts[device.id] ?? {
-                  machineLabel: device.machineLabel ?? "",
-                  siteId: device.siteId ?? "",
-                  hardwareId: device.hardwareId ?? "",
-                };
-
-                return (
-                  <article className={styles.deviceCard} key={device.id}>
-                    <div className={styles.deviceHeader}>
-                      <div>
-                        <strong>{device.machineLabel ?? device.id}</strong>
-                        <div className={styles.deviceSubline}>
-                          {device.id} · {device.healthStatus.toUpperCase()} · firmware{" "}
-                          {device.firmwareVersion}
+          <section className={styles.panel}>
+            <div className={styles.panelEyebrow}>Device roster</div>
+            <ul className={styles.rosterList}>
+              {devices.length === 0 ? (
+                <li className={styles.rosterEmpty}>No devices have checked in yet.</li>
+              ) : (
+                devices.map((device) => {
+                  return (
+                    <li key={device.id}>
+                      <button
+                        className={styles.rosterButton}
+                        data-active={device.id === selectedDeviceId}
+                        onClick={() => {
+                          setShowProvisioningWizard(false);
+                          setSelectedDeviceId(device.id);
+                        }}
+                        type="button"
+                      >
+                        <div>
+                          <strong>{device.machineLabel ?? device.id}</strong>
+                          <span>{device.id}</span>
                         </div>
-                      </div>
-                      <div className={styles.deviceActions}>
-                        <span
-                          className={styles.rolloutBadge}
-                          data-state={
-                            activeRelease && activeRelease.version !== device.firmwareVersion
-                              ? "behind"
-                              : "current"
-                          }
-                        >
-                          {activeRelease && activeRelease.version !== device.firmwareVersion
-                            ? `Behind ${activeRelease.version}`
-                            : "Up to date"}
-                        </span>
-                      <button
-                        className={styles.saveButton}
-                        onClick={() => void handleDeviceSave(device.id)}
-                        type="button"
-                      >
-                        Save
+                        <div className={styles.rosterMeta}>
+                          <span className={styles.healthBadge} data-health={device.healthStatus}>
+                            {device.healthStatus}
+                          </span>
+                          <span className={styles.detailChip}>
+                            fw {device.firmwareVersion}
+                          </span>
+                        </div>
                       </button>
-                      <button
-                        className={styles.saveButton}
-                        data-variant="danger"
-                        onClick={() => void handleDeviceDelete(device.id)}
-                        type="button"
-                      >
-                        Delete
-                      </button>
-                      </div>
-                    </div>
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+          </section>
+        </aside>
 
-                    <div className={styles.formGrid}>
-                      <label className={styles.field}>
-                        <span>Machine label</span>
-                        <input
-                          value={draft.machineLabel}
-                          onChange={(inputEvent) =>
-                            setDrafts((currentDrafts) => ({
-                              ...currentDrafts,
-                              [device.id]: {
-                                ...draft,
-                                machineLabel: inputEvent.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </label>
+        <div className={styles.mainPane}>
+          {showProvisioningWizard ? (
+            <DeviceProvisioningWizard
+              mode={devices.length === 0 ? "first-device" : "add-device"}
+              onCancel={() => setShowProvisioningWizard(false)}
+              onComplete={(device) => {
+                setShowProvisioningWizard(false);
+                setSelectedDeviceId(device.id);
+                setStatus("Device provisioned successfully.");
+              }}
+            />
+          ) : selectedDevice && selectedDraft ? (
+            <section className={styles.detailPanel}>
+              <div className={styles.detailHeader}>
+                <div>
+                  <div className={styles.panelEyebrow}>Selected device</div>
+                  <h2 className={styles.detailTitle}>
+                    {selectedDevice.machineLabel ?? selectedDevice.id}
+                  </h2>
+                  <p className={styles.detailCopy}>
+                    {selectedDevice.id} · firmware {selectedDevice.firmwareVersion}
+                  </p>
+                </div>
+                <div className={styles.detailBadges}>
+                  <span className={styles.healthBadge} data-health={selectedDevice.healthStatus}>
+                    {selectedDevice.healthStatus}
+                  </span>
+                  <span className={styles.detailChip}>
+                    fw {selectedDevice.firmwareVersion}
+                  </span>
+                </div>
+              </div>
 
-                      <label className={styles.field}>
-                        <span>Site ID</span>
-                        <input
-                          value={draft.siteId}
-                          onChange={(inputEvent) =>
-                            setDrafts((currentDrafts) => ({
-                              ...currentDrafts,
-                              [device.id]: {
-                                ...draft,
-                                siteId: inputEvent.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </label>
+              <div className={styles.formGrid}>
+                <label className={styles.field}>
+                  <span>Machine label</span>
+                  <input
+                    onChange={(event) =>
+                      updateDraft(selectedDevice.id, "machineLabel", event.target.value)
+                    }
+                    value={selectedDraft.machineLabel}
+                  />
+                </label>
 
-                      <label className={styles.field}>
-                        <span>Hardware ID</span>
-                        <input
-                          value={draft.hardwareId}
-                          onChange={(inputEvent) =>
-                            setDrafts((currentDrafts) => ({
-                              ...currentDrafts,
-                              [device.id]: {
-                                ...draft,
-                                hardwareId: inputEvent.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </label>
+                <label className={styles.field}>
+                  <span>Site ID</span>
+                  <input
+                    onChange={(event) =>
+                      updateDraft(selectedDevice.id, "siteId", event.target.value)
+                    }
+                    value={selectedDraft.siteId}
+                  />
+                </label>
 
-                    </div>
+                <label className={styles.field}>
+                  <span>Hardware ID</span>
+                  <input
+                    onChange={(event) =>
+                      updateDraft(selectedDevice.id, "hardwareId", event.target.value)
+                    }
+                    value={selectedDraft.hardwareId}
+                  />
+                </label>
+              </div>
 
-                    <div className={styles.deviceMeta}>
-                      <span>Boot ID {device.bootId ?? "unknown"}</span>
-                      <span>Heartbeat {formatTime(device.lastHeartbeatAt)}</span>
-                      <span>Last event {formatTime(device.lastEventReceivedAt)}</span>
-                      <span>Provisioning state {device.provisioningState}</span>
-                      <span>Update status {device.updateStatus}</span>
-                      <span>
-                        Target firmware {activeRelease?.version ?? "none"}
-                      </span>
-                    </div>
-                  </article>
-                );
-              })
-            )}
-          </div>
-        </section>
+              <div className={styles.telemetryGrid}>
+                <div>
+                  <span className={styles.telemetryLabel}>Boot ID</span>
+                  <strong>{selectedDevice.bootId ?? "unknown"}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Heartbeat</span>
+                  <strong>{formatLocalTime(selectedDevice.lastHeartbeatAt)}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Last event</span>
+                  <strong>{formatLocalTime(selectedDevice.lastEventReceivedAt)}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Provisioning</span>
+                  <strong>{selectedDevice.provisioningState}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Update status</span>
+                  <strong>{selectedDevice.updateStatus}</strong>
+                </div>
+              </div>
 
+              <div className={styles.detailActions}>
+                <button
+                  className={styles.primaryButton}
+                  onClick={() => void handleDeviceSave(selectedDevice.id)}
+                  type="button"
+                >
+                  Save changes
+                </button>
+                <button
+                  className={styles.secondaryButton}
+                  onClick={() => void handleDeviceDelete(selectedDevice.id)}
+                  type="button"
+                >
+                  Delete device
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className={styles.emptyDetail}>
+              <div className={styles.panelEyebrow}>No selection</div>
+              <h2 className={styles.panelTitle}>Choose a sensor or start provisioning</h2>
+              <p className={styles.panelCopy}>
+                Pick a device from the roster to edit its labels, or add a new sensor
+                to launch the Bluetooth setup flow.
+              </p>
+              <button
+                className={styles.primaryButton}
+                onClick={() => setShowProvisioningWizard(true)}
+                type="button"
+              >
+                Add device
+              </button>
+            </section>
+          )}
+        </div>
       </div>
-    </section>
+    </AppShell>
   );
 }

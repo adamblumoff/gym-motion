@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { formatLocalTime } from "@/lib/format-time";
 import type {
   DeviceLogStreamPayload,
   DeviceLogSummary,
@@ -12,6 +12,7 @@ import type {
 } from "@/lib/motion";
 import { mergeDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
 
+import { AppShell } from "./app-shell";
 import styles from "./device-logs-dashboard.module.css";
 
 type DevicesResponse = {
@@ -22,13 +23,6 @@ type DeviceLogsResponse = {
   logs: DeviceLogSummary[];
 };
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date(value));
-}
-
 function formatLevel(level: DeviceLogSummary["level"]) {
   return level.toUpperCase();
 }
@@ -38,7 +32,7 @@ function formatMetadata(metadata: DeviceLogSummary["metadata"]) {
     return null;
   }
 
-  return JSON.stringify(metadata);
+  return JSON.stringify(metadata, null, 2);
 }
 
 export function DeviceLogsDashboard() {
@@ -192,24 +186,21 @@ export function DeviceLogsDashboard() {
   }
 
   return (
-    <section className={styles.page}>
-      <div className={styles.shell}>
-        <nav className={styles.topBar}>
-          <div>
-            <div className={styles.eyebrow}>Observability</div>
-            <h1 className={styles.title}>Device logs</h1>
-          </div>
-          <div className={styles.topLinks}>
-            <Link className={styles.topLink} href="/">
-              Live board
-            </Link>
-            <Link className={styles.topLink} href="/setup">
-              Setup
-            </Link>
-          </div>
-        </nav>
+    <AppShell
+      description="Remote lifecycle logs for each ESP32, streamed into the app as the device reports Wi-Fi, OTA, and motion events."
+      eyebrow="Observability"
+      status={
+        <div className={styles.heroStatus}>
+          <span className={styles.heroStatusLabel}>Stream</span>
+          <strong>{liveStatus}</strong>
+        </div>
+      }
+      title="Device logs"
+    >
+      {status ? <p className={styles.banner}>{status}</p> : null}
 
-        <section className={styles.controls}>
+      <section className={styles.controls}>
+        <div className={styles.controlBlock}>
           <label className={styles.controlLabel} htmlFor="device-select">
             Device
           </label>
@@ -224,83 +215,92 @@ export function DeviceLogsDashboard() {
             </option>
             {devices.map((device) => (
               <option key={device.id} value={device.id}>
-                {device.machineLabel ?? device.id}
+                {device.machineLabel ? `${device.machineLabel} (${device.id})` : device.id}
               </option>
             ))}
           </select>
+        </div>
 
-          <div className={styles.liveBadge} data-live={liveStatus === "Live"}>
-            {liveStatus}
-          </div>
-        </section>
+        <div className={styles.liveBadge} data-live={liveStatus === "Live"}>
+          {liveStatus}
+        </div>
+      </section>
 
+      <section className={styles.summaryCard}>
         {selectedDevice ? (
-          <section className={styles.summaryCard}>
-            <div>
-              <div className={styles.summaryLabel}>Selected device</div>
-              <strong>{selectedDevice.machineLabel ?? selectedDevice.id}</strong>
+          <>
+            <div className={styles.summaryTopRow}>
+              <div>
+                <div className={styles.summaryLabel}>Selected device</div>
+                <strong>{selectedDevice.machineLabel ?? selectedDevice.id}</strong>
+              </div>
+              <span className={styles.healthBadge} data-health={selectedDevice.healthStatus}>
+                {selectedDevice.healthStatus}
+              </span>
             </div>
             <div className={styles.summaryMeta}>
               <span>{selectedDevice.id}</span>
-              <span>{selectedDevice.healthStatus.toUpperCase()}</span>
               <span>firmware {selectedDevice.firmwareVersion}</span>
               <span>boot {selectedDevice.bootId ?? "unknown"}</span>
+              <span>Logs below use server received time</span>
             </div>
-          </section>
+          </>
         ) : (
-          <section className={styles.summaryCard}>
-            <div>
-              <div className={styles.summaryLabel}>Selected device</div>
-              <strong>No device selected yet</strong>
-            </div>
-          </section>
+          <>
+            <div className={styles.summaryLabel}>Selected device</div>
+            <strong>No device selected yet</strong>
+          </>
         )}
+      </section>
 
-        {status ? <p className={styles.status}>{status}</p> : null}
+      <section className={styles.logPanel}>
+        <div className={styles.panelHeader}>
+          <span>Recent logs</span>
+          <span>
+            {selectedDevice
+              ? `${selectedDevice.id} · newest first · server received time`
+              : "Waiting for device selection"}
+          </span>
+        </div>
 
-        <section className={styles.logPanel}>
-          <div className={styles.panelHeader}>
-            <span>Recent logs</span>
-            <span>{selectedDeviceId ?? "waiting for device selection"}</span>
+        {logs.length === 0 ? (
+          <div className={styles.emptyState}>
+            No logs yet for this device. As soon as it reports Wi-Fi, OTA, or
+            motion lifecycle events, they will appear here.
           </div>
+        ) : (
+          <ul className={styles.logList}>
+            {logs.map((log) => {
+              const metadata = formatMetadata(log.metadata);
 
-          {logs.length === 0 ? (
-            <div className={styles.emptyState}>
-              No logs yet for this device. As soon as it reports Wi-Fi, OTA, or
-              motion lifecycle events, they will appear here.
-            </div>
-          ) : (
-            <ul className={styles.logList}>
-              {logs.map((log) => {
-                const metadata = formatMetadata(log.metadata);
+              return (
+                <li className={styles.logRow} key={log.id}>
+                  <div className={styles.logHeader}>
+                    <span className={styles.logLevel} data-level={log.level}>
+                      {formatLevel(log.level)}
+                    </span>
+                    <span className={styles.logCode}>{log.code}</span>
+                    <span className={styles.logTimeLabel}>Received</span>
+                    <span className={styles.logTime}>{formatLocalTime(log.receivedAt)}</span>
+                  </div>
 
-                return (
-                  <li className={styles.logRow} key={log.id}>
-                    <div className={styles.logHeader}>
-                      <span className={styles.logTime}>{formatTime(log.receivedAt)}</span>
-                      <span className={styles.logLevel} data-level={log.level}>
-                        {formatLevel(log.level)}
-                      </span>
-                      <span className={styles.logCode}>{log.code}</span>
-                    </div>
-                    <div className={styles.logMessage}>{log.message}</div>
-                    <div className={styles.logMeta}>
-                      <span>firmware {log.firmwareVersion ?? "unknown"}</span>
-                      <span>boot {log.bootId ?? "unknown"}</span>
-                      {log.deviceTimestamp !== null ? (
-                        <span>millis {log.deviceTimestamp}</span>
-                      ) : null}
-                    </div>
-                    {metadata ? (
-                      <pre className={styles.logMetadata}>{metadata}</pre>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      </div>
-    </section>
+                  <p className={styles.logMessage}>{log.message}</p>
+
+                  <div className={styles.logMeta}>
+                    <span>firmware {log.firmwareVersion ?? "unknown"}</span>
+                    <span>boot {log.bootId ?? "unknown"}</span>
+                    {log.deviceTimestamp ? <span>device millis {log.deviceTimestamp}</span> : null}
+                  </div>
+
+                  {metadata ? (
+                    <pre className={styles.logMetadata}>{metadata}</pre>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    </AppShell>
   );
 }

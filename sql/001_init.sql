@@ -8,7 +8,7 @@ create table if not exists devices (
   last_state text not null default 'still',
   last_seen_at bigint not null default 0,
   last_delta integer,
-  updated_at timestamp not null default now(),
+  updated_at timestamptz not null default now(),
   hardware_id text,
   boot_id text,
   firmware_version text not null default 'unknown',
@@ -16,9 +16,9 @@ create table if not exists devices (
   site_id text,
   provisioning_state text not null default 'unassigned',
   update_status text not null default 'idle',
-  last_event_received_at timestamp,
-  last_heartbeat_at timestamp,
-  wifi_provisioned_at timestamp
+  last_event_received_at timestamptz,
+  last_heartbeat_at timestamptz,
+  wifi_provisioned_at timestamptz
 );
 
 create table if not exists motion_events (
@@ -27,7 +27,7 @@ create table if not exists motion_events (
   state text not null,
   delta integer,
   event_timestamp bigint not null,
-  received_at timestamp not null default now(),
+  received_at timestamptz not null default now(),
   boot_id text,
   firmware_version text,
   hardware_id text
@@ -41,7 +41,7 @@ create table if not exists firmware_releases (
   md5 text,
   size_bytes bigint not null,
   rollout_state text not null default 'draft',
-  created_at timestamp not null default now()
+  created_at timestamptz not null default now()
 );
 
 create table if not exists device_logs (
@@ -55,7 +55,7 @@ create table if not exists device_logs (
   hardware_id text,
   device_timestamp bigint,
   metadata jsonb,
-  received_at timestamp not null default now()
+  received_at timestamptz not null default now()
 );
 
 create index if not exists devices_updated_at_idx

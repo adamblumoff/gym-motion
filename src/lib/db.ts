@@ -1,7 +1,28 @@
-import { Pool } from "pg";
+import { Pool, types } from "pg";
 
 declare global {
   var pgPool: Pool | undefined;
+  var pgTypesConfigured: boolean | undefined;
+}
+
+const PG_TIMESTAMP_OID = 1114;
+const PG_TIMESTAMPTZ_OID = 1184;
+
+function parseTimestampWithoutTimezone(value: string) {
+  return new Date(value.replace(" ", "T") + "Z");
+}
+
+function configurePgTypes() {
+  if (globalThis.pgTypesConfigured) {
+    return;
+  }
+
+  // Our DB stores server-received times in UTC. For legacy `timestamp` columns,
+  // parse them as UTC instead of local machine time so health and logs stay sane.
+  types.setTypeParser(PG_TIMESTAMP_OID, parseTimestampWithoutTimezone);
+  types.setTypeParser(PG_TIMESTAMPTZ_OID, (value) => new Date(value));
+
+  globalThis.pgTypesConfigured = true;
 }
 
 function getDatabaseUrl() {
@@ -15,6 +36,8 @@ function getDatabaseUrl() {
 }
 
 export function getDb() {
+  configurePgTypes();
+
   if (!globalThis.pgPool) {
     globalThis.pgPool = new Pool({
       connectionString: getDatabaseUrl(),

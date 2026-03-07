@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type {
@@ -8,8 +7,10 @@ import type {
   MotionEventSummary,
   MotionStreamPayload,
 } from "@/lib/motion";
+import { formatLocalTime } from "@/lib/format-time";
 import { mergeDeviceUpdate, mergeEventUpdate } from "@/lib/motion";
 
+import { AppShell } from "./app-shell";
 import styles from "./device-dashboard.module.css";
 
 type DeviceResponse = {
@@ -22,17 +23,6 @@ type EventResponse = {
 
 function formatState(state: DeviceSummary["lastState"] | MotionEventSummary["state"]) {
   return state.toUpperCase();
-}
-
-function formatTime(value: string | null) {
-  if (!value) {
-    return "Never";
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date(value));
 }
 
 function formatHealthStatus(status: DeviceSummary["healthStatus"]) {
@@ -125,142 +115,129 @@ export function DeviceDashboard() {
 
   if (!primaryDevice) {
     return (
-      <section className={styles.page}>
-        <div className={styles.shell}>
-          <nav className={styles.topBar}>
-            <span className={styles.topLabel}>Gym Motion</span>
-            <div className={styles.topLinks}>
-              <Link className={styles.topLink} href="/logs">
-                Logs
-              </Link>
-              <Link className={styles.topLink} href="/setup">
-                Setup
-              </Link>
-            </div>
-          </nav>
-
-          <article className={styles.emptyCard}>
-            <h2 className={styles.emptyTitle}>No motion data yet</h2>
-            <p className={styles.emptyText}>
-              Send an event to <code>/api/ingest</code> and the dashboard will
-              light up as soon as the live stream receives it.
-            </p>
-            {error ? <p className={styles.pollingNote}>{error}</p> : null}
-          </article>
-        </div>
-      </section>
+      <AppShell
+        description="The live board wakes up as soon as the first device checks in over the event stream."
+        eyebrow="Live board"
+        title="Motion status"
+      >
+        <article className={styles.emptyCard}>
+          <h2 className={styles.emptyTitle}>No motion data yet</h2>
+          <p className={styles.emptyText}>
+            Send an event to <code>/api/ingest</code> and the dashboard will
+            light up as soon as the live stream receives it.
+          </p>
+          {error ? <p className={styles.banner}>{error}</p> : null}
+        </article>
+      </AppShell>
     );
   }
 
   return (
-    <section className={styles.page}>
-      <div className={styles.shell}>
-        <nav className={styles.topBar}>
-          <span className={styles.topLabel}>Gym Motion</span>
-          <div className={styles.topLinks}>
-            <Link className={styles.topLink} href="/logs">
-              Logs
-            </Link>
-            <Link className={styles.topLink} href="/setup">
-              Setup
-            </Link>
-          </div>
-        </nav>
-
-        <div className={styles.deviceId}>
-          {primaryDevice.machineLabel ?? primaryDevice.id}
+    <AppShell
+      description="Live motion state, current device health, and the most recent event history."
+      eyebrow="Live board"
+      status={
+        <div className={styles.heroStatus}>
+          <span className={styles.heroStatusLabel}>Current sensor</span>
+          <strong>{primaryDevice.machineLabel ?? primaryDevice.id}</strong>
         </div>
+      }
+      title="Motion status"
+    >
+      {error ? <p className={styles.banner}>{error}</p> : null}
 
-        <div className={styles.healthRow}>
-          <span className={styles.healthBadge} data-health={primaryDevice.healthStatus}>
-            {formatHealthStatus(primaryDevice.healthStatus)}
-          </span>
-          <span className={styles.healthMeta}>
-            firmware {primaryDevice.firmwareVersion}
-          </span>
-        </div>
+      <div className={styles.deviceId}>{primaryDevice.machineLabel ?? primaryDevice.id}</div>
 
-        <div className={styles.statusBoard}>
-          <div
-            className={styles.statusLine}
-            data-active={primaryDevice.lastState === "moving"}
-            data-state="moving"
-          >
-            MOVING
-          </div>
-          <div
-            className={styles.statusLine}
-            data-active={primaryDevice.lastState === "still"}
-            data-state="still"
-          >
-            STILL
-          </div>
-        </div>
-
-        <div className={styles.metaGrid}>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Device</span>
-            <strong>{primaryDevice.id}</strong>
-          </div>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Site</span>
-            <strong>{primaryDevice.siteId ?? "Unassigned"}</strong>
-          </div>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Boot ID</span>
-            <strong>{primaryDevice.bootId ?? "Unknown"}</strong>
-          </div>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Last contact</span>
-            <strong>{formatTime(primaryDevice.updatedAt)}</strong>
-          </div>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Heartbeat</span>
-            <strong>{formatTime(primaryDevice.lastHeartbeatAt)}</strong>
-          </div>
-          <div className={styles.metaCard}>
-            <span className={styles.metaLabel}>Provisioning</span>
-            <strong>{primaryDevice.provisioningState}</strong>
-          </div>
-        </div>
-
-        <div className={styles.debugMeta}>
-          <div>
-            Device millis <strong>{primaryDevice.lastSeenAt}</strong>
-          </div>
-          <div>
-            Delta <strong>{primaryDevice.lastDelta ?? "N/A"}</strong>
-          </div>
-          {otherDevices.length > 0 ? (
-            <div>
-              Tracking <strong>{devices.length}</strong> devices total
-            </div>
-          ) : null}
-        </div>
-
-        <section className={styles.events}>
-          <div className={styles.eventsHeader}>Recent events from DB</div>
-          {events.length === 0 ? (
-            <div className={styles.eventsEmpty}>No events in the database yet.</div>
-          ) : (
-            <ul className={styles.eventsList}>
-              {events.map((event) => (
-                <li className={styles.eventRow} key={event.id}>
-                  <span>{event.deviceId}</span>
-                  <span className={styles.eventState} data-state={event.state}>
-                    {formatState(event.state)}
-                  </span>
-                  <span>{event.firmwareVersion ?? "unknown"}</span>
-                  <span>millis {event.eventTimestamp}</span>
-                  <span>{formatTime(event.receivedAt)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <p className={styles.pollingNote}>Live updates via stream.</p>
+      <div className={styles.healthRow}>
+        <span className={styles.healthBadge} data-health={primaryDevice.healthStatus}>
+          {formatHealthStatus(primaryDevice.healthStatus)}
+        </span>
+        <span className={styles.healthMeta}>
+          firmware {primaryDevice.firmwareVersion}
+        </span>
       </div>
-    </section>
+
+      <div className={styles.statusBoard}>
+        <div
+          className={styles.statusLine}
+          data-active={primaryDevice.lastState === "moving"}
+          data-state="moving"
+        >
+          MOVING
+        </div>
+        <div
+          className={styles.statusLine}
+          data-active={primaryDevice.lastState === "still"}
+          data-state="still"
+        >
+          STILL
+        </div>
+      </div>
+
+      <div className={styles.metaGrid}>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Device</span>
+          <strong>{primaryDevice.id}</strong>
+        </div>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Site</span>
+          <strong>{primaryDevice.siteId ?? "Unassigned"}</strong>
+        </div>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Boot ID</span>
+          <strong>{primaryDevice.bootId ?? "Unknown"}</strong>
+        </div>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Last contact</span>
+          <strong>{formatLocalTime(primaryDevice.updatedAt)}</strong>
+        </div>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Heartbeat</span>
+          <strong>{formatLocalTime(primaryDevice.lastHeartbeatAt)}</strong>
+        </div>
+        <div className={styles.metaCard}>
+          <span className={styles.metaLabel}>Provisioning</span>
+          <strong>{primaryDevice.provisioningState}</strong>
+        </div>
+      </div>
+
+      <div className={styles.debugMeta}>
+        <div>
+          Device millis <strong>{primaryDevice.lastSeenAt}</strong>
+        </div>
+        <div>
+          Delta <strong>{primaryDevice.lastDelta ?? "N/A"}</strong>
+        </div>
+        {otherDevices.length > 0 ? (
+          <div>
+            Tracking <strong>{devices.length}</strong> devices total
+          </div>
+        ) : null}
+      </div>
+
+      <section className={styles.events}>
+        <div className={styles.eventsHeader}>
+          <span>Recent events from DB</span>
+          <span>Received (server time)</span>
+        </div>
+        {events.length === 0 ? (
+          <div className={styles.eventsEmpty}>No events in the database yet.</div>
+        ) : (
+          <ul className={styles.eventsList}>
+            {events.map((event) => (
+              <li className={styles.eventRow} key={event.id}>
+                <span>{event.deviceId}</span>
+                <span className={styles.eventState} data-state={event.state}>
+                  {formatState(event.state)}
+                </span>
+                <span>{event.firmwareVersion ?? "unknown"}</span>
+                <span>millis {event.eventTimestamp}</span>
+                <span>{formatLocalTime(event.receivedAt)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </AppShell>
   );
 }
