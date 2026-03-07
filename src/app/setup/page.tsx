@@ -1,9 +1,15 @@
+import { LiveStreamProvider } from "@/components/live-stream-provider";
 import { SetupDashboard } from "@/components/setup-dashboard";
+import { getInitialDevices } from "@/lib/server-data";
 
-export default function SetupPage() {
+export default async function SetupPage() {
+  const devices = await getInitialDevices();
+
   return (
-    <main>
-      <SetupDashboard />
-    </main>
+    <LiveStreamProvider>
+      <main>
+        <SetupDashboard initialDevices={devices} />
+      </main>
+    </LiveStreamProvider>
   );
 }

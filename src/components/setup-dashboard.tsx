@@ -8,11 +8,8 @@ import { mergeDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
 import { DeviceProvisioningWizard } from "./device-provisioning-wizard";
+import { useLiveStream } from "./live-stream-provider";
 import styles from "./setup-dashboard.module.css";
-
-type DevicesResponse = {
-  devices: DeviceSummary[];
-};
 
 type Drafts = Record<
   string,
@@ -36,47 +33,22 @@ function createDrafts(devices: DeviceSummary[]): Drafts {
   );
 }
 
-export function SetupDashboard() {
-  const [devices, setDevices] = useState<DeviceSummary[]>([]);
-  const [drafts, setDrafts] = useState<Drafts>({});
+type SetupDashboardProps = {
+  initialDevices: DeviceSummary[];
+};
+
+export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
+  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [drafts, setDrafts] = useState<Drafts>(() => createDrafts(initialDevices));
   const [status, setStatus] = useState<string | null>(null);
   const [showProvisioningWizard, setShowProvisioningWizard] = useState(false);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
+    initialDevices[0]?.id ?? null,
+  );
+  const { subscribeToMotion } = useLiveStream();
 
   useEffect(() => {
-    let cancelled = false;
-    const eventSource = new EventSource("/api/stream");
-
-    async function loadData() {
-      const devicesResponse = await fetch("/api/devices", { cache: "no-store" });
-
-      if (!devicesResponse.ok) {
-        throw new Error("Failed to load devices.");
-      }
-
-      const deviceData = (await devicesResponse.json()) as DevicesResponse;
-
-      if (cancelled) {
-        return;
-      }
-
-      setDevices(deviceData.devices);
-      setDrafts(createDrafts(deviceData.devices));
-      setSelectedDeviceId((currentSelectedId) =>
-        currentSelectedId && deviceData.devices.some((device) => device.id === currentSelectedId)
-          ? currentSelectedId
-          : (deviceData.devices[0]?.id ?? null),
-      );
-    }
-
-    eventSource.addEventListener("motion-update", (rawEvent) => {
-      if (cancelled) {
-        return;
-      }
-
-      const event = rawEvent as MessageEvent<string>;
-      const payload = JSON.parse(event.data) as MotionStreamPayload;
-
+    return subscribeToMotion((payload: MotionStreamPayload) => {
       setDevices((currentDevices) =>
         mergeDeviceUpdate(currentDevices, payload.device),
       );
@@ -92,18 +64,7 @@ export function SetupDashboard() {
         },
       }));
     });
-
-    void loadData().catch(() => {
-      if (!cancelled) {
-        setStatus("Could not load devices.");
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      eventSource.close();
-    };
-  }, []);
+  }, [subscribeToMotion]);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,

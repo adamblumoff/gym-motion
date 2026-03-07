@@ -11,15 +11,8 @@ import { formatLocalTime } from "@/lib/format-time";
 import { mergeDeviceUpdate, mergeEventUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
+import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-dashboard.module.css";
-
-type DeviceResponse = {
-  devices: DeviceSummary[];
-};
-
-type EventResponse = {
-  events: MotionEventSummary[];
-};
 
 function formatState(state: DeviceSummary["lastState"] | MotionEventSummary["state"]) {
   return state.toUpperCase();
@@ -29,87 +22,37 @@ function formatHealthStatus(status: DeviceSummary["healthStatus"]) {
   return status.toUpperCase();
 }
 
-export function DeviceDashboard() {
-  const [devices, setDevices] = useState<DeviceSummary[]>([]);
-  const [events, setEvents] = useState<MotionEventSummary[]>([]);
+type DeviceDashboardProps = {
+  initialDevices: DeviceSummary[];
+  initialEvents: MotionEventSummary[];
+};
+
+export function DeviceDashboard({
+  initialDevices,
+  initialEvents,
+}: DeviceDashboardProps) {
+  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [events, setEvents] = useState<MotionEventSummary[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
+  const { subscribeToMotion } = useLiveStream();
 
   useEffect(() => {
-    let cancelled = false;
-    let eventSource: EventSource | null = null;
+    return subscribeToMotion((payload: MotionStreamPayload) => {
+      const nextEvent = payload.event;
 
-    async function loadInitialData() {
-      try {
-        const [devicesResponse, eventsResponse] = await Promise.all([
-          fetch("/api/devices", { cache: "no-store" }),
-          fetch("/api/events", { cache: "no-store" }),
-        ]);
+      setDevices((currentDevices) =>
+        mergeDeviceUpdate(currentDevices, payload.device),
+      );
 
-        if (!devicesResponse.ok || !eventsResponse.ok) {
-          throw new Error("Could not load devices.");
-        }
-
-        const deviceData = (await devicesResponse.json()) as DeviceResponse;
-        const eventData = (await eventsResponse.json()) as EventResponse;
-
-        if (!cancelled) {
-          setDevices(deviceData.devices);
-          setEvents(eventData.events);
-          setError(null);
-        }
-      } catch {
-        if (!cancelled) {
-          setError("Dashboard is waiting for device data.");
-        }
-      }
-    }
-
-    function connectStream() {
-      eventSource = new EventSource("/api/stream");
-
-      eventSource.addEventListener("motion-update", (rawEvent) => {
-        if (cancelled) {
-          return;
-        }
-
-        const event = rawEvent as MessageEvent<string>;
-        const payload = JSON.parse(event.data) as MotionStreamPayload;
-        const nextEvent = payload.event;
-
-        setDevices((currentDevices) =>
-          mergeDeviceUpdate(currentDevices, payload.device),
+      if (nextEvent) {
+        setEvents((currentEvents) =>
+          mergeEventUpdate(currentEvents, nextEvent),
         );
+      }
 
-        if (nextEvent) {
-          setEvents((currentEvents) =>
-            mergeEventUpdate(currentEvents, nextEvent),
-          );
-        }
-
-        setError(null);
-      });
-
-      eventSource.onerror = () => {
-        if (!cancelled) {
-          setError("Live connection lost. Reconnecting...");
-        }
-      };
-
-      eventSource.onopen = () => {
-        if (!cancelled) {
-          setError(null);
-        }
-      };
-    }
-
-    void loadInitialData();
-    connectStream();
-
-    return () => {
-      cancelled = true;
-      eventSource?.close();
-    };
-  }, []);
+      setError(null);
+    });
+  }, [subscribeToMotion]);
 
   const [primaryDevice, ...otherDevices] = devices;
 

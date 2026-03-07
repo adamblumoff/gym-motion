@@ -18,6 +18,7 @@ import {
   subscribeToProvisioningStatus,
 } from "@/lib/provisioning";
 
+import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-provisioning-wizard.module.css";
 
 type DeviceResponse = {
@@ -82,6 +83,7 @@ export function DeviceProvisioningWizard({
   );
   const awaitingDeviceReconnect = useRef(false);
   const connectAttemptId = useRef(0);
+  const { subscribeToMotion } = useLiveStream();
 
   useEffect(() => {
     setStoredProfile(loadStoredWiFiProfile());
@@ -112,15 +114,10 @@ export function DeviceProvisioningWizard({
   }, [networks, selectedSsid, storedProfile]);
 
   useEffect(() => {
-    const eventSource = new EventSource("/api/stream");
-
-    eventSource.addEventListener("motion-update", (rawEvent) => {
+    return subscribeToMotion((payload: MotionStreamPayload) => {
       if (!pendingProvisionDeviceId) {
         return;
       }
-
-      const event = rawEvent as MessageEvent<string>;
-      const payload = JSON.parse(event.data) as MotionStreamPayload;
 
       if (
         payload.device.id === pendingProvisionDeviceId &&
@@ -132,11 +129,7 @@ export function DeviceProvisioningWizard({
         setStatus(`${payload.device.id} is online and provisioned.`);
       }
     });
-
-    return () => {
-      eventSource.close();
-    };
-  }, [onComplete, pendingProvisionDeviceId]);
+  }, [pendingProvisionDeviceId, subscribeToMotion]);
 
   const networkChoices = useMemo(() => uniqueNetworkList(networks), [networks]);
 

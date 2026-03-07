@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
 import type {
@@ -13,15 +13,8 @@ import type {
 import { mergeDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
+import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-logs-dashboard.module.css";
-
-type DevicesResponse = {
-  devices: DeviceSummary[];
-};
-
-type DeviceLogsResponse = {
-  logs: DeviceLogSummary[];
-};
 
 function formatLevel(level: DeviceLogSummary["level"]) {
   return level.toUpperCase();
@@ -35,17 +28,26 @@ function formatMetadata(metadata: DeviceLogSummary["metadata"]) {
   return JSON.stringify(metadata, null, 2);
 }
 
-export function DeviceLogsDashboard() {
+type DeviceLogsDashboardProps = {
+  initialDevices: DeviceSummary[];
+  initialLogs: DeviceLogSummary[];
+  initialSelectedDeviceId: string | null;
+};
+
+export function DeviceLogsDashboard({
+  initialDevices,
+  initialLogs,
+  initialSelectedDeviceId,
+}: DeviceLogsDashboardProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedDeviceId = searchParams.get("deviceId");
-  const [devices, setDevices] = useState<DeviceSummary[]>([]);
-  const [logs, setLogs] = useState<DeviceLogSummary[]>([]);
+  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [logs, setLogs] = useState<DeviceLogSummary[]>(initialLogs);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
-    requestedDeviceId,
+    initialSelectedDeviceId ?? initialDevices[0]?.id ?? null,
   );
   const [status, setStatus] = useState<string | null>(null);
-  const [liveStatus, setLiveStatus] = useState("Connecting…");
+  const { liveStatus, subscribeToDeviceLogs, subscribeToMotion } = useLiveStream();
+  const skippedInitialFetch = useRef(false);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,
@@ -53,50 +55,12 @@ export function DeviceLogsDashboard() {
   );
 
   useEffect(() => {
-    setSelectedDeviceId(requestedDeviceId);
-  }, [requestedDeviceId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadDevices() {
-      const response = await fetch("/api/devices", { cache: "no-store" });
-
-      if (!response.ok) {
-        throw new Error("Could not load devices.");
-      }
-
-      const data = (await response.json()) as DevicesResponse;
-
-      if (cancelled) {
-        return;
-      }
-
-      setDevices(data.devices);
-
-      if (!requestedDeviceId && data.devices[0]) {
-        const nextDeviceId = data.devices[0].id;
-        setSelectedDeviceId(nextDeviceId);
-        router.replace(`/logs?deviceId=${encodeURIComponent(nextDeviceId)}`, {
-          scroll: false,
-        });
-      }
+    if (!selectedDeviceId) {
+      return;
     }
 
-    void loadDevices().catch(() => {
-      if (!cancelled) {
-        setStatus("Could not load devices.");
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [requestedDeviceId, router]);
-
-  useEffect(() => {
-    if (!selectedDeviceId) {
-      setLogs([]);
+    if (!skippedInitialFetch.current && selectedDeviceId === initialSelectedDeviceId) {
+      skippedInitialFetch.current = true;
       return;
     }
 
@@ -113,7 +77,7 @@ export function DeviceLogsDashboard() {
         throw new Error("Could not load logs.");
       }
 
-      const data = (await response.json()) as DeviceLogsResponse;
+      const data = (await response.json()) as { logs: DeviceLogSummary[] };
 
       if (!cancelled) {
         setLogs(data.logs);
@@ -130,53 +94,24 @@ export function DeviceLogsDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId]);
+  }, [initialLogs, initialSelectedDeviceId, selectedDeviceId]);
 
   useEffect(() => {
-    let cancelled = false;
-    const eventSource = new EventSource("/api/stream");
-
-    eventSource.addEventListener("motion-update", (rawEvent) => {
-      if (cancelled) {
-        return;
-      }
-
-      const event = rawEvent as MessageEvent<string>;
-      const payload = JSON.parse(event.data) as MotionStreamPayload;
-
+    const unsubscribeMotion = subscribeToMotion((payload: MotionStreamPayload) => {
       setDevices((currentDevices) => mergeDeviceUpdate(currentDevices, payload.device));
     });
 
-    eventSource.addEventListener("device-log", (rawEvent) => {
-      if (cancelled) {
-        return;
-      }
-
-      const event = rawEvent as MessageEvent<string>;
-      const payload = JSON.parse(event.data) as DeviceLogStreamPayload;
-
+    const unsubscribeLogs = subscribeToDeviceLogs((payload: DeviceLogStreamPayload) => {
       if (payload.log.deviceId === selectedDeviceId) {
         setLogs((currentLogs) => mergeLogUpdate(currentLogs, payload.log));
       }
     });
 
-    eventSource.onopen = () => {
-      if (!cancelled) {
-        setLiveStatus("Live");
-      }
-    };
-
-    eventSource.onerror = () => {
-      if (!cancelled) {
-        setLiveStatus("Reconnecting…");
-      }
-    };
-
     return () => {
-      cancelled = true;
-      eventSource.close();
+      unsubscribeMotion();
+      unsubscribeLogs();
     };
-  }, [selectedDeviceId]);
+  }, [selectedDeviceId, subscribeToDeviceLogs, subscribeToMotion]);
 
   function handleDeviceChange(nextDeviceId: string) {
     setSelectedDeviceId(nextDeviceId);

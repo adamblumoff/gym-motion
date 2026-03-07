@@ -23,3 +23,10 @@
 
 - Future environment strategy options and trade-offs are documented in `/home/adamblumoff/gym-motion/docs/development-environments.md`.
 - Read this before changing how local dev, staging, production DBs, or production devices interact.
+
+## React / Next Note
+
+- Follow Vercel React best practices for route data:
+  - prefer server-seeded initial page data over client `useEffect` boot fetches
+  - avoid large effects that fetch, parse, and set multiple page-level states
+  - prefer one shared live subscription per page over multiple duplicate `EventSource` connections in nested widgets
