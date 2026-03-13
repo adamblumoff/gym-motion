@@ -34,6 +34,9 @@ type DeviceRow = {
   site_id: string | null;
   provisioning_state: ProvisioningState;
   update_status: UpdateStatus;
+  update_target_version: string | null;
+  update_detail: string | null;
+  update_reported_at: Date | null;
   last_heartbeat_at: Date | null;
   last_event_received_at: Date | null;
 };
@@ -92,6 +95,24 @@ function toSafeNumber(value: string | number) {
   return numericValue;
 }
 
+const DEVICE_SELECT_COLUMNS = `id,
+       last_state,
+       last_seen_at,
+       last_delta,
+       updated_at,
+       hardware_id,
+       boot_id,
+       firmware_version,
+       machine_label,
+       site_id,
+       provisioning_state,
+       update_status,
+       update_target_version,
+       update_detail,
+       update_reported_at,
+       last_heartbeat_at,
+       last_event_received_at`;
+
 function mapDeviceRow(row: DeviceRow): DeviceSummary {
   const lastContactAt = row.last_heartbeat_at ?? row.last_event_received_at;
 
@@ -108,6 +129,9 @@ function mapDeviceRow(row: DeviceRow): DeviceSummary {
     siteId: row.site_id,
     provisioningState: row.provisioning_state,
     updateStatus: row.update_status,
+    updateTargetVersion: row.update_target_version,
+    updateDetail: row.update_detail,
+    updateUpdatedAt: row.update_reported_at?.toISOString() ?? null,
     lastHeartbeatAt: row.last_heartbeat_at?.toISOString() ?? null,
     lastEventReceivedAt: row.last_event_received_at?.toISOString() ?? null,
     healthStatus: deriveHealthStatus(lastContactAt?.toISOString() ?? null),
@@ -246,20 +270,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
            end,
            last_event_received_at = now()
        returning
-         id,
-         last_state,
-         last_seen_at,
-         last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         machine_label,
-         site_id,
-         provisioning_state,
-         update_status,
-         last_heartbeat_at,
-         last_event_received_at`,
+         ${DEVICE_SELECT_COLUMNS}`,
       [
         payload.deviceId,
         payload.state,
@@ -373,20 +384,7 @@ export async function recordHeartbeat(payload: HeartbeatPayload): Promise<Motion
          end,
          last_heartbeat_at = now()
      returning
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       boot_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state,
-       update_status,
-       last_heartbeat_at,
-       last_event_received_at`,
+       ${DEVICE_SELECT_COLUMNS}`,
     [
       payload.deviceId,
       payload.timestamp,
@@ -404,20 +402,7 @@ export async function recordHeartbeat(payload: HeartbeatPayload): Promise<Motion
 export async function listDevices(): Promise<DeviceSummary[]> {
   const result = await getDb().query<DeviceRow>(
     `select
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       boot_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state,
-       update_status,
-       last_heartbeat_at,
-       last_event_received_at
+       ${DEVICE_SELECT_COLUMNS}
      from devices
      order by updated_at desc, id asc`,
   );
@@ -706,20 +691,7 @@ export async function recordBackfillBatch(
            end,
            last_event_received_at = now()
        returning
-         id,
-         last_state,
-         last_seen_at,
-         last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         machine_label,
-         site_id,
-         provisioning_state,
-         update_status,
-         last_heartbeat_at,
-         last_event_received_at`,
+         ${DEVICE_SELECT_COLUMNS}`,
       [
         input.deviceId,
         lastMotionRecord?.state ?? "still",
@@ -894,20 +866,7 @@ export async function createOrUpdateDeviceRegistration(
          site_id = coalesce(excluded.site_id, devices.site_id),
          provisioning_state = excluded.provisioning_state
      returning
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       boot_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state,
-       update_status,
-       last_heartbeat_at,
-       last_event_received_at`,
+       ${DEVICE_SELECT_COLUMNS}`,
     [
       input.deviceId,
       input.hardwareId ?? null,
@@ -951,20 +910,7 @@ export async function updateDeviceAssignment(
   if (fields.length === 0) {
     const existing = await getDb().query<DeviceRow>(
       `select
-         id,
-         last_state,
-         last_seen_at,
-         last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         machine_label,
-         site_id,
-         provisioning_state,
-         update_status,
-         last_heartbeat_at,
-         last_event_received_at
+         ${DEVICE_SELECT_COLUMNS}
        from devices
        where id = $1`,
       [deviceId],
@@ -983,20 +929,7 @@ export async function updateDeviceAssignment(
      set ${fields.join(", ")}
      where id = $1
      returning
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       boot_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state,
-       update_status,
-       last_heartbeat_at,
-       last_event_received_at`,
+       ${DEVICE_SELECT_COLUMNS}`,
     values,
   );
 
@@ -1059,20 +992,7 @@ export async function checkForFirmwareUpdate(
   const [deviceResult, releaseResult] = await Promise.all([
     getDb().query<DeviceRow>(
       `select
-         id,
-         last_state,
-         last_seen_at,
-         last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         machine_label,
-         site_id,
-         provisioning_state,
-         update_status,
-         last_heartbeat_at,
-         last_event_received_at
+         ${DEVICE_SELECT_COLUMNS}
        from devices
        where id = $1`,
       [input.deviceId],
@@ -1092,18 +1012,24 @@ export async function checkForFirmwareUpdate(
   const updateAvailable = Boolean(release && release.version !== currentVersion);
   let nextDevice = device;
 
-  if (updateAvailable && device) {
+  if (updateAvailable && device && release) {
     await getDb().query(
       `update devices
        set update_status = 'available',
+           update_target_version = $2,
+           update_detail = null,
+           update_reported_at = now(),
            updated_at = now()
        where id = $1`,
-      [input.deviceId],
+      [input.deviceId, release.version],
     );
 
     nextDevice = {
       ...device,
       updateStatus: "available",
+      updateTargetVersion: release.version,
+      updateDetail: null,
+      updateUpdatedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1119,29 +1045,31 @@ export async function recordFirmwareReport(
   deviceId: string,
   status: UpdateStatus,
   targetVersion?: string,
+  detail?: string,
 ): Promise<DeviceSummary | null> {
   const result = await getDb().query<DeviceRow>(
     `update devices
      set update_status = $2,
-         firmware_version = coalesce($3, firmware_version),
+         firmware_version = case
+           when $2 in ('applied', 'booted') and $3 is not null then $3
+           else firmware_version
+         end,
+         update_target_version = case
+           when $2 = 'idle' then null
+           when $3 is not null then $3
+           else update_target_version
+         end,
+         update_detail = case
+           when $4 is not null then $4
+           when $2 in ('idle', 'available', 'downloading', 'applied', 'booted') then null
+           else update_detail
+         end,
+         update_reported_at = now(),
          updated_at = now()
      where id = $1
      returning
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       boot_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state,
-       update_status,
-       last_heartbeat_at,
-       last_event_received_at`,
-    [deviceId, status, targetVersion ?? null],
+       ${DEVICE_SELECT_COLUMNS}`,
+    [deviceId, status, targetVersion ?? null, detail ?? null],
   );
 
   return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;

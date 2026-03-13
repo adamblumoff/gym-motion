@@ -32,6 +32,7 @@ export async function POST(request: Request) {
       parsedPayload.data.deviceId,
       parsedPayload.data.status,
       parsedPayload.data.targetVersion,
+      parsedPayload.data.detail,
     );
 
     if (!device) {

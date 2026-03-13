@@ -35,6 +35,24 @@ function createDrafts(devices: GatewayRuntimeDeviceSummary[]): Drafts {
   );
 }
 
+function formatOtaStatus(status: GatewayRuntimeDeviceSummary["otaStatus"]) {
+  return status.replaceAll("-", " ");
+}
+
+function formatProgress(device: GatewayRuntimeDeviceSummary) {
+  if (!device.otaTotalBytes) {
+    return "Waiting";
+  }
+
+  const sentBytes = device.otaProgressBytesSent ?? 0;
+  const percent = Math.min(
+    100,
+    Math.round((sentBytes / device.otaTotalBytes) * 100),
+  );
+
+  return `${percent}% (${sentBytes}/${device.otaTotalBytes} bytes)`;
+}
+
 type SetupDashboardProps = {
   initialDevices: GatewayRuntimeDeviceSummary[];
 };
@@ -259,7 +277,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
             <p className={styles.panelCopy}>
               BLE nodes connect automatically when the gateway sees them. Future
               actions like restarting the gateway can live here without requiring a
-              separate setup route.
+              separate setup route. OTA progress and failures also surface here in
+              real time.
             </p>
           </section>
 
@@ -288,7 +307,9 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                           {device.gatewayConnectionState}
                         </span>
                         <span className={styles.detailChip}>
-                          fw {device.firmwareVersion}
+                          {device.otaTargetVersion
+                            ? `fw ${device.firmwareVersion} -> ${device.otaTargetVersion}`
+                            : `fw ${device.firmwareVersion}`}
                         </span>
                       </button>
                     </li>
@@ -309,7 +330,10 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                     {selectedDevice.machineLabel ?? selectedDevice.id}
                   </h2>
                   <p className={styles.detailCopy}>
-                    {selectedDevice.id} · firmware {selectedDevice.firmwareVersion}
+                    {selectedDevice.id} · installed {selectedDevice.firmwareVersion}
+                    {selectedDevice.otaTargetVersion
+                      ? ` · target ${selectedDevice.otaTargetVersion}`
+                      : ""}
                   </p>
                 </div>
                 <div className={styles.detailBadges}>
@@ -317,7 +341,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                     {selectedDevice.gatewayConnectionState}
                   </span>
                   <span className={styles.detailChip}>
-                    fw {selectedDevice.firmwareVersion}
+                    OTA {formatOtaStatus(selectedDevice.otaStatus)}
                   </span>
                 </div>
               </div>
@@ -356,6 +380,30 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
               <div className={styles.telemetryGrid}>
                 <div>
+                  <span className={styles.telemetryLabel}>Installed firmware</span>
+                  <strong>{selectedDevice.firmwareVersion}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Target firmware</span>
+                  <strong>{selectedDevice.otaTargetVersion ?? "None queued"}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>OTA status</span>
+                  <strong>{formatOtaStatus(selectedDevice.otaStatus)}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>OTA phase</span>
+                  <strong>{selectedDevice.otaLastPhase ?? "Idle"}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>OTA progress</span>
+                  <strong>{formatProgress(selectedDevice)}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Last OTA update</span>
+                  <strong>{formatLocalTime(selectedDevice.otaUpdatedAt)}</strong>
+                </div>
+                <div>
                   <span className={styles.telemetryLabel}>Boot ID</span>
                   <strong>{selectedDevice.bootId ?? "unknown"}</strong>
                 </div>
@@ -384,6 +432,23 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                   <strong>Node-specific</strong>
                 </div>
               </div>
+
+              <section className={styles.otaPanel}>
+                <div className={styles.panelEyebrow}>OTA session</div>
+                <h3 className={styles.otaTitle}>Gateway firmware visibility</h3>
+                <p className={styles.otaCopy}>
+                  The installed firmware only changes after the node confirms the
+                  update. Until then, watch the OTA status, phase, and per-device
+                  activity log for the exact point where the transfer is waiting.
+                </p>
+                <div className={styles.otaMeta}>
+                  <span>Gateway status {formatOtaStatus(selectedDevice.otaStatus)}</span>
+                  <span>Node status {selectedDevice.otaLastStatusMessage ?? "None yet"}</span>
+                </div>
+                {selectedDevice.otaFailureDetail ? (
+                  <p className={styles.otaFailure}>{selectedDevice.otaFailureDetail}</p>
+                ) : null}
+              </section>
 
               <div className={styles.detailActions}>
                 <button

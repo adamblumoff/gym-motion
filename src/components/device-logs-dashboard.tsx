@@ -285,7 +285,9 @@ export function DeviceLogsDashboard({
             </div>
             <div className={styles.summaryMeta}>
               <span>{selectedDevice.id}</span>
-              <span>firmware {selectedDevice.firmwareVersion}</span>
+              <span>installed {selectedDevice.firmwareVersion}</span>
+              <span>target {selectedDevice.otaTargetVersion ?? "none"}</span>
+              <span>ota {selectedDevice.otaStatus}</span>
               <span>boot {selectedDevice.bootId ?? "unknown"}</span>
               <span>Activity below uses server received time</span>
             </div>

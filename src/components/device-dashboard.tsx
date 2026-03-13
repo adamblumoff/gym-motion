@@ -29,6 +29,10 @@ function formatGatewayConnectionStatus(
   return status.replaceAll("-", " ").toUpperCase();
 }
 
+function formatOtaStatus(status: GatewayRuntimeDeviceSummary["otaStatus"]) {
+  return status.replaceAll("-", " ").toUpperCase();
+}
+
 type DeviceDashboardProps = {
   initialDevices: GatewayRuntimeDeviceSummary[];
   initialEvents: MotionEventSummary[];
@@ -189,11 +193,19 @@ export function DeviceDashboard({
               </div>
               <div className={styles.metaCard}>
                 <span className={styles.metaLabel}>Firmware</span>
-                <strong>{device.firmwareVersion}</strong>
+                <strong>
+                  {device.otaTargetVersion
+                    ? `${device.firmwareVersion} -> ${device.otaTargetVersion}`
+                    : device.firmwareVersion}
+                </strong>
               </div>
               <div className={styles.metaCard}>
                 <span className={styles.metaLabel}>Gateway link</span>
                 <strong>{formatGatewayConnectionStatus(device.gatewayConnectionState)}</strong>
+              </div>
+              <div className={styles.metaCard}>
+                <span className={styles.metaLabel}>OTA</span>
+                <strong>{formatOtaStatus(device.otaStatus)}</strong>
               </div>
               <div className={styles.metaCard}>
                 <span className={styles.metaLabel}>Last BLE packet</span>
@@ -212,9 +224,16 @@ export function DeviceDashboard({
               <div>
                 {device.gatewayDisconnectReason
                   ? <>Last link loss <strong>{device.gatewayDisconnectReason}</strong></>
-                  : <>Update status <strong>{device.updateStatus}</strong></>}
+                  : (
+                      <>
+                        OTA phase <strong>{device.otaLastPhase ?? device.updateStatus}</strong>
+                      </>
+                    )}
               </div>
             </div>
+            {device.otaFailureDetail ? (
+              <p className={styles.banner}>{device.otaFailureDetail}</p>
+            ) : null}
           </article>
         ))}
       </section>

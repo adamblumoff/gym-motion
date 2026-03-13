@@ -47,6 +47,19 @@ function sortDevices(devices) {
   );
 }
 
+function emptyOtaRuntimeState() {
+  return {
+    otaStatus: "idle",
+    otaTargetVersion: null,
+    otaProgressBytesSent: null,
+    otaTotalBytes: null,
+    otaLastPhase: null,
+    otaFailureDetail: null,
+    otaLastStatusMessage: null,
+    otaUpdatedAt: null,
+  }
+}
+
 export function createGatewayRuntimeServer({
   apiBaseUrl,
   runtimeHost,
@@ -182,6 +195,7 @@ export function createGatewayRuntimeServer({
           firmwareVersion: node.firmwareVersion ?? "unknown",
           bootId: null,
           hardwareId: node.hardwareId ?? null,
+          ...emptyOtaRuntimeState(),
           updatedAt: nowIso(),
         });
       }
@@ -253,6 +267,9 @@ export function createGatewayRuntimeServer({
       updateStatus: metadata?.updateStatus ?? "idle",
       lastHeartbeatAt: metadata?.lastHeartbeatAt ?? null,
       lastEventReceivedAt: metadata?.lastEventReceivedAt ?? null,
+      updateTargetVersion: metadata?.updateTargetVersion ?? null,
+      updateDetail: metadata?.updateDetail ?? null,
+      updateUpdatedAt: metadata?.updateUpdatedAt ?? null,
       healthStatus: healthStatusFromConnectionState(connectionState),
       gatewayConnectionState: connectionState,
       peripheralId: runtime?.peripheralId ?? known?.peripheralId ?? null,
@@ -265,6 +282,14 @@ export function createGatewayRuntimeServer({
       gatewayDisconnectReason: runtime?.gatewayDisconnectReason ?? null,
       advertisedName: runtime?.advertisedName ?? known?.lastAdvertisedName ?? null,
       lastRssi: runtime?.lastRssi ?? null,
+      otaStatus: runtime?.otaStatus ?? metadata?.updateStatus ?? "idle",
+      otaTargetVersion: runtime?.otaTargetVersion ?? metadata?.updateTargetVersion ?? null,
+      otaProgressBytesSent: runtime?.otaProgressBytesSent ?? null,
+      otaTotalBytes: runtime?.otaTotalBytes ?? null,
+      otaLastPhase: runtime?.otaLastPhase ?? null,
+      otaFailureDetail: runtime?.otaFailureDetail ?? metadata?.updateDetail ?? null,
+      otaLastStatusMessage: runtime?.otaLastStatusMessage ?? null,
+      otaUpdatedAt: runtime?.otaUpdatedAt ?? metadata?.updateUpdatedAt ?? null,
     };
   }
 
@@ -360,6 +385,7 @@ export function createGatewayRuntimeServer({
       firmwareVersion: "unknown",
       bootId: null,
       hardwareId: null,
+      ...emptyOtaRuntimeState(),
       updatedAt: nowIso(),
     };
     const next = {
@@ -670,6 +696,45 @@ export function createGatewayRuntimeServer({
           gatewayState.adapterState === "poweredOn" ? "reconnecting" : "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
+      });
+      emitDevice(deviceId);
+      broadcastGatewayStatus();
+    },
+
+    noteOtaStatus(deviceId, patch) {
+      if (!deviceId) {
+        return;
+      }
+
+      const previous = runtimeByDeviceId.get(deviceId) ?? {};
+
+      updateRuntimeNode(deviceId, {
+        otaStatus: patch.otaStatus ?? previous.otaStatus ?? "idle",
+        otaTargetVersion:
+          patch.otaTargetVersion !== undefined
+            ? patch.otaTargetVersion
+            : previous.otaTargetVersion ?? null,
+        otaProgressBytesSent:
+          patch.otaProgressBytesSent !== undefined
+            ? patch.otaProgressBytesSent
+            : previous.otaProgressBytesSent ?? null,
+        otaTotalBytes:
+          patch.otaTotalBytes !== undefined
+            ? patch.otaTotalBytes
+            : previous.otaTotalBytes ?? null,
+        otaLastPhase:
+          patch.otaLastPhase !== undefined
+            ? patch.otaLastPhase
+            : previous.otaLastPhase ?? null,
+        otaFailureDetail:
+          patch.otaFailureDetail !== undefined
+            ? patch.otaFailureDetail
+            : previous.otaFailureDetail ?? null,
+        otaLastStatusMessage:
+          patch.otaLastStatusMessage !== undefined
+            ? patch.otaLastStatusMessage
+            : previous.otaLastStatusMessage ?? null,
+        otaUpdatedAt: nowIso(),
       });
       emitDevice(deviceId);
       broadcastGatewayStatus();

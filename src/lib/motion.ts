@@ -25,6 +25,18 @@ export const gatewayConnectionStateSchema = z.enum([
   "disconnected",
   "unreachable",
 ]);
+export const otaRuntimeStatusSchema = z.enum([
+  "idle",
+  "available",
+  "downloading",
+  "waiting-ready",
+  "sending",
+  "waiting-applied",
+  "applied",
+  "booted",
+  "failed",
+  "rolled_back",
+]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
@@ -108,6 +120,7 @@ export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
 export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
 export type GatewayConnectionState = z.infer<typeof gatewayConnectionStateSchema>;
+export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -122,6 +135,9 @@ export type DeviceSummary = {
   siteId: string | null;
   provisioningState: ProvisioningState;
   updateStatus: UpdateStatus;
+  updateTargetVersion: string | null;
+  updateDetail: string | null;
+  updateUpdatedAt: string | null;
   lastHeartbeatAt: string | null;
   lastEventReceivedAt: string | null;
   healthStatus: HealthStatus;
@@ -157,6 +173,14 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayDisconnectReason: string | null;
   advertisedName: string | null;
   lastRssi: number | null;
+  otaStatus: OtaRuntimeStatus;
+  otaTargetVersion: string | null;
+  otaProgressBytesSent: number | null;
+  otaTotalBytes: number | null;
+  otaLastPhase: string | null;
+  otaFailureDetail: string | null;
+  otaLastStatusMessage: string | null;
+  otaUpdatedAt: string | null;
 };
 
 export type GatewayRuntimeDevicesResponse = {

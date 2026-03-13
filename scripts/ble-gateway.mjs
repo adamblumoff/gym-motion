@@ -77,6 +77,105 @@ const runtimeServer = createGatewayRuntimeServer({
   verbose: config.verbose,
 });
 
+function createDeviceContext(deviceId, overrides = {}) {
+  return {
+    deviceId,
+    firmwareVersion: overrides.firmwareVersion ?? "unknown",
+    lastState: null,
+    lastHeartbeatForwardedAt: 0,
+    lastFirmwareCheckAt: 0,
+    updateInFlight: false,
+    statusListeners: new Set(),
+    controlCharacteristic: overrides.controlCharacteristic ?? null,
+    otaDataCharacteristic: overrides.otaDataCharacteristic ?? null,
+    historySyncPromise: null,
+    historySyncedThrough: 0,
+    historyDroppedCount: 0,
+    peripheralId: overrides.peripheralId ?? null,
+    address: overrides.address ?? null,
+    advertisedName: overrides.advertisedName ?? null,
+    rssi: overrides.rssi ?? null,
+    otaStatus: "idle",
+    otaTargetVersion: null,
+    otaBytesSent: 0,
+    otaTotalBytes: null,
+    otaLastPhase: null,
+    otaFailureDetail: null,
+    otaLastStatusMessage: null,
+    otaProgressMilestone: -1,
+    ...overrides,
+  };
+}
+
+function setOtaRuntimeState(context, patch = {}) {
+  if (!context?.deviceId) {
+    return;
+  }
+
+  if (patch.otaStatus !== undefined) {
+    context.otaStatus = patch.otaStatus;
+  }
+
+  if (patch.otaTargetVersion !== undefined) {
+    context.otaTargetVersion = patch.otaTargetVersion;
+  }
+
+  if (patch.otaBytesSent !== undefined) {
+    context.otaBytesSent = patch.otaBytesSent;
+  }
+
+  if (patch.otaTotalBytes !== undefined) {
+    context.otaTotalBytes = patch.otaTotalBytes;
+  }
+
+  if (patch.otaLastPhase !== undefined) {
+    context.otaLastPhase = patch.otaLastPhase;
+  }
+
+  if (patch.otaFailureDetail !== undefined) {
+    context.otaFailureDetail = patch.otaFailureDetail;
+  }
+
+  if (patch.otaLastStatusMessage !== undefined) {
+    context.otaLastStatusMessage = patch.otaLastStatusMessage;
+  }
+
+  runtimeServer.noteOtaStatus(context.deviceId, {
+    otaStatus: context.otaStatus,
+    otaTargetVersion: context.otaTargetVersion,
+    otaProgressBytesSent: context.otaBytesSent,
+    otaTotalBytes: context.otaTotalBytes,
+    otaLastPhase: context.otaLastPhase,
+    otaFailureDetail: context.otaFailureDetail,
+    otaLastStatusMessage: context.otaLastStatusMessage,
+  });
+}
+
+async function writeOtaLog(context, {
+  level = "info",
+  code,
+  message,
+  metadata,
+}) {
+  await writeDeviceLog({
+    deviceId: context.deviceId,
+    level,
+    code,
+    message,
+    bootId: context.bootId ?? null,
+    firmwareVersion: context.firmwareVersion ?? null,
+    hardwareId: context.hardwareId ?? null,
+    metadata: {
+      targetVersion: context.otaTargetVersion ?? null,
+      phase: context.otaLastPhase ?? null,
+      bytesSent: context.otaBytesSent ?? null,
+      totalBytes: context.otaTotalBytes ?? null,
+      lastNodeStatusMessage: context.otaLastStatusMessage ?? null,
+      ...metadata,
+    },
+  });
+}
+
 async function writeDeviceLog({
   deviceId,
   level = "info",
@@ -657,11 +756,31 @@ async function runHistorySync(context, payload) {
   await context.historySyncPromise;
 }
 
-function createStatusWaiter(context, predicate, timeoutMs = 30_000, label = "OTA") {
+function createStatusWaiter(
+  context,
+  predicate,
+  timeoutMs = 30_000,
+  label = "OTA",
+  waitPhase = "unknown",
+) {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       context.statusListeners.delete(listener);
-      reject(new Error(`Timed out waiting for ${label} status on ${context.deviceId}.`));
+      const detail = `Timed out waiting for ${label} status on ${context.deviceId}.`;
+      setOtaRuntimeState(context, {
+        otaStatus: "failed",
+        otaLastPhase: waitPhase,
+        otaFailureDetail: detail,
+      });
+      void writeOtaLog(context, {
+        level: "error",
+        code: `ota.${waitPhase}.timeout`,
+        message: detail,
+        metadata: {
+          timeoutMs,
+        },
+      });
+      reject(new Error(detail));
     }, timeoutMs);
 
     const listener = (status) => {
@@ -706,24 +825,15 @@ async function forwardTelemetry(payload) {
   let context = deviceContexts.get(payload.deviceId);
 
   if (!context) {
-    context = {
-      deviceId: payload.deviceId,
+    context = createDeviceContext(payload.deviceId, {
       firmwareVersion: payload.firmwareVersion ?? "unknown",
-      lastState: null,
-      lastHeartbeatForwardedAt: 0,
-      lastFirmwareCheckAt: 0,
-      updateInFlight: false,
-      statusListeners: new Set(),
-      controlCharacteristic: null,
-      otaDataCharacteristic: null,
-      historySyncPromise: null,
-      historySyncedThrough: 0,
-      historyDroppedCount: 0,
-    };
+    });
     deviceContexts.set(payload.deviceId, context);
   }
 
   context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion;
+  context.bootId = payload.bootId ?? context.bootId ?? null;
+  context.hardwareId = payload.hardwareId ?? context.hardwareId ?? null;
   context.historySyncedThrough = Math.max(
     context.historySyncedThrough ?? 0,
     0,
@@ -801,11 +911,56 @@ async function maybePerformOta(context) {
   }
 
   context.updateInFlight = true;
+  context.otaProgressMilestone = -1;
+  setOtaRuntimeState(context, {
+    otaStatus: "available",
+    otaTargetVersion: response.version,
+    otaBytesSent: 0,
+    otaTotalBytes: response.sizeBytes ?? null,
+    otaLastPhase: "available",
+    otaFailureDetail: null,
+    otaLastStatusMessage: "Gateway found an update for this node.",
+  });
+  await writeOtaLog(context, {
+    code: "ota.update_available",
+    message: `Gateway found firmware ${response.version} for ${context.deviceId}.`,
+    metadata: {
+      currentVersion: context.firmwareVersion ?? "unknown",
+      sha256: response.sha256 ?? null,
+    },
+  });
   log(`firmware update available for ${context.deviceId}: ${response.version}`);
 
   try {
+    setOtaRuntimeState(context, {
+      otaStatus: "downloading",
+      otaLastPhase: "download",
+      otaFailureDetail: null,
+      otaLastStatusMessage: "Gateway is downloading the firmware package.",
+    });
+    await writeOtaLog(context, {
+      code: "ota.download.started",
+      message: `Gateway started downloading firmware ${response.version}.`,
+      metadata: {
+        assetUrl: response.assetUrl,
+      },
+    });
     await reportFirmwareStatus(context.deviceId, "downloading", response.version);
     const firmwareBuffer = await downloadFirmware(response.assetUrl, response.sha256);
+    setOtaRuntimeState(context, {
+      otaStatus: "waiting-ready",
+      otaBytesSent: 0,
+      otaTotalBytes: firmwareBuffer.length,
+      otaLastPhase: "download-complete",
+      otaLastStatusMessage: "Gateway downloaded the firmware and is waiting for the node.",
+    });
+    await writeOtaLog(context, {
+      code: "ota.download.completed",
+      message: `Gateway downloaded firmware ${response.version}.`,
+      metadata: {
+        sha256: response.sha256 ?? null,
+      },
+    });
     await pushFirmwareOverBle(context, {
       version: response.version,
       firmwareBuffer,
@@ -813,14 +968,39 @@ async function maybePerformOta(context) {
       sizeBytes: response.sizeBytes ?? firmwareBuffer.length,
     });
     await reportFirmwareStatus(context.deviceId, "applied", response.version);
+    setOtaRuntimeState(context, {
+      otaStatus: "applied",
+      otaLastPhase: "applied",
+      otaBytesSent: firmwareBuffer.length,
+      otaTotalBytes: firmwareBuffer.length,
+      otaFailureDetail: null,
+      otaLastStatusMessage: "Node reported that the firmware was applied.",
+    });
     log(`firmware applied for ${context.deviceId}: ${response.version}`);
   } catch (error) {
     console.error(`[gateway] OTA failed for ${context.deviceId}`, error);
+    const detail =
+      error instanceof Error ? error.message : "gateway-ota-failed";
+    setOtaRuntimeState(context, {
+      otaStatus: "failed",
+      otaFailureDetail: detail,
+      otaLastStatusMessage: detail,
+    });
+    if (
+      !(error instanceof Error) ||
+      !error.message.startsWith(`Device reported OTA error on ${context.deviceId}:`)
+    ) {
+      await writeOtaLog(context, {
+        level: "error",
+        code: "ota.failed",
+        message: detail,
+      });
+    }
     await reportFirmwareStatus(
       context.deviceId,
       "failed",
       response.version,
-      error instanceof Error ? error.message : "gateway-ota-failed",
+      detail,
     );
   } finally {
     context.updateInFlight = false;
@@ -856,13 +1036,33 @@ async function pushFirmwareOverBle(context, release) {
     (status) => status.type === "ota-status" && status.phase === "ready",
     30_000,
     "OTA ready",
+    "ready",
   );
   const appliedWaiter = createStatusWaiter(
     context,
     (status) => status.type === "ota-status" && status.phase === "applied",
     120_000,
     "OTA applied",
+    "applied",
   );
+
+  setOtaRuntimeState(context, {
+    otaStatus: "waiting-ready",
+    otaTargetVersion: release.version,
+    otaBytesSent: 0,
+    otaTotalBytes: release.firmwareBuffer.length,
+    otaLastPhase: "waiting-ready",
+    otaFailureDetail: null,
+    otaLastStatusMessage: "Waiting for the node to open its OTA writer.",
+  });
+  await writeOtaLog(context, {
+    code: "ota.ready.waiting",
+    message: `Gateway asked ${context.deviceId} to begin OTA for ${release.version}.`,
+    metadata: {
+      timeoutMs: 30_000,
+      sha256: release.sha256 ?? null,
+    },
+  });
 
   await writeChunkedJsonCommand(
     context.controlCharacteristic,
@@ -875,6 +1075,18 @@ async function pushFirmwareOverBle(context, release) {
   );
 
   await readyWaiter;
+  setOtaRuntimeState(context, {
+    otaStatus: "sending",
+    otaLastPhase: "sending",
+    otaBytesSent: 0,
+    otaTotalBytes: release.firmwareBuffer.length,
+    otaFailureDetail: null,
+    otaLastStatusMessage: "Node is ready. Gateway is streaming firmware chunks.",
+  });
+  await writeOtaLog(context, {
+    code: "ota.transfer.started",
+    message: `Gateway started sending firmware ${release.version} to ${context.deviceId}.`,
+  });
 
   for (
     let offset = 0;
@@ -886,10 +1098,48 @@ async function pushFirmwareOverBle(context, release) {
       offset + config.otaChunkSize,
     );
     await writeCharacteristic(context.otaDataCharacteristic, chunk);
+    const sentBytes = Math.min(offset + chunk.length, release.firmwareBuffer.length);
+    setOtaRuntimeState(context, {
+      otaStatus: "sending",
+      otaBytesSent: sentBytes,
+      otaTotalBytes: release.firmwareBuffer.length,
+      otaLastPhase: "sending",
+      otaLastStatusMessage: "Gateway is sending firmware chunks over BLE.",
+    });
+    const milestone = Math.floor((sentBytes / release.firmwareBuffer.length) * 10);
+    if (milestone > context.otaProgressMilestone && milestone > 0 && milestone < 10) {
+      context.otaProgressMilestone = milestone;
+      await writeOtaLog(context, {
+        code: "ota.transfer.progress",
+        message: `Gateway sent ${milestone * 10}% of firmware ${release.version}.`,
+        metadata: {
+          progressPercent: milestone * 10,
+        },
+      });
+    }
     if (offset > 0 && offset % (config.otaChunkSize * 32) === 0) {
       debug(`sent ${offset}/${release.firmwareBuffer.length} bytes to ${context.deviceId}`);
     }
   }
+
+  await writeOtaLog(context, {
+    code: "ota.transfer.completed",
+    message: `Gateway finished sending firmware ${release.version}.`,
+  });
+  setOtaRuntimeState(context, {
+    otaStatus: "waiting-applied",
+    otaBytesSent: release.firmwareBuffer.length,
+    otaTotalBytes: release.firmwareBuffer.length,
+    otaLastPhase: "waiting-applied",
+    otaLastStatusMessage: "Waiting for the node to validate and apply the new firmware.",
+  });
+  await writeOtaLog(context, {
+    code: "ota.apply.waiting",
+    message: `Gateway is waiting for ${context.deviceId} to apply firmware ${release.version}.`,
+    metadata: {
+      timeoutMs: 120_000,
+    },
+  });
 
   await writeChunkedJsonCommand(
     context.controlCharacteristic,
@@ -903,6 +1153,49 @@ async function pushFirmwareOverBle(context, release) {
 
 function handleStatusMessage(context, status) {
   debug(`status from ${context.deviceId ?? context.peripheralId}`, status);
+
+  if (status.type === "ota-status") {
+    context.bootId = status.bootId ?? context.bootId ?? null;
+    context.hardwareId = status.hardwareId ?? context.hardwareId ?? null;
+    context.firmwareVersion = status.firmwareVersion ?? context.firmwareVersion ?? "unknown";
+
+    if (status.phase === "ready") {
+      setOtaRuntimeState(context, {
+        otaStatus: "sending",
+        otaLastPhase: "ready",
+        otaFailureDetail: null,
+        otaLastStatusMessage: status.message ?? "Node is ready for OTA data.",
+      });
+      void writeOtaLog(context, {
+        code: "ota.ready.received",
+        message: status.message ?? `Node ${context.deviceId} is ready for OTA data.`,
+      });
+    } else if (status.phase === "applied") {
+      setOtaRuntimeState(context, {
+        otaStatus: "applied",
+        otaLastPhase: "applied",
+        otaFailureDetail: null,
+        otaBytesSent: context.otaTotalBytes ?? context.otaBytesSent ?? null,
+        otaLastStatusMessage: status.message ?? "Node applied the firmware image.",
+      });
+      void writeOtaLog(context, {
+        code: "ota.applied",
+        message: status.message ?? `Node ${context.deviceId} applied the firmware image.`,
+      });
+    } else if (status.phase === "error") {
+      setOtaRuntimeState(context, {
+        otaStatus: "failed",
+        otaLastPhase: "error",
+        otaFailureDetail: status.message ?? "node-reported-ota-error",
+        otaLastStatusMessage: status.message ?? "Node reported an OTA error.",
+      });
+      void writeOtaLog(context, {
+        level: "error",
+        code: "ota.failed",
+        message: status.message ?? `Node ${context.deviceId} reported an OTA error.`,
+      });
+    }
+  }
 
   for (const listener of context.statusListeners) {
     listener(status);
@@ -966,6 +1259,41 @@ async function registerPeripheral(peripheral) {
     for (const stopPolling of peripheralContext.stopPolling) {
       stopPolling();
     }
+
+    for (const context of deviceContexts.values()) {
+      if (context.peripheralId !== peripheral.id || !context.updateInFlight) {
+        continue;
+      }
+
+      const detail = `BLE link dropped during OTA for ${context.deviceId}.`;
+      context.updateInFlight = false;
+      setOtaRuntimeState(context, {
+        otaStatus: "failed",
+        otaLastPhase: "ble-disconnected",
+        otaFailureDetail: detail,
+        otaLastStatusMessage: detail,
+      });
+      void writeOtaLog(context, {
+        level: "error",
+        code: "ota.failed",
+        message: detail,
+        metadata: {
+          reason: shuttingDown ? "gateway-shutdown" : "ble-disconnected",
+        },
+      });
+      void reportFirmwareStatus(
+        context.deviceId,
+        "failed",
+        context.otaTargetVersion ?? undefined,
+        detail,
+      ).catch((error) => {
+        debug(
+          `failed to report ota disconnect for ${context.deviceId}`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    }
+
     log(`disconnected from ${advertisedName || peripheral.id}`);
     runtimeServer.noteDisconnected({
       ...peripheralInfo,
@@ -1028,20 +1356,14 @@ async function registerPeripheral(peripheral) {
     const telemetryHandler = (buffer) => {
       try {
         const payload = JSON.parse(buffer.toString("utf8"));
-        const context = deviceContexts.get(payload.deviceId) ?? {
-          deviceId: payload.deviceId,
-          firmwareVersion: payload.firmwareVersion ?? "unknown",
-          lastState: null,
-          lastHeartbeatForwardedAt: 0,
-          lastFirmwareCheckAt: 0,
-          updateInFlight: false,
-          statusListeners: new Set(),
-          controlCharacteristic,
-          otaDataCharacteristic,
-          historySyncPromise: null,
-          historySyncedThrough: 0,
-          historyDroppedCount: 0,
-        };
+        const context = deviceContexts.get(payload.deviceId) ?? createDeviceContext(
+          payload.deviceId,
+          {
+            firmwareVersion: payload.firmwareVersion ?? "unknown",
+            controlCharacteristic,
+            otaDataCharacteristic,
+          },
+        );
 
         context.controlCharacteristic = controlCharacteristic;
         context.otaDataCharacteristic = otaDataCharacteristic;
@@ -1049,6 +1371,8 @@ async function registerPeripheral(peripheral) {
         context.address = peripheral.address;
         context.advertisedName = advertisedName || null;
         context.rssi = peripheral.rssi;
+        context.bootId = payload.bootId ?? context.bootId ?? null;
+        context.hardwareId = payload.hardwareId ?? context.hardwareId ?? null;
         deviceContexts.set(payload.deviceId, context);
         void forwardTelemetry(payload);
       } catch (error) {

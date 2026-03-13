@@ -1,6 +1,7 @@
 drop table if exists motion_events;
 drop table if exists device_logs;
 drop table if exists firmware_releases;
+drop table if exists device_sync_state;
 drop table if exists devices;
 
 create table if not exists devices (
@@ -16,6 +17,9 @@ create table if not exists devices (
   site_id text,
   provisioning_state text not null default 'unassigned',
   update_status text not null default 'idle',
+  update_target_version text,
+  update_detail text,
+  update_reported_at timestamptz,
   last_event_received_at timestamptz,
   last_heartbeat_at timestamptz,
   wifi_provisioned_at timestamptz
