@@ -11,16 +11,13 @@ type LogsPageProps = {
 
 export default async function LogsPage({ searchParams }: LogsPageProps) {
   const params = (await searchParams) ?? {};
-  const requestedDeviceId = params.deviceId ?? null;
+  const requestedDeviceId = params.deviceId ?? GATEWAY_LOG_DEVICE_ID;
   const [devices, requestedLogs] = await Promise.all([
     getInitialDevices(),
     getInitialDeviceLogs(requestedDeviceId),
   ]);
-  const selectedDeviceId = requestedDeviceId ?? devices[0]?.id ?? GATEWAY_LOG_DEVICE_ID;
-  const logs =
-    requestedDeviceId === selectedDeviceId
-      ? requestedLogs
-      : await getInitialDeviceLogs(selectedDeviceId);
+  const selectedDeviceId = requestedDeviceId;
+  const logs = requestedLogs;
 
   return (
     <LiveStreamProvider>

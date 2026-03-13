@@ -254,7 +254,9 @@ export function DeviceLogsDashboard({
         <div className={styles.panelHeader}>
           <span>Recent logs</span>
           <span>
-            {selectedDevice
+            {selectedDeviceId === GATEWAY_LOG_DEVICE_ID
+              ? "gateway runtime · newest first · server received time"
+              : selectedDevice
               ? `${selectedDevice.id} · newest first · server received time`
               : "Waiting for device selection"}
           </span>
