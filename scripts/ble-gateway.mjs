@@ -33,6 +33,10 @@ const peripherals = new Map();
 const deviceContexts = new Map();
 let scanningStarted = false;
 
+const CONNECT_TIMEOUT_MS = 10_000;
+const DISCOVERY_TIMEOUT_MS = 10_000;
+const SUBSCRIBE_TIMEOUT_MS = 8_000;
+
 function normalizeUuid(value) {
   return value.replaceAll("-", "").toLowerCase();
 }
@@ -65,6 +69,24 @@ function wrapCallback(fn) {
       resolve(result);
     });
   });
+}
+
+async function withTimeout(label, timeoutMs, promise) {
+  let timeoutId = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 async function startScanning(serviceUuids, allowDuplicates) {
@@ -179,7 +201,11 @@ async function getJson(path) {
 }
 
 async function connectPeripheral(peripheral) {
-  await wrapCallback((callback) => peripheral.connect(callback));
+  await withTimeout(
+    `connect ${peripheral.advertisement?.localName ?? peripheral.id}`,
+    CONNECT_TIMEOUT_MS,
+    wrapCallback((callback) => peripheral.connect(callback)),
+  );
 }
 
 async function disconnectPeripheral(peripheral) {
@@ -191,18 +217,22 @@ async function disconnectPeripheral(peripheral) {
 }
 
 async function discoverRuntimeCharacteristics(peripheral) {
-  const discovered = await new Promise((resolve, reject) =>
-    peripheral.discoverSomeServicesAndCharacteristics(
-      [SERVICE_UUID],
-      [TELEMETRY_UUID, CONTROL_UUID, STATUS_UUID, OTA_DATA_UUID],
-      (error, services, characteristics) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+  const discovered = await withTimeout(
+    `discover runtime characteristics for ${peripheral.advertisement?.localName ?? peripheral.id}`,
+    DISCOVERY_TIMEOUT_MS,
+    new Promise((resolve, reject) =>
+      peripheral.discoverSomeServicesAndCharacteristics(
+        [SERVICE_UUID],
+        [TELEMETRY_UUID, CONTROL_UUID, STATUS_UUID, OTA_DATA_UUID],
+        (error, services, characteristics) => {
+          if (error) {
+            reject(error);
+            return;
+          }
 
-        resolve({ services, characteristics });
-      },
+          resolve({ services, characteristics });
+        },
+      ),
     ),
   );
 
@@ -212,23 +242,64 @@ async function discoverRuntimeCharacteristics(peripheral) {
   }, {});
 }
 
-async function discoverAllServicesAndCharacteristics(peripheral) {
-  return await new Promise((resolve, reject) =>
-    peripheral.discoverAllServicesAndCharacteristics(
-      (error, services, characteristics) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+function mapCharacteristics(characteristics) {
+  return characteristics.reduce((result, characteristic) => {
+    result[characteristic.uuid] = characteristic;
+    return result;
+  }, {});
+}
 
-        resolve({ services, characteristics });
-      },
+async function discoverAllServicesAndCharacteristics(peripheral) {
+  return await withTimeout(
+    `discover all services for ${peripheral.advertisement?.localName ?? peripheral.id}`,
+    DISCOVERY_TIMEOUT_MS,
+    new Promise((resolve, reject) =>
+      peripheral.discoverAllServicesAndCharacteristics(
+        (error, services, characteristics) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve({ services, characteristics });
+        },
+      ),
     ),
   );
 }
 
-async function subscribe(characteristic) {
-  await wrapCallback((callback) => characteristic.subscribe(callback));
+async function loadRuntimeCharacteristics(peripheral, advertisedName) {
+  try {
+    return await discoverRuntimeCharacteristics(peripheral);
+  } catch (error) {
+    const discovered = await discoverAllServicesAndCharacteristics(peripheral);
+    const services = discovered.services.map((service) => service.uuid);
+    const characteristics = mapCharacteristics(discovered.characteristics);
+
+    debug(
+      `full GATT discovery for ${advertisedName || peripheral.id} after runtime lookup failed`,
+      {
+        services,
+        characteristics: discovered.characteristics.map(
+          (characteristic) => characteristic.uuid,
+        ),
+      },
+    );
+
+    if (!services.includes(SERVICE_UUID)) {
+      throw error;
+    }
+
+    return characteristics;
+  }
+}
+
+async function subscribe(characteristic, label) {
+  await withTimeout(
+    `subscribe ${label}`,
+    SUBSCRIBE_TIMEOUT_MS,
+    wrapCallback((callback) => characteristic.subscribe(callback)),
+  );
 }
 
 async function writeCharacteristic(characteristic, value, withoutResponse = false) {
@@ -500,12 +571,24 @@ async function registerPeripheral(peripheral) {
   });
 
   try {
+    debug(`connecting to ${advertisedName || peripheral.id}`);
     await connectPeripheral(peripheral);
-    const characteristics = await discoverRuntimeCharacteristics(peripheral);
+    const characteristics = await loadRuntimeCharacteristics(peripheral, advertisedName);
     const telemetryCharacteristic = characteristics[TELEMETRY_UUID];
     const controlCharacteristic = characteristics[CONTROL_UUID];
     const statusCharacteristic = characteristics[STATUS_UUID];
     const otaDataCharacteristic = characteristics[OTA_DATA_UUID];
+
+    debug(`runtime characteristic selection for ${advertisedName || peripheral.id}`, {
+      telemetry: telemetryCharacteristic?.uuid ?? null,
+      telemetryProperties: telemetryCharacteristic?.properties ?? [],
+      control: controlCharacteristic?.uuid ?? null,
+      controlProperties: controlCharacteristic?.properties ?? [],
+      status: statusCharacteristic?.uuid ?? null,
+      statusProperties: statusCharacteristic?.properties ?? [],
+      otaData: otaDataCharacteristic?.uuid ?? null,
+      otaDataProperties: otaDataCharacteristic?.properties ?? [],
+    });
 
     if (!telemetryCharacteristic || !controlCharacteristic || !statusCharacteristic || !otaDataCharacteristic) {
       throw new Error(
@@ -513,8 +596,11 @@ async function registerPeripheral(peripheral) {
       );
     }
 
-    await subscribe(telemetryCharacteristic);
-    await subscribe(statusCharacteristic);
+    debug(`subscribing to telemetry for ${advertisedName || peripheral.id}`);
+    await subscribe(telemetryCharacteristic, `${advertisedName || peripheral.id} telemetry`);
+    debug(`subscribing to status for ${advertisedName || peripheral.id}`);
+    await subscribe(statusCharacteristic, `${advertisedName || peripheral.id} status`);
+    debug(`subscriptions ready for ${advertisedName || peripheral.id}`);
 
     peripheralContext.connected = true;
 
@@ -565,24 +651,6 @@ async function registerPeripheral(peripheral) {
 
     log(`connected to ${advertisedName || peripheral.id}`);
   } catch (error) {
-    if (nameMatchesPrefix) {
-      try {
-        const discovered = await discoverAllServicesAndCharacteristics(peripheral);
-        debug(
-          `full GATT discovery for ${advertisedName || peripheral.id} after runtime lookup failed`,
-          {
-            services: discovered.services.map((service) => service.uuid),
-            characteristics: discovered.characteristics.map((characteristic) => characteristic.uuid),
-          },
-        );
-      } catch (discoveryError) {
-        debug(
-          `full GATT discovery also failed for ${advertisedName || peripheral.id}`,
-          discoveryError instanceof Error ? discoveryError.message : String(discoveryError),
-        );
-      }
-    }
-
     console.error(`[gateway] failed to connect to ${advertisedName || peripheral.id}`, error);
     peripherals.delete(peripheral.id);
     await disconnectPeripheral(peripheral).catch(() => {});

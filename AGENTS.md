@@ -26,6 +26,7 @@
 - Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`
 - Quick connect command from the main dev machine: `ssh adam-blumoff@192.168.1.174`
 - This host is likely on DHCP, so verify the IP before relying on it long-term.
+- When the Linux gateway repo is being used for testing, keep it as a real GitHub clone and sync changes by pushing from this repo, then pulling on the Linux box before retesting.
 
 ## React / Next Note
 
