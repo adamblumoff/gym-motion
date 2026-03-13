@@ -67,7 +67,7 @@ Each sensor node:
   "delta": 42,
   "timestamp": 123456,
   "bootId": "esp32-a1-5f7c1a91",
-  "firmwareVersion": "0.5.0",
+  "firmwareVersion": "0.5.1",
   "hardwareId": "esp32-a1"
 }
 ```
