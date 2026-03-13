@@ -1,7 +1,10 @@
 import { getDb } from "@/lib/db";
 import { deriveHealthStatus } from "@/lib/device-status";
 import type {
+  BackfillBatchInput,
+  BackfillBatchResult,
   DeviceAssignmentInput,
+  DeviceSyncStateSummary,
   DeviceCleanupResult,
   DeviceLogInput,
   DeviceActivitySummary,
@@ -38,6 +41,7 @@ type DeviceRow = {
 type MotionEventRow = {
   id: string | number;
   device_id: string;
+  sequence: string | number | null;
   state: MotionEventSummary["state"];
   delta: number | null;
   event_timestamp: string | number;
@@ -66,6 +70,7 @@ type FirmwareCheckInput = {
 type DeviceLogRow = {
   id: string | number;
   device_id: string;
+  sequence: string | number | null;
   level: DeviceLogSummary["level"];
   code: string;
   message: string;
@@ -113,6 +118,7 @@ function mapMotionEventRow(row: MotionEventRow): MotionEventSummary {
   return {
     id: toSafeNumber(row.id),
     deviceId: row.device_id,
+    sequence: row.sequence === null ? null : toSafeNumber(row.sequence),
     state: row.state,
     delta: row.delta,
     eventTimestamp: toSafeNumber(row.event_timestamp),
@@ -140,6 +146,7 @@ function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
   return {
     id: toSafeNumber(row.id),
     deviceId: row.device_id,
+    sequence: row.sequence === null ? null : toSafeNumber(row.sequence),
     level: row.level,
     code: row.code,
     message: row.message,
@@ -150,6 +157,16 @@ function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
       row.device_timestamp === null ? null : toSafeNumber(row.device_timestamp),
     metadata: row.metadata ?? null,
     receivedAt: row.received_at.toISOString(),
+  };
+}
+
+function mapDeviceSyncStateRow(row: DeviceSyncStateRow): DeviceSyncStateSummary {
+  return {
+    deviceId: row.device_id,
+    lastAckedSequence: toSafeNumber(row.last_acked_sequence),
+    lastAckedBootId: row.last_acked_boot_id,
+    lastSyncCompletedAt: row.last_sync_completed_at?.toISOString() ?? null,
+    lastOverflowDetectedAt: row.last_overflow_detected_at?.toISOString() ?? null,
   };
 }
 
@@ -257,6 +274,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
     const insertedEvent = await client.query<MotionEventRow>(
       `insert into motion_events (
          device_id,
+         sequence,
          state,
          delta,
          event_timestamp,
@@ -264,10 +282,12 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          firmware_version,
          hardware_id
        )
-       values ($1, $2, $3, $4, $5, $6, $7)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (device_id, sequence) where sequence is not null do nothing
        returning
          id,
          device_id,
+         sequence,
          state,
          delta,
          event_timestamp,
@@ -277,6 +297,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          hardware_id`,
       [
         payload.deviceId,
+        payload.sequence ?? null,
         payload.state,
         delta,
         payload.timestamp,
@@ -286,11 +307,35 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
       ],
     );
 
+    const storedEvent = insertedEvent.rows[0]
+      ? insertedEvent.rows[0]
+      : payload.sequence === undefined
+      ? null
+      : (
+          await client.query<MotionEventRow>(
+            `select
+               id,
+               device_id,
+               sequence,
+               state,
+               delta,
+               event_timestamp,
+               received_at,
+               boot_id,
+               firmware_version,
+               hardware_id
+             from motion_events
+             where device_id = $1 and sequence = $2
+             limit 1`,
+            [payload.deviceId, payload.sequence],
+          )
+        ).rows[0];
+
     await client.query("COMMIT");
 
     return {
       device: mapDeviceRow(upsertedDevice.rows[0]),
-      event: mapMotionEventRow(insertedEvent.rows[0]),
+      event: storedEvent ? mapMotionEventRow(storedEvent) : undefined,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -385,6 +430,7 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
     `select
        id,
        device_id,
+       sequence,
        state,
        delta,
        event_timestamp,
@@ -407,6 +453,7 @@ export async function recordDeviceLog(
   const result = await getDb().query<DeviceLogRow>(
     `insert into device_logs (
        device_id,
+       sequence,
        level,
        code,
        message,
@@ -416,10 +463,12 @@ export async function recordDeviceLog(
        device_timestamp,
        metadata
      )
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     on conflict (device_id, sequence) where sequence is not null do nothing
      returning
        id,
        device_id,
+       sequence,
        level,
        code,
        message,
@@ -431,6 +480,7 @@ export async function recordDeviceLog(
        received_at`,
     [
       input.deviceId,
+      input.sequence ?? null,
       input.level,
       input.code,
       input.message,
@@ -441,8 +491,39 @@ export async function recordDeviceLog(
       input.metadata ?? null,
     ],
   );
+  if (result.rows[0]) {
+    return mapDeviceLogRow(result.rows[0]);
+  }
 
-  return mapDeviceLogRow(result.rows[0]);
+  if (input.sequence === undefined) {
+    throw new Error("Device log insert returned no row.");
+  }
+
+  const existing = await getDb().query<DeviceLogRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       level,
+       code,
+       message,
+       boot_id,
+       firmware_version,
+       hardware_id,
+       device_timestamp,
+       metadata,
+       received_at
+     from device_logs
+     where device_id = $1 and sequence = $2
+     limit 1`,
+    [input.deviceId, input.sequence],
+  );
+
+  if (!existing.rows[0]) {
+    throw new Error("Device log insert conflict returned no existing row.");
+  }
+
+  return mapDeviceLogRow(existing.rows[0]);
 }
 
 export async function listDeviceLogs(options?: {
@@ -456,6 +537,7 @@ export async function listDeviceLogs(options?: {
         `select
            id,
            device_id,
+           sequence,
            level,
            code,
            message,
@@ -475,6 +557,7 @@ export async function listDeviceLogs(options?: {
         `select
            id,
            device_id,
+           sequence,
            level,
            code,
            message,
@@ -503,6 +586,7 @@ export async function listDeviceActivity(options: {
       `select
          id,
          device_id,
+         sequence,
          state,
          delta,
          event_timestamp,
@@ -520,6 +604,7 @@ export async function listDeviceActivity(options: {
       `select
          id,
          device_id,
+         sequence,
          level,
          code,
          message,
@@ -546,6 +631,243 @@ export async function listDeviceActivity(options: {
         new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime(),
     )
     .slice(0, limit);
+}
+
+export async function getDeviceSyncState(
+  deviceId: string,
+): Promise<DeviceSyncStateSummary> {
+  const result = await getDb().query<DeviceSyncStateRow>(
+    `select
+       device_id,
+       last_acked_sequence,
+       last_acked_boot_id,
+       last_sync_completed_at,
+       last_overflow_detected_at
+     from device_sync_state
+     where device_id = $1`,
+    [deviceId],
+  );
+
+  if (!result.rows[0]) {
+    return {
+      deviceId,
+      lastAckedSequence: 0,
+      lastAckedBootId: null,
+      lastSyncCompletedAt: null,
+      lastOverflowDetectedAt: null,
+    };
+  }
+
+  return mapDeviceSyncStateRow(result.rows[0]);
+}
+
+export async function recordBackfillBatch(
+  input: BackfillBatchInput,
+): Promise<BackfillBatchResult> {
+  const client = await getDb().connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const maxTimestamp = input.records.reduce(
+      (highest, record) => Math.max(highest, "timestamp" in record ? record.timestamp ?? 0 : 0),
+      0,
+    );
+    const lastMotionRecord = [...input.records]
+      .reverse()
+      .find((record) => record.kind === "motion");
+
+    await client.query<DeviceRow>(
+      `insert into devices (
+         id,
+         last_state,
+         last_seen_at,
+         last_delta,
+         updated_at,
+         hardware_id,
+         boot_id,
+         firmware_version,
+         provisioning_state,
+         update_status,
+         last_event_received_at
+       )
+       values ($1, $2, $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+       on conflict (id) do update
+       set last_state = case when $2 is null then devices.last_state else excluded.last_state end,
+           last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
+           last_delta = coalesce(excluded.last_delta, devices.last_delta),
+           updated_at = now(),
+           hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
+           boot_id = coalesce(excluded.boot_id, devices.boot_id),
+           firmware_version = coalesce(excluded.firmware_version, devices.firmware_version),
+           provisioning_state = case
+             when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
+             else devices.provisioning_state
+           end,
+           last_event_received_at = now()
+       returning
+         id,
+         last_state,
+         last_seen_at,
+         last_delta,
+         updated_at,
+         hardware_id,
+         boot_id,
+         firmware_version,
+         machine_label,
+         site_id,
+         provisioning_state,
+         update_status,
+         last_heartbeat_at,
+         last_event_received_at`,
+      [
+        input.deviceId,
+        lastMotionRecord?.state ?? "still",
+        maxTimestamp,
+        lastMotionRecord?.delta ?? null,
+        lastMotionRecord?.hardwareId ?? input.records.at(-1)?.hardwareId ?? null,
+        input.bootId ?? input.records.at(-1)?.bootId ?? null,
+        input.records.at(-1)?.firmwareVersion ?? "unknown",
+      ],
+    );
+
+    const insertedEvents = [];
+    const insertedLogs = [];
+
+    for (const record of input.records) {
+      if (record.kind === "motion") {
+        const eventResult = await client.query<MotionEventRow>(
+          `insert into motion_events (
+             device_id,
+             sequence,
+             state,
+             delta,
+             event_timestamp,
+             boot_id,
+             firmware_version,
+             hardware_id
+           )
+           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           on conflict (device_id, sequence) do nothing
+           returning
+             id,
+             device_id,
+             sequence,
+             state,
+             delta,
+             event_timestamp,
+             received_at,
+             boot_id,
+             firmware_version,
+             hardware_id`,
+          [
+            input.deviceId,
+            record.sequence,
+            record.state,
+            record.delta ?? null,
+            record.timestamp,
+            record.bootId ?? input.bootId ?? null,
+            record.firmwareVersion ?? null,
+            record.hardwareId ?? null,
+          ],
+        );
+
+        if (eventResult.rows[0]) {
+          insertedEvents.push(mapMotionEventRow(eventResult.rows[0]));
+        }
+        continue;
+      }
+
+      const logResult = await client.query<DeviceLogRow>(
+        `insert into device_logs (
+           device_id,
+           sequence,
+           level,
+           code,
+           message,
+           boot_id,
+           firmware_version,
+           hardware_id,
+           device_timestamp,
+           metadata
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         on conflict (device_id, sequence) do nothing
+         returning
+           id,
+           device_id,
+           sequence,
+           level,
+           code,
+           message,
+           boot_id,
+           firmware_version,
+           hardware_id,
+           device_timestamp,
+           metadata,
+           received_at`,
+        [
+          input.deviceId,
+          record.sequence,
+          record.level,
+          record.code,
+          record.message,
+          record.bootId ?? input.bootId ?? null,
+          record.firmwareVersion ?? null,
+          record.hardwareId ?? null,
+          record.timestamp ?? null,
+          record.metadata ?? null,
+        ],
+      );
+
+      if (logResult.rows[0]) {
+        insertedLogs.push(mapDeviceLogRow(logResult.rows[0]));
+      }
+    }
+
+    const syncResult = await client.query<DeviceSyncStateRow>(
+      `insert into device_sync_state (
+         device_id,
+         last_acked_sequence,
+         last_acked_boot_id,
+         last_sync_completed_at,
+         last_overflow_detected_at,
+         updated_at
+       )
+       values ($1, $2, $3, now(), $4, now())
+       on conflict (device_id) do update
+       set last_acked_sequence = greatest(device_sync_state.last_acked_sequence, excluded.last_acked_sequence),
+           last_acked_boot_id = excluded.last_acked_boot_id,
+           last_sync_completed_at = now(),
+           last_overflow_detected_at = coalesce(excluded.last_overflow_detected_at, device_sync_state.last_overflow_detected_at),
+           updated_at = now()
+       returning
+         device_id,
+         last_acked_sequence,
+         last_acked_boot_id,
+         last_sync_completed_at,
+         last_overflow_detected_at`,
+      [
+        input.deviceId,
+        input.ackSequence,
+        input.bootId ?? null,
+        input.overflowDetectedAt ?? null,
+      ],
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      insertedEvents,
+      insertedLogs,
+      syncState: mapDeviceSyncStateRow(syncResult.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createOrUpdateDeviceRegistration(
@@ -865,3 +1187,10 @@ export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupRe
     client.release();
   }
 }
+type DeviceSyncStateRow = {
+  device_id: string;
+  last_acked_sequence: string | number;
+  last_acked_boot_id: string | null;
+  last_sync_completed_at: Date | null;
+  last_overflow_detected_at: Date | null;
+};

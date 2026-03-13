@@ -31,6 +31,7 @@ export const ingestPayloadSchema = z.object({
   state: motionStateSchema,
   timestamp: z.number().int().positive(),
   delta: z.number().int().nullable().optional(),
+  sequence: z.number().int().nonnegative().optional(),
   bootId: z.string().trim().min(1).max(120).optional(),
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
   hardwareId: z.string().trim().min(1).max(120).optional(),
@@ -81,6 +82,7 @@ export const deviceLogSchema = z.object({
   level: deviceLogLevelSchema,
   code: z.string().trim().min(1).max(120),
   message: z.string().trim().min(1).max(280),
+  sequence: z.number().int().nonnegative().optional(),
   bootId: z.string().trim().min(1).max(120).optional(),
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
   hardwareId: z.string().trim().min(1).max(120).optional(),
@@ -173,6 +175,7 @@ export type DeviceCleanupResult = {
 export type MotionEventSummary = {
   id: number;
   deviceId: string;
+  sequence: number | null;
   state: MotionState;
   delta: number | null;
   eventTimestamp: number;
@@ -185,6 +188,7 @@ export type MotionEventSummary = {
 export type DeviceLogSummary = {
   id: number;
   deviceId: string;
+  sequence: number | null;
   level: DeviceLogLevel;
   code: string;
   message: string;
@@ -231,6 +235,86 @@ export type GatewayStatusStreamPayload = GatewayHealthResponse;
 
 export type DeviceActivityResponse = {
   activities: DeviceActivitySummary[];
+};
+
+export type DeviceSyncStateSummary = {
+  deviceId: string;
+  lastAckedSequence: number;
+  lastAckedBootId: string | null;
+  lastSyncCompletedAt: string | null;
+  lastOverflowDetectedAt: string | null;
+};
+
+export type BackfillMotionRecordInput = {
+  kind: "motion";
+  sequence: number;
+  state: MotionState;
+  delta: number | null;
+  timestamp: number;
+  bootId?: string;
+  firmwareVersion?: string;
+  hardwareId?: string;
+};
+
+export type BackfillLogRecordInput = {
+  kind: "node-log";
+  sequence: number;
+  level: DeviceLogLevel;
+  code: string;
+  message: string;
+  timestamp?: number;
+  bootId?: string;
+  firmwareVersion?: string;
+  hardwareId?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
+export type BackfillRecordInput = BackfillMotionRecordInput | BackfillLogRecordInput;
+
+export const backfillRecordSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("motion"),
+    sequence: z.number().int().nonnegative(),
+    state: motionStateSchema,
+    delta: z.number().int().nullable().optional(),
+    timestamp: z.number().int().positive(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+  }),
+  z.object({
+    kind: z.literal("node-log"),
+    sequence: z.number().int().nonnegative(),
+    level: deviceLogLevelSchema,
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(280),
+    timestamp: z.number().int().nonnegative().optional(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+    metadata: z.record(z.string(), z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.null(),
+    ])).optional(),
+  }),
+]);
+
+export const backfillBatchSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  records: z.array(backfillRecordSchema).max(500),
+  ackSequence: z.number().int().nonnegative(),
+  overflowDetectedAt: z.string().datetime().optional(),
+});
+
+export type BackfillBatchInput = z.infer<typeof backfillBatchSchema>;
+
+export type BackfillBatchResult = {
+  insertedEvents: MotionEventSummary[];
+  insertedLogs: DeviceLogSummary[];
+  syncState: DeviceSyncStateSummary;
 };
 
 export type FirmwareReleaseSummary = {
@@ -302,6 +386,10 @@ export function parseFirmwareReport(input: unknown) {
 
 export function parseDeviceLog(input: unknown) {
   return deviceLogSchema.safeParse(input);
+}
+
+export function parseBackfillBatch(input: unknown) {
+  return backfillBatchSchema.safeParse(input);
 }
 
 export function mergeLogUpdate(

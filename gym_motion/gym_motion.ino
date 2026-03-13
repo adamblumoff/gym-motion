@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <SPIFFS.h>
 #include <Update.h>
 #include <Preferences.h>
 #include <BLE2902.h>
@@ -15,6 +16,10 @@ const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREF_DEVICE_ID = "device_id";
 const char* PREF_SITE_ID = "site_id";
 const char* PREF_MACHINE_LABEL = "machine_label";
+const char* PREF_NEXT_SEQUENCE = "next_seq";
+const char* PREF_ACKED_SEQUENCE = "acked_seq";
+const char* PREF_HISTORY_OVERFLOW = "hist_ovf";
+const char* PREF_HISTORY_DROPPED = "hist_drop";
 
 const char* PROVISIONING_SERVICE_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c201";
 const char* PROVISIONING_CONTROL_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c202";
@@ -35,6 +40,11 @@ const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
+const size_t HISTORY_MAX_BYTES = 48 * 1024;
+const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
+const size_t HISTORY_SYNC_PAGE_SIZE = 80;
+const char* HISTORY_LOG_PATH = "/history.log";
+const char* HISTORY_TEMP_PATH = "/history.tmp";
 
 int16_t lastX = 0;
 int16_t lastY = 0;
@@ -66,6 +76,11 @@ bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
 bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
+unsigned long nextHistorySequence = 1;
+unsigned long ackedHistorySequence = 0;
+unsigned long lastJournaledSequence = 0;
+unsigned long historyDroppedCount = 0;
+bool historyOverflowed = false;
 
 struct OtaTransferState {
   bool active = false;
@@ -178,6 +193,14 @@ size_t extractJsonSize(const String& json, const char* key, size_t fallback = 0)
   );
 }
 
+unsigned long extractJsonUnsignedLong(
+  const String& json,
+  const char* key,
+  unsigned long fallback = 0
+) {
+  return static_cast<unsigned long>(extractJsonSize(json, key, fallback));
+}
+
 String createHardwareId() {
   const uint64_t chipId = ESP.getEfuseMac();
   char buffer[32];
@@ -215,6 +238,13 @@ void loadProvisioningConfig() {
   configuredMachineLabel = preferences.getString(PREF_MACHINE_LABEL, "");
 }
 
+void loadHistoryConfig() {
+  nextHistorySequence = preferences.getULong(PREF_NEXT_SEQUENCE, 1);
+  ackedHistorySequence = preferences.getULong(PREF_ACKED_SEQUENCE, 0);
+  historyOverflowed = preferences.getBool(PREF_HISTORY_OVERFLOW, false);
+  historyDroppedCount = preferences.getULong(PREF_HISTORY_DROPPED, 0);
+}
+
 void clearProvisioningConfig() {
   preferences.remove(PREF_DEVICE_ID);
   preferences.remove(PREF_SITE_ID);
@@ -235,6 +265,256 @@ void saveProvisioningConfig(
   configuredDeviceId = nextDeviceId;
   configuredSiteId = nextSiteId;
   configuredMachineLabel = nextMachineLabel;
+}
+
+unsigned long allocateHistorySequence() {
+  const unsigned long sequence = nextHistorySequence++;
+  preferences.putULong(PREF_NEXT_SEQUENCE, nextHistorySequence);
+  lastJournaledSequence = sequence;
+  return sequence;
+}
+
+void persistHistoryOverflowState() {
+  preferences.putBool(PREF_HISTORY_OVERFLOW, historyOverflowed);
+  preferences.putULong(PREF_HISTORY_DROPPED, historyDroppedCount);
+}
+
+void replaceHistoryFile(File& tempFile) {
+  tempFile.close();
+  SPIFFS.remove(HISTORY_LOG_PATH);
+  SPIFFS.rename(HISTORY_TEMP_PATH, HISTORY_LOG_PATH);
+}
+
+void compactHistoryAboveSequence(unsigned long keepAfterSequence) {
+  File source = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  if (!source) {
+    return;
+  }
+
+  SPIFFS.remove(HISTORY_TEMP_PATH);
+  File target = SPIFFS.open(HISTORY_TEMP_PATH, FILE_WRITE);
+  if (!target) {
+    source.close();
+    return;
+  }
+
+  while (source.available()) {
+    String line = source.readStringUntil('\n');
+    line.trim();
+
+    if (line.length() == 0) {
+      continue;
+    }
+
+    const unsigned long sequence = extractJsonUnsignedLong(line, "sequence", 0);
+    if (sequence <= keepAfterSequence) {
+      continue;
+    }
+
+    target.println(line);
+  }
+
+  source.close();
+  replaceHistoryFile(target);
+}
+
+void dropOldestHistoryRecords(size_t bytesToDrop) {
+  File source = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  if (!source) {
+    return;
+  }
+
+  SPIFFS.remove(HISTORY_TEMP_PATH);
+  File target = SPIFFS.open(HISTORY_TEMP_PATH, FILE_WRITE);
+  if (!target) {
+    source.close();
+    return;
+  }
+
+  size_t droppedBytes = 0;
+  unsigned long droppedRecords = 0;
+
+  while (source.available()) {
+    String line = source.readStringUntil('\n');
+    line.trim();
+
+    if (line.length() == 0) {
+      continue;
+    }
+
+    const size_t lineBytes = line.length() + 1;
+    if (droppedBytes < bytesToDrop) {
+      droppedBytes += lineBytes;
+      droppedRecords++;
+      continue;
+    }
+
+    target.println(line);
+  }
+
+  source.close();
+  replaceHistoryFile(target);
+
+  if (droppedRecords > 0) {
+    historyOverflowed = true;
+    historyDroppedCount += droppedRecords;
+    persistHistoryOverflowState();
+  }
+}
+
+void enforceHistoryStorageLimit() {
+  File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  if (!history) {
+    return;
+  }
+
+  const size_t currentSize = history.size();
+  history.close();
+
+  if (currentSize <= HISTORY_MAX_BYTES) {
+    return;
+  }
+
+  compactHistoryAboveSequence(ackedHistorySequence);
+
+  history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  if (!history) {
+    return;
+  }
+
+  const size_t compactedSize = history.size();
+  history.close();
+
+  if (compactedSize <= HISTORY_MAX_BYTES) {
+    return;
+  }
+
+  const size_t bytesToDrop =
+    (compactedSize - HISTORY_MAX_BYTES) + HISTORY_RECLAIM_BYTES;
+  dropOldestHistoryRecords(bytesToDrop);
+}
+
+void appendHistoryRecord(const String& recordJson) {
+  File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_APPEND);
+  if (!history) {
+    return;
+  }
+
+  history.println(recordJson);
+  history.close();
+  enforceHistoryStorageLimit();
+}
+
+void journalNodeLog(
+  const String& level,
+  const String& code,
+  const String& message,
+  unsigned long timestamp
+) {
+  const unsigned long sequence = allocateHistorySequence();
+  appendHistoryRecord(
+    "{\"kind\":\"node-log\",\"sequence\":" + String(sequence) +
+    ",\"level\":\"" + escapeJsonString(level) +
+    "\",\"code\":\"" + escapeJsonString(code) +
+    "\",\"message\":\"" + escapeJsonString(message) +
+    "\",\"timestamp\":" + String(timestamp) +
+    ",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}"
+  );
+}
+
+void journalMotionState(const char* state, int delta, unsigned long timestamp) {
+  const unsigned long sequence = allocateHistorySequence();
+  appendHistoryRecord(
+    "{\"kind\":\"motion\",\"sequence\":" + String(sequence) +
+    ",\"state\":\"" + String(state) +
+    "\",\"delta\":" + String(delta) +
+    ",\"timestamp\":" + String(timestamp) +
+    ",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}"
+  );
+}
+
+void acknowledgeHistoryThrough(unsigned long sequence) {
+  if (sequence <= ackedHistorySequence) {
+    return;
+  }
+
+  ackedHistorySequence = sequence;
+  preferences.putULong(PREF_ACKED_SEQUENCE, ackedHistorySequence);
+  compactHistoryAboveSequence(ackedHistorySequence);
+
+  if (historyOverflowed) {
+    historyOverflowed = false;
+    historyDroppedCount = 0;
+    persistHistoryOverflowState();
+  }
+}
+
+void sendHistorySyncComplete(
+  unsigned long latestSequence,
+  unsigned long highWaterSequence,
+  size_t sentCount
+) {
+  String payload =
+    "{\"type\":\"history-sync-complete\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"latestSequence\":" + String(latestSequence) +
+    ",\"highWaterSequence\":" + String(highWaterSequence) +
+    ",\"sentCount\":" + String(sentCount) +
+    ",\"hasMore\":" + String(latestSequence < highWaterSequence ? "true" : "false");
+
+  if (historyOverflowed) {
+    payload += ",\"overflowed\":true,\"droppedCount\":" + String(historyDroppedCount);
+  }
+
+  payload += "}";
+  notifyCharacteristic(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+}
+
+void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
+  File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  const unsigned long highWaterSequence =
+    nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+
+  if (!history) {
+    sendHistorySyncComplete(afterSequence, highWaterSequence, 0);
+    return;
+  }
+
+  size_t sentCount = 0;
+  unsigned long latestSequence = afterSequence;
+
+  while (history.available()) {
+    String line = history.readStringUntil('\n');
+    line.trim();
+
+    if (line.length() == 0) {
+      continue;
+    }
+
+    const unsigned long sequence = extractJsonUnsignedLong(line, "sequence", 0);
+    if (sequence <= afterSequence) {
+      continue;
+    }
+
+    if (sentCount >= maxRecords) {
+      break;
+    }
+
+    notifyCharacteristic(
+      runtimeStatusCharacteristic,
+      runtimeBleConnected,
+      "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"record\":" + line + "}"
+    );
+    latestSequence = sequence;
+    sentCount++;
+  }
+
+  history.close();
+  sendHistorySyncComplete(latestSequence, highWaterSequence, sentCount);
 }
 
 void writeRegister(uint8_t reg, uint8_t value) {
@@ -325,6 +605,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {
   const String payload =
     "{\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"state\":\"" + String(currentDetectedState) +
+    "\",\"sequence\":" + String(lastJournaledSequence) +
     "\",\"delta\":" + String(delta) +
     ",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
@@ -494,6 +775,19 @@ void handleRuntimeControl(const String& payload) {
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
+
+  if (type == "history-sync-begin") {
+    const unsigned long afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
+    const size_t maxRecords = extractJsonSize(payload, "maxRecords", HISTORY_SYNC_PAGE_SIZE);
+    streamHistoryRecords(afterSequence, maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE);
+    return;
+  }
+
+  if (type == "history-ack") {
+    const unsigned long sequence = extractJsonUnsignedLong(payload, "sequence", 0);
+    acknowledgeHistoryThrough(sequence);
+    return;
+  }
 }
 
 class GymServerCallbacks : public BLEServerCallbacks {
@@ -578,6 +872,7 @@ void updateMotionState() {
     if (strcmp(currentDetectedState, "moving") != 0) {
       currentDetectedState = "moving";
       pendingMotionUpdate = true;
+      journalMotionState(currentDetectedState, delta, now);
       Serial.println("Detected -> MOVING");
     }
   } else if (
@@ -586,6 +881,7 @@ void updateMotionState() {
   ) {
     currentDetectedState = "still";
     pendingMotionUpdate = true;
+    journalMotionState(currentDetectedState, delta, now);
     Serial.println("Detected -> STILL");
   }
 
@@ -681,6 +977,7 @@ void setup() {
   hardwareId = createHardwareId();
   bootId = createBootId();
   loadProvisioningConfig();
+  loadHistoryConfig();
 
   if (digitalRead(PROVISION_RESET_PIN) == LOW) {
     Serial.println("Provision reset button held. Clearing saved identity.");
@@ -689,8 +986,11 @@ void setup() {
 
   Wire.begin(SDA_PIN, SCL_PIN);
   setupADXL345();
+  SPIFFS.begin(true);
   setupBle();
   finalizePendingRollback(true);
+  journalNodeLog("info", "device.boot", "BLE node booted.", millis());
+  journalMotionState(currentDetectedState, 0, millis());
 
   Serial.print("Hardware ID: ");
   Serial.println(hardwareId);

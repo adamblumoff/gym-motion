@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  parseBackfillBatch,
   mergeActivityUpdate,
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
@@ -122,6 +123,37 @@ describe("parseDeviceLog", () => {
         reason: "http-begin-failed",
         attempt: 1,
       },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("parseBackfillBatch", () => {
+  it("accepts a mixed backfill payload with ordered node records", () => {
+    const result = parseBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-001",
+      ackSequence: 14,
+      records: [
+        {
+          kind: "motion",
+          sequence: 13,
+          state: "moving",
+          delta: 22,
+          timestamp: 101,
+          bootId: "boot-001",
+        },
+        {
+          kind: "node-log",
+          sequence: 14,
+          level: "warn",
+          code: "history.overflow",
+          message: "History journal dropped records.",
+          timestamp: 102,
+          bootId: "boot-001",
+        },
+      ],
     });
 
     expect(result.success).toBe(true);

@@ -28,6 +28,7 @@ const config = {
   heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),
   firmwareCheckIntervalMs: Number(process.env.GATEWAY_FIRMWARE_CHECK_MS ?? 60_000),
   otaChunkSize: Number(process.env.GATEWAY_OTA_CHUNK_SIZE ?? 128),
+  historySyncPageSize: Number(process.env.GATEWAY_HISTORY_SYNC_PAGE_SIZE ?? 80),
   runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
   runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
 };
@@ -312,6 +313,33 @@ async function getJson(path) {
   return response.json();
 }
 
+async function getDeviceSyncState(deviceId) {
+  const payload = await getJson(`/api/device-sync/${encodeURIComponent(deviceId)}`);
+  return payload.syncState ?? {
+    deviceId,
+    lastAckedSequence: 0,
+    lastAckedBootId: null,
+    lastSyncCompletedAt: null,
+    lastOverflowDetectedAt: null,
+  };
+}
+
+async function postDeviceBackfill({
+  deviceId,
+  bootId,
+  records,
+  ackSequence,
+  overflowDetectedAt,
+}) {
+  return await postJson("/api/device-backfill", {
+    deviceId,
+    bootId,
+    records,
+    ackSequence,
+    overflowDetectedAt,
+  });
+}
+
 async function connectPeripheral(peripheral) {
   await withTimeout(
     `connect ${peripheral.advertisement?.localName ?? peripheral.id}`,
@@ -486,6 +514,131 @@ async function writeCharacteristic(characteristic, value, withoutResponse = fals
   );
 }
 
+async function runHistorySync(context, payload) {
+  if (
+    !context.controlCharacteristic ||
+    !payload.deviceId ||
+    payload.sequence === undefined ||
+    context.historySyncedThrough >= payload.sequence
+  ) {
+    return;
+  }
+
+  if (!context.historySyncPromise) {
+    context.historySyncPromise = (async () => {
+      const syncState = await getDeviceSyncState(payload.deviceId);
+      let afterSequence = syncState.lastAckedSequence ?? 0;
+      let overflowDetectedAt = null;
+
+      while (true) {
+        const records = [];
+        const complete = await new Promise((resolve, reject) => {
+          let timeoutId = null;
+
+          const cleanup = () => {
+            context.statusListeners.delete(listener);
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+            }
+          };
+
+          const listener = (status) => {
+            if (status.type === "history-record" && status.deviceId === payload.deviceId) {
+              if (status.record) {
+                records.push(status.record);
+              }
+              return;
+            }
+
+            if (
+              status.type === "history-sync-complete" &&
+              status.deviceId === payload.deviceId
+            ) {
+              cleanup();
+              resolve(status);
+            }
+          };
+
+          context.statusListeners.add(listener);
+          timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error(`history sync timed out for ${payload.deviceId}`));
+          }, 30_000);
+
+          void writeCharacteristic(
+            context.controlCharacteristic,
+            JSON.stringify({
+              type: "history-sync-begin",
+              afterSequence,
+              maxRecords: config.historySyncPageSize,
+            }),
+          ).catch((error) => {
+            cleanup();
+            reject(error);
+          });
+        });
+
+        if (complete.overflowed) {
+          overflowDetectedAt = new Date().toISOString();
+        }
+
+        const ackSequence =
+          Number.isSafeInteger(complete.latestSequence) && complete.latestSequence >= afterSequence
+            ? complete.latestSequence
+            : afterSequence;
+
+        if (records.length > 0 || ackSequence > syncState.lastAckedSequence || overflowDetectedAt) {
+          await postDeviceBackfill({
+            deviceId: payload.deviceId,
+            bootId: payload.bootId,
+            records,
+            ackSequence,
+            overflowDetectedAt,
+          });
+        }
+
+        await writeCharacteristic(
+          context.controlCharacteristic,
+          JSON.stringify({
+            type: "history-ack",
+            sequence: ackSequence,
+          }),
+        );
+
+        afterSequence = ackSequence;
+        context.historySyncedThrough = ackSequence;
+
+        if (!complete.hasMore || ackSequence >= (complete.highWaterSequence ?? ackSequence)) {
+          break;
+        }
+      }
+
+      if (overflowDetectedAt) {
+        await writeDeviceLog({
+          deviceId: payload.deviceId,
+          level: "warn",
+          code: "history.overflow",
+          message: "The BLE node dropped unsynced history before the gateway reconnected.",
+          bootId: payload.bootId,
+          firmwareVersion: payload.firmwareVersion,
+          hardwareId: payload.hardwareId,
+          metadata: {
+            droppedCount: context.historyDroppedCount ?? null,
+          },
+        });
+      }
+    })()
+      .catch((error) => {
+        console.error(`[gateway] history sync failed for ${payload.deviceId}`, error);
+      })
+      .finally(() => {
+        context.historySyncPromise = null;
+      });
+  }
+
+  await context.historySyncPromise;
+}
+
 function createStatusWaiter(context, predicate, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -538,11 +691,19 @@ async function forwardTelemetry(payload) {
       statusListeners: new Set(),
       controlCharacteristic: null,
       otaDataCharacteristic: null,
+      historySyncPromise: null,
+      historySyncedThrough: 0,
+      historyDroppedCount: 0,
     };
     deviceContexts.set(payload.deviceId, context);
   }
 
   context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion;
+  context.historySyncedThrough = Math.max(
+    context.historySyncedThrough ?? 0,
+    0,
+  );
+  await runHistorySync(context, payload);
   flushNodeLogs(
     payload.deviceId,
     {
@@ -567,6 +728,7 @@ async function forwardTelemetry(payload) {
       state: payload.state,
       timestamp: payload.timestamp,
       delta: payload.delta ?? null,
+      sequence: payload.sequence,
       bootId: payload.bootId,
       firmwareVersion: payload.firmwareVersion,
       hardwareId: payload.hardwareId,
@@ -848,6 +1010,9 @@ async function registerPeripheral(peripheral) {
           statusListeners: new Set(),
           controlCharacteristic,
           otaDataCharacteristic,
+          historySyncPromise: null,
+          historySyncedThrough: 0,
+          historyDroppedCount: 0,
         };
 
         context.controlCharacteristic = controlCharacteristic;
@@ -886,6 +1051,10 @@ async function registerPeripheral(peripheral) {
 
         if (!context) {
           return;
+        }
+
+        if (payload.type === "history-sync-complete") {
+          context.historyDroppedCount = payload.droppedCount ?? 0;
         }
 
         handleStatusMessage(context, payload);
