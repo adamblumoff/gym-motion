@@ -36,6 +36,8 @@ let scanningStarted = false;
 const CONNECT_TIMEOUT_MS = 10_000;
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const SUBSCRIBE_TIMEOUT_MS = 8_000;
+const READ_TIMEOUT_MS = 5_000;
+const POLL_INTERVAL_MS = Number(process.env.GATEWAY_BLE_POLL_MS ?? 2_000);
 
 function normalizeUuid(value) {
   return value.replaceAll("-", "").toLowerCase();
@@ -302,6 +304,71 @@ async function subscribe(characteristic, label) {
   );
 }
 
+async function readCharacteristic(characteristic, label) {
+  return await withTimeout(
+    `read ${label}`,
+    READ_TIMEOUT_MS,
+    wrapCallback((callback) => characteristic.read(callback)),
+  );
+}
+
+function startPollingCharacteristic(characteristic, label, onData) {
+  let inFlight = false;
+
+  const pollOnce = async () => {
+    if (inFlight) {
+      return;
+    }
+
+    inFlight = true;
+
+    try {
+      const buffer = await readCharacteristic(characteristic, label);
+      if (buffer?.length) {
+        onData(buffer);
+      }
+    } catch (error) {
+      debug(`poll read failed for ${label}`, error instanceof Error ? error.message : String(error));
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const intervalId = setInterval(() => {
+    void pollOnce();
+  }, POLL_INTERVAL_MS);
+  intervalId.unref?.();
+  void pollOnce();
+
+  return () => {
+    clearInterval(intervalId);
+  };
+}
+
+async function enableCharacteristicDelivery({
+  characteristic,
+  label,
+  onData,
+  onPollingStarted,
+}) {
+  characteristic.on("data", onData);
+
+  try {
+    await subscribe(characteristic, label);
+    debug(`notify delivery active for ${label}`);
+    return "notify";
+  } catch (error) {
+    debug(
+      `notify subscribe failed for ${label}; falling back to polling`,
+      error instanceof Error ? error.message : String(error),
+    );
+
+    const stopPolling = startPollingCharacteristic(characteristic, label, onData);
+    onPollingStarted(stopPolling);
+    return "poll";
+  }
+}
+
 async function writeCharacteristic(characteristic, value, withoutResponse = false) {
   const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
   await wrapCallback((callback) =>
@@ -562,10 +629,14 @@ async function registerPeripheral(peripheral) {
   const peripheralContext = {
     peripheral,
     connected: false,
+    stopPolling: [],
   };
   peripherals.set(peripheral.id, peripheralContext);
 
   peripheral.on("disconnect", () => {
+    for (const stopPolling of peripheralContext.stopPolling) {
+      stopPolling();
+    }
     log(`disconnected from ${advertisedName || peripheral.id}`);
     peripherals.delete(peripheral.id);
   });
@@ -596,15 +667,7 @@ async function registerPeripheral(peripheral) {
       );
     }
 
-    debug(`subscribing to telemetry for ${advertisedName || peripheral.id}`);
-    await subscribe(telemetryCharacteristic, `${advertisedName || peripheral.id} telemetry`);
-    debug(`subscribing to status for ${advertisedName || peripheral.id}`);
-    await subscribe(statusCharacteristic, `${advertisedName || peripheral.id} status`);
-    debug(`subscriptions ready for ${advertisedName || peripheral.id}`);
-
-    peripheralContext.connected = true;
-
-    telemetryCharacteristic.on("data", (buffer) => {
+    const telemetryHandler = (buffer) => {
       try {
         const payload = JSON.parse(buffer.toString("utf8"));
         const context = deviceContexts.get(payload.deviceId) ?? {
@@ -626,9 +689,9 @@ async function registerPeripheral(peripheral) {
       } catch (error) {
         console.error("[gateway] failed to parse telemetry", error);
       }
-    });
+    };
 
-    statusCharacteristic.on("data", (buffer) => {
+    const statusHandler = (buffer) => {
       try {
         const payload = JSON.parse(buffer.toString("utf8"));
         const deviceId = payload.deviceId;
@@ -647,7 +710,34 @@ async function registerPeripheral(peripheral) {
       } catch (error) {
         console.error("[gateway] failed to parse device status", error);
       }
+    };
+
+    debug(`enabling status delivery for ${advertisedName || peripheral.id}`);
+    const statusDelivery = await enableCharacteristicDelivery({
+      characteristic: statusCharacteristic,
+      label: `${advertisedName || peripheral.id} status`,
+      onData: statusHandler,
+      onPollingStarted: (stopPolling) => {
+        peripheralContext.stopPolling.push(stopPolling);
+      },
     });
+
+    debug(`enabling telemetry delivery for ${advertisedName || peripheral.id}`);
+    const telemetryDelivery = await enableCharacteristicDelivery({
+      characteristic: telemetryCharacteristic,
+      label: `${advertisedName || peripheral.id} telemetry`,
+      onData: telemetryHandler,
+      onPollingStarted: (stopPolling) => {
+        peripheralContext.stopPolling.push(stopPolling);
+      },
+    });
+
+    debug(`runtime delivery ready for ${advertisedName || peripheral.id}`, {
+      statusDelivery,
+      telemetryDelivery,
+    });
+
+    peripheralContext.connected = true;
 
     log(`connected to ${advertisedName || peripheral.id}`);
   } catch (error) {
