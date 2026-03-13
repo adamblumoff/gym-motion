@@ -126,7 +126,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
   async function handleDeviceDelete(deviceId: string) {
     const confirmed = window.confirm(
-      `Delete ${deviceId} from the app? After deletion, hold IO0 while tapping EN so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
+      `Delete ${deviceId} from the app? After deletion, hold IO0 while tapping EN so the sensor clears its saved identity and re-enters BLE setup mode.`,
     );
 
     if (!confirmed) {
@@ -161,13 +161,13 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
     }
 
     setStatus(
-      `Deleted ${deviceId}. Hold IO0 while tapping EN so the sensor clears saved Wi-Fi and re-enters BLE setup mode.`,
+      `Deleted ${deviceId}. Hold IO0 while tapping EN so the sensor clears its saved identity and re-enters BLE setup mode.`,
     );
   }
 
   return (
     <AppShell
-      description="Add sensors, label installed machines, and check provisioning health without leaving the operator console."
+      description="Add BLE nodes, label installed machines, and manage the static metadata the laptop gateway forwards to the backend."
       eyebrow="Setup"
       status={
         <div className={styles.heroStatus}>
@@ -187,8 +187,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
             <div className={styles.panelEyebrow}>Primary action</div>
             <h2 className={styles.panelTitle}>Add or re-add a device</h2>
             <p className={styles.panelCopy}>
-              Provisioning uses Bluetooth from this browser and reuses the last
-              remembered gym Wi-Fi profile when available.
+              Provisioning uses Bluetooth from this browser to save the node
+              identity that the laptop gateway will use later.
             </p>
             <button
               className={styles.primaryButton}
@@ -201,13 +201,12 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
           <section className={styles.panel}>
             <div className={styles.panelEyebrow}>Re-provision</div>
-            <h2 className={styles.panelTitle}>IO0 + EN reset</h2>
+            <h2 className={styles.panelTitle}>Reset stored identity</h2>
             <p className={styles.panelCopy}>
               Deleting a device in the app only removes the server record. To run
               setup again on the same ESP32, hold <strong>IO0</strong> while tapping{" "}
-              <strong>EN</strong> so it clears saved Wi-Fi and returns to BLE setup
-              mode. On some boards that IO0 button can look like <strong>0</strong> or{" "}
-              <strong>100</strong>.
+              <strong>EN</strong> so it clears the saved device identity and
+              returns to BLE setup mode.
             </p>
           </section>
 
@@ -293,7 +292,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                 </label>
 
                 <label className={styles.field}>
-                  <span>Site ID</span>
+                  <span>Zone</span>
                   <input
                     onChange={(event) =>
                       updateDraft(selectedDevice.id, "siteId", event.target.value)

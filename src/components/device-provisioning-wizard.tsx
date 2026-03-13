@@ -1,24 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 
-import type { DeviceSummary, MotionStreamPayload } from "@/lib/motion";
-import type {
-  ProvisioningStatusMessage,
-  StoredWiFiProfile,
-} from "@/lib/provisioning";
+import type { DeviceSummary } from "@/lib/motion";
+import type { ProvisioningStatusMessage } from "@/lib/provisioning";
 import {
   bluetoothSupported,
-  clearStoredWiFiProfile,
   connectProvisioningDevice,
-  loadStoredWiFiProfile,
+  readProvisioningStatus,
   requestProvisioningDevice,
   sendProvisioningCommand,
-  storeWiFiProfile,
   subscribeToProvisioningStatus,
 } from "@/lib/provisioning";
 
-import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-provisioning-wizard.module.css";
 
 type DeviceResponse = {
@@ -31,19 +25,7 @@ type Props = {
   onComplete?: (device: DeviceSummary) => void;
 };
 
-type Step =
-  | "connect"
-  | "bluetooth"
-  | "network"
-  | "details"
-  | "provisioning"
-  | "done";
-
-function uniqueNetworkList(networks: string[]) {
-  return Array.from(new Set(networks.filter(Boolean))).sort((left, right) =>
-    left.localeCompare(right),
-  );
-}
+type Step = "connect" | "bluetooth" | "details" | "provisioning" | "done";
 
 function looksLikeUserDismissedBluetoothDialog(error: unknown) {
   if (!(error instanceof DOMException)) {
@@ -64,177 +46,54 @@ export function DeviceProvisioningWizard({
   const [hardwareId, setHardwareId] = useState("");
   const [firmwareVersion, setFirmwareVersion] = useState("");
   const [deviceName, setDeviceName] = useState("");
-  const [bluetoothConnected, setBluetoothConnected] = useState(false);
-  const [controlCharacteristic, setControlCharacteristic] =
-    useState<BluetoothRemoteGATTCharacteristic | null>(null);
-  const [networks, setNetworks] = useState<string[]>([]);
-  const [selectedSsid, setSelectedSsid] = useState("");
-  const [wifiPassword, setWifiPassword] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [machineLabel, setMachineLabel] = useState("");
   const [siteId, setSiteId] = useState("");
-  const [rememberWifi, setRememberWifi] = useState(true);
-  const [pendingProvisionDeviceId, setPendingProvisionDeviceId] = useState<
-    string | null
-  >(null);
+  const [bluetoothConnected, setBluetoothConnected] = useState(false);
+  const [controlCharacteristic, setControlCharacteristic] =
+    useState<BluetoothRemoteGATTCharacteristic | null>(null);
   const [completedDevice, setCompletedDevice] = useState<DeviceSummary | null>(null);
-  const [storedProfile, setStoredProfile] = useState<StoredWiFiProfile | null>(
-    null,
-  );
-  const awaitingDeviceReconnect = useRef(false);
-  const connectAttemptId = useRef(0);
-  const { subscribeToMotion } = useLiveStream();
 
-  useEffect(() => {
-    setStoredProfile(loadStoredWiFiProfile());
-  }, []);
-
-  useEffect(() => {
-    if (!storedProfile) {
-      return;
-    }
-
-    if (!siteId) {
-      setSiteId(storedProfile.siteId);
-    }
-
-    if (!wifiPassword) {
-      setWifiPassword(storedProfile.password);
-    }
-  }, [siteId, storedProfile, wifiPassword]);
-
-  useEffect(() => {
-    if (!storedProfile) {
-      return;
-    }
-
-    if (networks.includes(storedProfile.ssid) && !selectedSsid) {
-      setSelectedSsid(storedProfile.ssid);
-    }
-  }, [networks, selectedSsid, storedProfile]);
-
-  useEffect(() => {
-    return subscribeToMotion((payload: MotionStreamPayload) => {
-      if (!pendingProvisionDeviceId) {
-        return;
-      }
-
-      if (
-        payload.device.id === pendingProvisionDeviceId &&
-        payload.device.provisioningState === "provisioned"
-      ) {
-        awaitingDeviceReconnect.current = false;
-        setCompletedDevice(payload.device);
-        setStep("done");
-        setStatus(`${payload.device.id} is online and provisioned.`);
-      }
-    });
-  }, [pendingProvisionDeviceId, subscribeToMotion]);
-
-  const networkChoices = useMemo(() => uniqueNetworkList(networks), [networks]);
-
-  async function handleProvisioningMessage(message: ProvisioningStatusMessage) {
+  function handleProvisioningMessage(message: ProvisioningStatusMessage) {
     switch (message.type) {
       case "ready":
         setHardwareId(message.hardwareId);
         setFirmwareVersion(message.firmwareVersion);
         setDeviceName(message.deviceName);
-        setStatus("Device connected. Scanning nearby networks…");
-        setStep("network");
-        break;
-      case "scan-result":
-        setNetworks((current) => uniqueNetworkList([...current, message.ssid]));
-        break;
-      case "scan-complete":
-        setStatus("Choose the gym Wi-Fi and continue.");
+        setDeviceId((currentDeviceId) => currentDeviceId || message.hardwareId);
+        setStatus("Bluetooth connected. Add the device metadata and save.");
+        setStep("details");
         break;
       case "phase":
-        if (message.phase === "restarting") {
-          awaitingDeviceReconnect.current = true;
-        }
         setStatus(message.message);
         break;
       case "provisioned":
-        awaitingDeviceReconnect.current = true;
-        setPendingProvisionDeviceId(message.deviceId);
-        setStep("provisioning");
-        setStatus(
-          `${message.deviceId} saved its Wi-Fi settings. Waiting for it to appear online…`,
-        );
+        setStatus(`${message.deviceId} saved its Bluetooth gateway identity.`);
         break;
       case "error":
-        awaitingDeviceReconnect.current = false;
         setError(message.message);
+        setStep("details");
         break;
     }
   }
 
-  function handleBackToConnect() {
-    connectAttemptId.current += 1;
-    setError(null);
-    setStatus("Reconnect when you are ready.");
-    setBluetoothConnected(false);
-    setControlCharacteristic(null);
-    setStep("connect");
-  }
-
-  function handleBackToNetwork() {
-    setError(null);
-    setStatus("Review the Wi-Fi details and continue when ready.");
-    setStep("network");
-  }
-
   async function handleConnect() {
-    const attemptId = connectAttemptId.current + 1;
-    connectAttemptId.current = attemptId;
-
     try {
       setError(null);
-      awaitingDeviceReconnect.current = false;
       setStep("bluetooth");
       setStatus("Opening the Bluetooth chooser…");
       const device = await requestProvisioningDevice();
-
-      if (connectAttemptId.current !== attemptId) {
-        return;
-      }
-
-      setStatus("Connecting to the sensor over Bluetooth…");
       const connection = await connectProvisioningDevice(device);
+      const initialStatus = await readProvisioningStatus(connection.status);
 
-      if (connectAttemptId.current !== attemptId) {
-        return;
-      }
-
-      const cleanup = subscribeToProvisioningStatus(
-        connection.status,
-        (message) => {
-          if (connectAttemptId.current !== attemptId) {
-            return;
-          }
-          void handleProvisioningMessage(message);
-        },
-      );
+      const cleanup = subscribeToProvisioningStatus(connection.status, handleProvisioningMessage);
 
       device.addEventListener(
         "gattserverdisconnected",
         () => {
           cleanup();
-
-          if (connectAttemptId.current !== attemptId) {
-            return;
-          }
-
           setBluetoothConnected(false);
           setControlCharacteristic(null);
-
-          if (awaitingDeviceReconnect.current) {
-            setStatus(
-              "The sensor dropped Bluetooth so it can reboot into Wi-Fi mode. Waiting for it to appear online…",
-            );
-            return;
-          }
-
           setStatus("Bluetooth disconnected. Reconnect to continue.");
         },
         { once: true },
@@ -242,16 +101,12 @@ export function DeviceProvisioningWizard({
 
       setBluetoothConnected(true);
       setControlCharacteristic(connection.control);
-      setStatus("Connected over Bluetooth. Asking the device to scan Wi-Fi…");
+      setStatus("Connected over Bluetooth. Waiting for device identity…");
 
-      await sendProvisioningCommand(connection.control, {
-        type: "scan",
-      });
-    } catch (nextError) {
-      if (connectAttemptId.current !== attemptId) {
-        return;
+      if (initialStatus) {
+        handleProvisioningMessage(initialStatus);
       }
-
+    } catch (nextError) {
       if (looksLikeUserDismissedBluetoothDialog(nextError)) {
         setStep("connect");
         setStatus("Bluetooth chooser closed. Connect again when you are ready.");
@@ -265,16 +120,6 @@ export function DeviceProvisioningWizard({
     }
   }
 
-  async function handleContinueToDetails() {
-    if (!selectedSsid || !wifiPassword) {
-      setError("Choose a Wi-Fi network and enter its password.");
-      return;
-    }
-
-    setError(null);
-    setStep("details");
-  }
-
   async function handleProvision() {
     if (!controlCharacteristic) {
       setError("Bluetooth is not connected.");
@@ -282,13 +127,13 @@ export function DeviceProvisioningWizard({
     }
 
     if (!deviceId || !siteId) {
-      setError("Device ID and site ID are required.");
+      setError("Device ID and zone are required.");
       return;
     }
 
     setError(null);
     setStep("provisioning");
-    setStatus("Registering the device in the app and sending Wi-Fi settings…");
+    setStatus("Registering the device in the app and saving its BLE identity…");
 
     try {
       const response = await fetch("/api/devices", {
@@ -310,42 +155,18 @@ export function DeviceProvisioningWizard({
       }
 
       const data = (await response.json()) as DeviceResponse;
-      void data;
 
-      if (rememberWifi) {
-        storeWiFiProfile({
-          ssid: selectedSsid,
-          password: wifiPassword,
-          siteId,
-        });
-        setStoredProfile({
-          ssid: selectedSsid,
-          password: wifiPassword,
-          siteId,
-        });
-      }
-
-      awaitingDeviceReconnect.current = true;
       await sendProvisioningCommand(controlCharacteristic, {
         type: "provision",
         deviceId,
         siteId,
-        wifiSsid: selectedSsid,
-        wifiPassword,
+        machineLabel: machineLabel || null,
       });
 
-      setPendingProvisionDeviceId(deviceId);
-      setStatus("Waiting for the device to join Wi-Fi and report online…");
+      setCompletedDevice(data.device);
+      setStep("done");
+      setStatus(`${deviceId} is ready for the BLE gateway.`);
     } catch (nextError) {
-      if (awaitingDeviceReconnect.current) {
-        setPendingProvisionDeviceId(deviceId);
-        setStatus(
-          "The sensor is restarting into Wi-Fi mode. Waiting for it to appear online…",
-        );
-        return;
-      }
-
-      awaitingDeviceReconnect.current = false;
       console.error(nextError);
       setError("Provisioning failed before the device finished setup.");
       setStep("details");
@@ -361,27 +182,23 @@ export function DeviceProvisioningWizard({
           </div>
           <h2 className={styles.title}>
             {mode === "first-device"
-              ? "Set up your first Gym Motion sensor"
-              : "Pair another device over Bluetooth"}
+              ? "Set up your first BLE Gym Motion sensor"
+              : "Pair another BLE node"}
           </h2>
         </div>
         <div className={styles.badges}>
           <span className={styles.badge} data-state={bluetoothConnected ? "live" : "idle"}>
             {bluetoothConnected ? "BLE connected" : "Chrome / Edge only"}
           </span>
-          {storedProfile ? (
-            <span className={styles.badge}>Saved Wi-Fi ready</span>
-          ) : null}
         </div>
       </div>
 
       <div className={styles.steps}>
         <span data-active={step === "connect"}>1. Connect</span>
         <span data-active={step === "bluetooth"}>2. Bluetooth</span>
-        <span data-active={step === "network"}>3. Network</span>
-        <span data-active={step === "details"}>4. Details</span>
+        <span data-active={step === "details"}>3. Details</span>
         <span data-active={step === "provisioning" || step === "done"}>
-          5. Provision
+          4. Save
         </span>
       </div>
 
@@ -392,8 +209,8 @@ export function DeviceProvisioningWizard({
         <div className={styles.panel}>
           <p className={styles.copy}>
             This setup flow uses Web Bluetooth, so the installer needs Chrome or
-            Edge over HTTPS. Click once to pick the unconfigured device from the
-            Bluetooth chooser.
+            Edge over HTTPS. Pick the node from the Bluetooth chooser, then save
+            the device ID and zone metadata the gateway will use later.
           </p>
           <div className={styles.actions}>
             <button
@@ -421,12 +238,19 @@ export function DeviceProvisioningWizard({
       {step === "bluetooth" ? (
         <div className={styles.panel}>
           <p className={styles.copy}>
-            We are connecting to the sensor over Bluetooth and asking it to scan
-            nearby Wi-Fi networks. This can take a few seconds.
+            We are connecting to the sensor over Bluetooth and waiting for its
+            identity packet. This usually takes a second or two.
           </p>
           <div className={styles.waitingPulse} />
           <div className={styles.actions}>
-            <button className={styles.secondaryButton} onClick={handleBackToConnect} type="button">
+            <button
+              className={styles.secondaryButton}
+              onClick={() => {
+                setStep("connect");
+                setStatus("Reconnect when you are ready.");
+              }}
+              type="button"
+            >
               Back
             </button>
             {onCancel ? (
@@ -438,7 +262,7 @@ export function DeviceProvisioningWizard({
         </div>
       ) : null}
 
-      {step === "network" ? (
+      {step === "details" ? (
         <div className={styles.panel}>
           <div className={styles.summaryGrid}>
             <div>
@@ -451,72 +275,10 @@ export function DeviceProvisioningWizard({
             </div>
             <div>
               <span className={styles.summaryLabel}>Firmware</span>
-              <strong>{firmwareVersion || "0.4.3"}</strong>
+              <strong>{firmwareVersion || "unknown"}</strong>
             </div>
           </div>
 
-          <label className={styles.field}>
-            <span>Gym Wi-Fi</span>
-            <select
-              onChange={(event) => setSelectedSsid(event.target.value)}
-              value={selectedSsid}
-            >
-              <option value="">Select a network</option>
-              {networkChoices.map((network) => (
-                <option key={network} value={network}>
-                  {network}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className={styles.field}>
-            <span>Password</span>
-            <input
-              onChange={(event) => setWifiPassword(event.target.value)}
-              type="password"
-              value={wifiPassword}
-            />
-          </label>
-
-          <label className={styles.toggle}>
-            <input
-              checked={rememberWifi}
-              onChange={(event) => setRememberWifi(event.target.checked)}
-              type="checkbox"
-            />
-            <span>Remember this Wi-Fi on this installer computer</span>
-          </label>
-
-          <div className={styles.actions}>
-            <button className={styles.primaryButton} onClick={() => void handleContinueToDetails()} type="button">
-              Next
-            </button>
-            <button
-              className={styles.secondaryButton}
-              onClick={handleBackToConnect}
-              type="button"
-            >
-              Back
-            </button>
-            {storedProfile ? (
-              <button
-                className={styles.secondaryButton}
-                onClick={() => {
-                  clearStoredWiFiProfile();
-                  setStoredProfile(null);
-                }}
-                type="button"
-              >
-                Clear saved Wi-Fi
-              </button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {step === "details" ? (
-        <div className={styles.panel}>
           <div className={styles.formGrid}>
             <label className={styles.field}>
               <span>Device ID</span>
@@ -535,10 +297,10 @@ export function DeviceProvisioningWizard({
               />
             </label>
             <label className={styles.field}>
-              <span>Site ID</span>
+              <span>Zone</span>
               <input
                 onChange={(event) => setSiteId(event.target.value)}
-                placeholder="gym-dallas"
+                placeholder="weight-floor-a"
                 value={siteId}
               />
             </label>
@@ -550,9 +312,16 @@ export function DeviceProvisioningWizard({
 
           <div className={styles.actions}>
             <button className={styles.primaryButton} onClick={() => void handleProvision()} type="button">
-              Save and provision
+              Save device
             </button>
-            <button className={styles.secondaryButton} onClick={handleBackToNetwork} type="button">
+            <button
+              className={styles.secondaryButton}
+              onClick={() => {
+                setStep("connect");
+                setStatus("Reconnect when you are ready.");
+              }}
+              type="button"
+            >
               Back
             </button>
           </div>
@@ -562,9 +331,9 @@ export function DeviceProvisioningWizard({
       {step === "provisioning" ? (
         <div className={styles.panel}>
           <p className={styles.copy}>
-            The browser has handed Wi-Fi settings to the device over Bluetooth.
-            Now we are waiting for it to restart, join the network, and show up in
-            the app as a provisioned device.
+            The browser is saving device metadata over Bluetooth. Once this
+            finishes, the node is ready for the laptop gateway to discover it and
+            forward motion updates to the backend.
           </p>
           <div className={styles.waitingPulse} />
         </div>
@@ -573,8 +342,9 @@ export function DeviceProvisioningWizard({
       {step === "done" ? (
         <div className={styles.panel}>
           <p className={styles.copy}>
-            The device is online. It should now appear in the live dashboard, logs,
-            and OTA rollout controls like every other provisioned sensor.
+            The device metadata is saved. Start the BLE gateway and the node will
+            appear in the live dashboard as soon as the gateway receives motion or
+            keepalive packets.
           </p>
           <div className={styles.actions}>
             {onComplete ? (

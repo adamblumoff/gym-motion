@@ -40,6 +40,7 @@ declare interface BluetoothRemoteGATTService {
 
 declare interface BluetoothRemoteGATTCharacteristic extends EventTarget {
   value?: DataView;
+  readValue(): Promise<DataView>;
   startNotifications(): Promise<BluetoothRemoteGATTCharacteristic>;
   writeValueWithResponse(value: BufferSource): Promise<void>;
 }

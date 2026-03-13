@@ -17,9 +17,9 @@ export function HomeShell({ initialDevices, initialEvents }: HomeShellProps) {
   if (devices.length === 0) {
     return (
       <AppShell
-        description="No device has checked in yet, so the app starts in provisioning mode. Pair the sensor over Bluetooth, choose the gym Wi-Fi, and the live board will take over automatically."
+        description="No device has checked in yet. Pair a sensor over Bluetooth to save its identity, then start the laptop BLE gateway so motion updates can flow into the live board."
         eyebrow="First device"
-        title="Provision the first sensor"
+        title="Add the first BLE node"
       >
         <DeviceProvisioningWizard
           mode="first-device"

@@ -11,12 +11,15 @@
     "db:setup": "bun run scripts/setup-db.ts",
     "db:migrate:timestamps": "bun run scripts/migrate-timestamps.ts",
     "seed": "bun run scripts/send-test-event.ts",
+    "gateway": "node scripts/ble-gateway.mjs",
     "firmware:build": "./scripts/build-firmware.sh",
+    "firmware:sync:windows": "./scripts/sync-windows-firmware.sh",
     "firmware:upload": "./scripts/upload-firmware.sh",
     "firmware:publish": "bun run scripts/publish-firmware.ts",
     "device:purge": "bun run scripts/purge-device.ts"
   },
   "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
     "@aws-sdk/client-s3": "^3.1003.0",
     "@aws-sdk/s3-request-presigner": "^3.1003.0",
     "next": "16.1.6",
@@ -40,6 +43,8 @@
     "unrs-resolver"
   ],
   "trustedDependencies": [
+    "@abandonware/bluetooth-hci-socket",
+    "@abandonware/noble",
     "sharp",
     "unrs-resolver"
   ]

@@ -23,6 +23,9 @@
 
 - Future environment strategy options and trade-offs are documented in `/home/adamblumoff/gym-motion/docs/development-environments.md`.
 - Read this before changing how local dev, staging, production DBs, or production devices interact.
+- Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`
+- Quick connect command from the main dev machine: `ssh adam-blumoff@192.168.1.174`
+- This host is likely on DHCP, so verify the IP before relying on it long-term.
 
 ## React / Next Note
 
