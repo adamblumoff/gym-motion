@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  mergeGatewayDeviceUpdate,
   mergeLogUpdate,
   parseDeviceLog,
   parseDeviceAssignment,
@@ -160,5 +161,70 @@ describe("mergeLogUpdate", () => {
     );
 
     expect(merged.map((item) => item.id)).toEqual([2, 1]);
+  });
+});
+
+describe("mergeGatewayDeviceUpdate", () => {
+  it("replaces a device snapshot by id and keeps the newest snapshot first", () => {
+    const merged = mergeGatewayDeviceUpdate(
+      [
+        {
+          id: "stack-001",
+          lastState: "still",
+          lastSeenAt: 10,
+          lastDelta: 0,
+          updatedAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+          hardwareId: "node-001",
+          bootId: "boot-001",
+          firmwareVersion: "0.5.0",
+          machineLabel: "Row 1",
+          siteId: "north",
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          lastHeartbeatAt: null,
+          lastEventReceivedAt: null,
+          healthStatus: "online",
+          gatewayConnectionState: "connected",
+          peripheralId: "peripheral-001",
+          gatewayLastAdvertisementAt: null,
+          gatewayLastConnectedAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+          gatewayLastDisconnectedAt: null,
+          gatewayLastTelemetryAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+          gatewayDisconnectReason: null,
+          advertisedName: "GymMotion-000001",
+          lastRssi: -44,
+        },
+      ],
+      {
+        id: "stack-001",
+        lastState: "moving",
+        lastSeenAt: 99,
+        lastDelta: 21,
+        updatedAt: new Date("2026-03-06T05:01:00.000Z").toISOString(),
+        hardwareId: "node-001",
+        bootId: "boot-001",
+        firmwareVersion: "0.5.0",
+        machineLabel: "Row 1",
+        siteId: "north",
+        provisioningState: "provisioned",
+        updateStatus: "idle",
+        lastHeartbeatAt: null,
+        lastEventReceivedAt: null,
+        healthStatus: "online",
+        gatewayConnectionState: "connected",
+        peripheralId: "peripheral-001",
+        gatewayLastAdvertisementAt: null,
+        gatewayLastConnectedAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+        gatewayLastDisconnectedAt: null,
+        gatewayLastTelemetryAt: new Date("2026-03-06T05:01:00.000Z").toISOString(),
+        gatewayDisconnectReason: null,
+        advertisedName: "GymMotion-000001",
+        lastRssi: -40,
+      },
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.lastState).toBe("moving");
+    expect(merged[0]?.lastSeenAt).toBe(99);
   });
 });

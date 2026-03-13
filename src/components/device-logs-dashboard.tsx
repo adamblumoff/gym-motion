@@ -8,10 +8,9 @@ import { buildGatewayUrl, fetchGatewayJson } from "@/lib/gateway-connection";
 import type {
   DeviceLogStreamPayload,
   DeviceLogSummary,
-  DeviceSummary,
-  MotionStreamPayload,
+  GatewayRuntimeDeviceSummary,
 } from "@/lib/motion";
-import { mergeDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
+import { mergeGatewayDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
 import { GatewayConnectionPanel } from "./gateway-connection-panel";
@@ -32,7 +31,7 @@ function formatMetadata(metadata: DeviceLogSummary["metadata"]) {
 }
 
 type DeviceLogsDashboardProps = {
-  initialDevices: DeviceSummary[];
+  initialDevices: GatewayRuntimeDeviceSummary[];
   initialLogs: DeviceLogSummary[];
   initialSelectedDeviceId: string | null;
 };
@@ -43,14 +42,15 @@ export function DeviceLogsDashboard({
   initialSelectedDeviceId,
 }: DeviceLogsDashboardProps) {
   const router = useRouter();
-  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [devices, setDevices] = useState<GatewayRuntimeDeviceSummary[]>(initialDevices);
   const [logs, setLogs] = useState<DeviceLogSummary[]>(initialLogs);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
     initialSelectedDeviceId ?? initialDevices[0]?.id ?? null,
   );
   const [status, setStatus] = useState<string | null>(null);
   const { gatewayBaseUrl } = useGatewayConnection();
-  const { liveStatus, subscribeToDeviceLogs, subscribeToMotion } = useLiveStream();
+  const { liveStatus, subscribeToDeviceLogs, subscribeToGatewayDevices } =
+    useLiveStream();
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,
@@ -65,9 +65,9 @@ export function DeviceLogsDashboard({
     let cancelled = false;
 
     async function loadDevices() {
-      const payload = await fetchGatewayJson<{ devices: DeviceSummary[] }>(
+      const payload = await fetchGatewayJson<{ devices: GatewayRuntimeDeviceSummary[] }>(
         gatewayBaseUrl,
-        "/api/devices",
+        "/api/gateway/devices",
       );
 
       if (cancelled) {
@@ -132,8 +132,10 @@ export function DeviceLogsDashboard({
   }, [gatewayBaseUrl, initialLogs, selectedDeviceId]);
 
   useEffect(() => {
-    const unsubscribeMotion = subscribeToMotion((payload: MotionStreamPayload) => {
-      setDevices((currentDevices) => mergeDeviceUpdate(currentDevices, payload.device));
+    const unsubscribeGatewayDevices = subscribeToGatewayDevices((payload) => {
+      setDevices((currentDevices) =>
+        mergeGatewayDeviceUpdate(currentDevices, payload.device),
+      );
     });
 
     const unsubscribeLogs = subscribeToDeviceLogs((payload: DeviceLogStreamPayload) => {
@@ -143,10 +145,10 @@ export function DeviceLogsDashboard({
     });
 
     return () => {
-      unsubscribeMotion();
+      unsubscribeGatewayDevices();
       unsubscribeLogs();
     };
-  }, [selectedDeviceId, subscribeToDeviceLogs, subscribeToMotion]);
+  }, [selectedDeviceId, subscribeToDeviceLogs, subscribeToGatewayDevices]);
 
   function handleDeviceChange(nextDeviceId: string) {
     setSelectedDeviceId(nextDeviceId);
@@ -195,7 +197,7 @@ export function DeviceLogsDashboard({
           </div>
         </div>
 
-        <div className={styles.liveBadge} data-live={liveStatus === "Live"}>
+        <div className={styles.liveBadge} data-live={liveStatus === "Gateway live"}>
           {liveStatus}
         </div>
       </section>
@@ -209,7 +211,7 @@ export function DeviceLogsDashboard({
                 <strong>{selectedDevice.machineLabel ?? selectedDevice.id}</strong>
               </div>
               <span className={styles.healthBadge} data-health={selectedDevice.healthStatus}>
-                {selectedDevice.healthStatus}
+                {selectedDevice.gatewayConnectionState}
               </span>
             </div>
             <div className={styles.summaryMeta}>

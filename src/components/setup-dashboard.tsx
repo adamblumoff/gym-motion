@@ -4,8 +4,8 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
 import { fetchGatewayJson, buildGatewayUrl } from "@/lib/gateway-connection";
-import type { DeviceSummary, MotionStreamPayload } from "@/lib/motion";
-import { mergeDeviceUpdate } from "@/lib/motion";
+import type { GatewayRuntimeDeviceSummary } from "@/lib/motion";
+import { mergeGatewayDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
 import { GatewayConnectionPanel } from "./gateway-connection-panel";
@@ -22,7 +22,7 @@ type Drafts = Record<
   }
 >;
 
-function createDrafts(devices: DeviceSummary[]): Drafts {
+function createDrafts(devices: GatewayRuntimeDeviceSummary[]): Drafts {
   return Object.fromEntries(
     devices.map((device) => [
       device.id,
@@ -36,18 +36,18 @@ function createDrafts(devices: DeviceSummary[]): Drafts {
 }
 
 type SetupDashboardProps = {
-  initialDevices: DeviceSummary[];
+  initialDevices: GatewayRuntimeDeviceSummary[];
 };
 
 export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
-  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [devices, setDevices] = useState<GatewayRuntimeDeviceSummary[]>(initialDevices);
   const [drafts, setDrafts] = useState<Drafts>(() => createDrafts(initialDevices));
   const [status, setStatus] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
     initialDevices[0]?.id ?? null,
   );
   const { gatewayBaseUrl } = useGatewayConnection();
-  const { subscribeToMotion } = useLiveStream();
+  const { gatewayHealth, liveStatus, subscribeToGatewayDevices } = useLiveStream();
 
   useEffect(() => {
     if (!gatewayBaseUrl) {
@@ -57,9 +57,9 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
     let cancelled = false;
 
     async function loadDevices() {
-      const payload = await fetchGatewayJson<{ devices: DeviceSummary[] }>(
+      const payload = await fetchGatewayJson<{ devices: GatewayRuntimeDeviceSummary[] }>(
         gatewayBaseUrl,
-        "/api/devices",
+        "/api/gateway/devices",
       );
 
       if (cancelled) {
@@ -86,9 +86,9 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
   }, [gatewayBaseUrl]);
 
   useEffect(() => {
-    return subscribeToMotion((payload: MotionStreamPayload) => {
+    return subscribeToGatewayDevices((payload) => {
       setDevices((currentDevices) =>
-        mergeDeviceUpdate(currentDevices, payload.device),
+        mergeGatewayDeviceUpdate(currentDevices, payload.device),
       );
       setSelectedDeviceId((currentSelectedId) =>
         currentSelectedId ?? payload.device.id,
@@ -102,7 +102,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
         },
       }));
     });
-  }, [subscribeToMotion]);
+  }, [subscribeToGatewayDevices]);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,
@@ -110,7 +110,9 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
   );
 
   const selectedDraft = selectedDevice ? drafts[selectedDevice.id] : null;
-  const onlineCount = devices.filter((device) => device.healthStatus === "online").length;
+  const onlineCount = devices.filter(
+    (device) => device.gatewayConnectionState === "connected",
+  ).length;
   const fleetStatus =
     devices.length === 1
       ? "1 device tracked"
@@ -156,9 +158,27 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
       return;
     }
 
-    const data = (await response.json()) as { device: DeviceSummary };
+    const data = (await response.json()) as {
+      device: Pick<
+        GatewayRuntimeDeviceSummary,
+        "id" | "machineLabel" | "siteId" | "hardwareId" | "provisioningState" | "updateStatus"
+      >;
+    };
 
-    setDevices((currentDevices) => mergeDeviceUpdate(currentDevices, data.device));
+    setDevices((currentDevices) =>
+      currentDevices.map((device) =>
+        device.id === deviceId
+          ? {
+              ...device,
+              machineLabel: data.device.machineLabel ?? null,
+              siteId: data.device.siteId ?? null,
+              hardwareId: data.device.hardwareId ?? null,
+              provisioningState: data.device.provisioningState,
+              updateStatus: data.device.updateStatus,
+            }
+          : device,
+      ),
+    );
     setStatus(`Saved ${deviceId}.`);
   }
 
@@ -199,10 +219,17 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
   return (
     <AppShell
-      description="Connect to a gateway on this Wi-Fi network, review discovered BLE-only sensor nodes, and manage the metadata that gateway uses for the local live board."
+      description="Review what the local Linux gateway is seeing over BLE and manage the metadata it uses for the live board."
       eyebrow="Setup"
       status={
         <div className={styles.heroStatus}>
+          <span className={styles.heroStatusLabel}>Gateway</span>
+          <strong>{liveStatus}</strong>
+          <span className={styles.heroStatusDivider} />
+          <strong>{gatewayHealth?.gateway.connectedNodeCount ?? onlineCount} connected</strong>
+          <span className={styles.heroStatusDivider} />
+          <strong>{gatewayHealth?.gateway.reconnectingNodeCount ?? 0} reconnecting</strong>
+          <span className={styles.heroStatusDivider} />
           <span className={styles.heroStatusLabel}>Fleet</span>
           <strong>{fleetStatus}</strong>
           <span className={styles.heroStatusDivider} />
@@ -217,10 +244,11 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
         <aside className={styles.sidebar}>
           <section className={styles.panel}>
             <div className={styles.panelEyebrow}>Primary action</div>
-            <h2 className={styles.panelTitle}>Connect to a gateway</h2>
+            <h2 className={styles.panelTitle}>Gateway status</h2>
             <p className={styles.panelCopy}>
-              The browser no longer needs Bluetooth. Use the gateway on this Wi-Fi
-              network and let it stay in charge of BLE node discovery.
+              The browser no longer needs Bluetooth. This page follows the Linux
+              gateway that served it, and that gateway stays in charge of BLE node
+              discovery and reconnects.
             </p>
             <GatewayConnectionPanel compact />
           </section>
@@ -257,7 +285,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                           <span>{device.id}</span>
                         </div>
                         <span className={styles.healthBadge} data-health={device.healthStatus}>
-                          {device.healthStatus}
+                          {device.gatewayConnectionState}
                         </span>
                         <span className={styles.detailChip}>
                           fw {device.firmwareVersion}
@@ -286,7 +314,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                 </div>
                 <div className={styles.detailBadges}>
                   <span className={styles.healthBadge} data-health={selectedDevice.healthStatus}>
-                    {selectedDevice.healthStatus}
+                    {selectedDevice.gatewayConnectionState}
                   </span>
                   <span className={styles.detailChip}>
                     fw {selectedDevice.firmwareVersion}
@@ -332,12 +360,12 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                   <strong>{selectedDevice.bootId ?? "unknown"}</strong>
                 </div>
                 <div>
-                  <span className={styles.telemetryLabel}>Heartbeat</span>
-                  <strong>{formatLocalTime(selectedDevice.lastHeartbeatAt)}</strong>
+                  <span className={styles.telemetryLabel}>Gateway link</span>
+                  <strong>{selectedDevice.gatewayConnectionState}</strong>
                 </div>
                 <div>
-                  <span className={styles.telemetryLabel}>Last event</span>
-                  <strong>{formatLocalTime(selectedDevice.lastEventReceivedAt)}</strong>
+                  <span className={styles.telemetryLabel}>Last BLE packet</span>
+                  <strong>{formatLocalTime(selectedDevice.gatewayLastTelemetryAt)}</strong>
                 </div>
                 <div>
                   <span className={styles.telemetryLabel}>Provisioning</span>
@@ -371,8 +399,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
               <div className={styles.panelEyebrow}>No selection</div>
               <h2 className={styles.panelTitle}>Choose a gateway-backed sensor</h2>
               <p className={styles.panelCopy}>
-                Once the selected gateway sees a BLE node and forwards telemetry,
-                it will appear here for labeling and lifecycle tracking.
+                As soon as the gateway sees a BLE node and receives telemetry, it
+                will appear here for labeling and lifecycle tracking.
               </p>
               <GatewayConnectionPanel compact />
             </section>

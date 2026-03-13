@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import process from "node:process";
 
 import noble from "@abandonware/noble";
+import { createGatewayRuntimeServer } from "./gateway-runtime-server.mjs";
 
 const SERVICE_UUID = normalizeUuid(
   process.env.BLE_RUNTIME_SERVICE_UUID ??
@@ -27,11 +28,14 @@ const config = {
   heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),
   firmwareCheckIntervalMs: Number(process.env.GATEWAY_FIRMWARE_CHECK_MS ?? 60_000),
   otaChunkSize: Number(process.env.GATEWAY_OTA_CHUNK_SIZE ?? 128),
+  runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
+  runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
 };
 
 const peripherals = new Map();
 const deviceContexts = new Map();
 let scanningStarted = false;
+let shuttingDown = false;
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const DISCOVERY_TIMEOUT_MS = 10_000;
@@ -59,6 +63,14 @@ function debug(message, details) {
 
   log(message, details);
 }
+
+const runtimeServer = createGatewayRuntimeServer({
+  apiBaseUrl: config.apiBaseUrl,
+  deviceNamePrefix: config.deviceNamePrefix,
+  runtimeHost: config.runtimeHost,
+  runtimePort: config.runtimePort,
+  verbose: config.verbose,
+});
 
 function wrapCallback(fn) {
   return new Promise((resolve, reject) => {
@@ -433,6 +445,12 @@ async function forwardTelemetry(payload) {
   }
 
   context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion;
+  await runtimeServer.noteTelemetry(payload, {
+    peripheralId: context.peripheralId ?? null,
+    address: context.address ?? null,
+    localName: context.advertisedName ?? null,
+    rssi: context.rssi ?? null,
+  });
 
   const stateChanged = context.lastState !== payload.state;
 
@@ -632,17 +650,33 @@ async function registerPeripheral(peripheral) {
     stopPolling: [],
   };
   peripherals.set(peripheral.id, peripheralContext);
+  runtimeServer.noteDiscovery({
+    peripheralId: peripheral.id,
+    address: peripheral.address,
+    localName: advertisedName || null,
+    rssi: peripheral.rssi,
+  });
 
   peripheral.on("disconnect", () => {
     for (const stopPolling of peripheralContext.stopPolling) {
       stopPolling();
     }
     log(`disconnected from ${advertisedName || peripheral.id}`);
+    runtimeServer.noteDisconnected({
+      peripheralId: peripheral.id,
+      reason: shuttingDown ? "gateway-shutdown" : "ble-disconnected",
+    });
     peripherals.delete(peripheral.id);
   });
 
   try {
     debug(`connecting to ${advertisedName || peripheral.id}`);
+    runtimeServer.noteConnecting({
+      peripheralId: peripheral.id,
+      address: peripheral.address,
+      localName: advertisedName || null,
+      rssi: peripheral.rssi,
+    });
     await connectPeripheral(peripheral);
     const characteristics = await loadRuntimeCharacteristics(peripheral, advertisedName);
     const telemetryCharacteristic = characteristics[TELEMETRY_UUID];
@@ -684,6 +718,10 @@ async function registerPeripheral(peripheral) {
 
         context.controlCharacteristic = controlCharacteristic;
         context.otaDataCharacteristic = otaDataCharacteristic;
+        context.peripheralId = peripheral.id;
+        context.address = peripheral.address;
+        context.advertisedName = advertisedName || null;
+        context.rssi = peripheral.rssi;
         deviceContexts.set(payload.deviceId, context);
         void forwardTelemetry(payload);
       } catch (error) {
@@ -738,6 +776,11 @@ async function registerPeripheral(peripheral) {
     });
 
     peripheralContext.connected = true;
+    runtimeServer.noteConnected({
+      peripheralId: peripheral.id,
+      localName: advertisedName || null,
+      rssi: peripheral.rssi,
+    });
 
     log(`connected to ${advertisedName || peripheral.id}`);
   } catch (error) {
@@ -748,13 +791,17 @@ async function registerPeripheral(peripheral) {
 }
 
 async function start() {
+  await runtimeServer.start();
+
   noble.on("stateChange", async (state) => {
     log(`bluetooth adapter state: ${state}`);
+    runtimeServer.setAdapterState(state);
 
     if (state === "poweredOn") {
       try {
         await startScanning([], true);
         scanningStarted = true;
+        runtimeServer.setScanState("scanning");
         log("scanning for BLE peripherals; filtering for runtime service in-process");
       } catch (error) {
         console.error("[gateway] failed to start scanning", error);
@@ -767,11 +814,13 @@ async function start() {
         console.error("[gateway] failed to stop scanning", error);
       });
       scanningStarted = false;
+      runtimeServer.setScanState("stopped");
     }
   });
 
   noble.on("scanStop", () => {
     debug("scanStop event received");
+    runtimeServer.setScanState("stopped");
   });
 
   noble.on("warning", (message) => {
@@ -789,10 +838,16 @@ async function start() {
     void registerPeripheral(peripheral);
   });
 
-  process.on("SIGINT", async () => {
+  const shutdown = async () => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
     log("shutting down");
     if (scanningStarted) {
       await stopScanning().catch(() => {});
+      runtimeServer.setScanState("stopped");
     }
 
     await Promise.all(
@@ -801,8 +856,12 @@ async function start() {
       ),
     );
 
+    await runtimeServer.stop().catch(() => {});
     process.exit(0);
-  });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 await start();

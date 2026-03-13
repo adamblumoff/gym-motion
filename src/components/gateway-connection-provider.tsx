@@ -2,18 +2,13 @@
 
 import {
   createContext,
-  useCallback,
   useContext,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 
 import {
   getCurrentOrigin,
-  normalizeGatewayBaseUrl,
-  persistGatewayBaseUrl,
-  readSavedGatewayBaseUrl,
 } from "@/lib/gateway-connection";
 
 type GatewayConnectionContextValue = {
@@ -30,33 +25,15 @@ export function GatewayConnectionProvider({
 }: {
   children: ReactNode;
 }) {
-  const [connectionState, setConnectionState] = useState(() => {
-    const currentOrigin = getCurrentOrigin();
-    const savedGateway = readSavedGatewayBaseUrl();
-
-    return {
-      currentOrigin,
-      gatewayBaseUrl: savedGateway ?? currentOrigin,
-    };
-  });
-
-  const setGatewayBaseUrl = useCallback((value: string | null) => {
-    const normalizedValue = normalizeGatewayBaseUrl(value ?? "");
-    const nextValue = normalizedValue ?? connectionState.currentOrigin;
-    persistGatewayBaseUrl(nextValue);
-    setConnectionState((current) => ({
-      ...current,
-      gatewayBaseUrl: nextValue,
-    }));
-  }, [connectionState.currentOrigin]);
+  const currentOrigin = getCurrentOrigin();
 
   const value = useMemo(
     () => ({
-      gatewayBaseUrl: connectionState.gatewayBaseUrl,
-      currentOrigin: connectionState.currentOrigin,
-      setGatewayBaseUrl,
+      gatewayBaseUrl: currentOrigin,
+      currentOrigin,
+      setGatewayBaseUrl: () => {},
     }),
-    [connectionState, setGatewayBaseUrl],
+    [currentOrigin],
   );
 
   return (

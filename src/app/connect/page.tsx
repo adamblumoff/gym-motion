@@ -1,14 +1,17 @@
 import { GatewayConnectionPanel } from "@/components/gateway-connection-panel";
 import { AppShell } from "@/components/app-shell";
+import { LiveStreamProvider } from "@/components/live-stream-provider";
 
 export default function ConnectPage() {
   return (
-    <AppShell
-      description="Connect this operator console to the gateway on your local Wi-Fi network. The gateway is the only machine that talks to BLE sensor nodes."
-      eyebrow="Gateway"
-      title="Find your gateway"
-    >
-      <GatewayConnectionPanel />
-    </AppShell>
+    <LiveStreamProvider>
+      <AppShell
+        description="This console automatically follows the Linux gateway host that served the page. The gateway is the only machine that talks to BLE sensor nodes."
+        eyebrow="Gateway"
+        title="Gateway status"
+      >
+        <GatewayConnectionPanel />
+      </AppShell>
+    </LiveStreamProvider>
   );
 }

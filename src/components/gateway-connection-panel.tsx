@@ -1,97 +1,104 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { fetchGatewayJson, normalizeGatewayBaseUrl } from "@/lib/gateway-connection";
+import { fetchGatewayJson } from "@/lib/gateway-connection";
+import type { GatewayHealthResponse } from "@/lib/motion";
 
 import { useGatewayConnection } from "./gateway-connection-provider";
 import styles from "./gateway-connection-panel.module.css";
-
-type HealthResponse = {
-  ok: boolean;
-  gateway: {
-    hostname: string;
-    mode: string;
-  };
-};
 
 type Props = {
   compact?: boolean;
 };
 
+function formatAdapterState(adapterState: string) {
+  switch (adapterState) {
+    case "poweredOn":
+      return "Bluetooth ready";
+    case "unavailable":
+      return "Gateway runtime offline";
+    default:
+      return `Bluetooth ${adapterState}`;
+  }
+}
+
+function formatScanState(scanState: string) {
+  switch (scanState) {
+    case "scanning":
+      return "Scanning for BLE nodes";
+    case "stopped":
+      return "Not scanning";
+    default:
+      return `Scan ${scanState}`;
+  }
+}
+
 export function GatewayConnectionPanel({ compact = false }: Props) {
-  const { currentOrigin, gatewayBaseUrl, setGatewayBaseUrl } = useGatewayConnection();
-  const [inputValue, setInputValue] = useState(gatewayBaseUrl ?? currentOrigin ?? "");
-  const [status, setStatus] = useState<string | null>(null);
+  const { gatewayBaseUrl } = useGatewayConnection();
+  const [payload, setPayload] = useState<GatewayHealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const currentGatewayLabel = useMemo(() => {
-    if (!gatewayBaseUrl) {
-      return "No gateway selected";
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHealth() {
+      try {
+        const nextPayload = await fetchGatewayJson<GatewayHealthResponse>(
+          gatewayBaseUrl,
+          "/api/gateway/health",
+        );
+
+        if (!cancelled) {
+          setPayload(nextPayload);
+          setError(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setError("The operator console can’t reach the local gateway runtime yet.");
+        }
+      }
     }
 
-    try {
-      return new URL(gatewayBaseUrl).host;
-    } catch {
-      return gatewayBaseUrl;
-    }
+    void loadHealth();
+    const intervalId = setInterval(() => {
+      void loadHealth();
+    }, 10_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, [gatewayBaseUrl]);
 
-  async function handleSave() {
-    const nextBaseUrl = normalizeGatewayBaseUrl(inputValue);
-
-    if (!nextBaseUrl) {
-      setError("Enter a valid gateway hostname or URL.");
-      setStatus(null);
-      return;
-    }
-
-    setError(null);
-    setStatus("Checking gateway…");
-
-    try {
-      const response = await fetchGatewayJson<HealthResponse>(
-        nextBaseUrl,
-        "/api/health",
-      );
-
-      setGatewayBaseUrl(nextBaseUrl);
-      setStatus(`Connected to ${response.gateway.hostname}.`);
-    } catch {
-      setError("Could not reach that gateway from this browser.");
-      setStatus(null);
-    }
-  }
+  const gateway = payload?.gateway ?? null;
+  const hostLabel = gateway ? `${gateway.hostname}:3000` : gatewayBaseUrl ?? "Current host";
 
   return (
     <section className={styles.card} data-compact={compact}>
       <div className={styles.copy}>
-        <span className={styles.label}>Gateway</span>
-        <strong>{currentGatewayLabel}</strong>
+        <span className={styles.label}>Gateway host</span>
+        <strong>{hostLabel}</strong>
         <span className={styles.hint}>
-          Use the gateway hostname on this Wi-Fi, ideally a `.local` mDNS name.
+          This console automatically uses the same host that served the page. Open the
+          app on the Linux gateway host and the frontend follows it automatically.
         </span>
       </div>
 
-      <div className={styles.controls}>
-        <input
-          className={styles.input}
-          onChange={(event) => setInputValue(event.target.value)}
-          placeholder="gym-motion-gateway.local:3000"
-          value={inputValue}
-        />
-        <button className={styles.button} onClick={() => void handleSave()} type="button">
-          Connect
-        </button>
-        {!compact ? (
-          <Link className={styles.link} href="/connect">
-            Open setup
-          </Link>
-        ) : null}
-      </div>
+      {gateway ? (
+        <div className={styles.controls}>
+          <div className={styles.statusPill}>{formatAdapterState(gateway.adapterState)}</div>
+          <div className={styles.statusPill}>{formatScanState(gateway.scanState)}</div>
+          <div className={styles.statusPill}>
+            {gateway.connectedNodeCount} connected
+          </div>
+          <div className={styles.statusPill}>
+            {gateway.reconnectingNodeCount} reconnecting
+          </div>
+        </div>
+      ) : null}
 
-      {status ? <p className={styles.status}>{status}</p> : null}
+      {payload?.error ? <p className={styles.error}>{payload.error}</p> : null}
       {error ? <p className={styles.error}>{error}</p> : null}
     </section>
   );

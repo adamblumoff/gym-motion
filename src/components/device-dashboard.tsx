@@ -4,12 +4,12 @@ import { startTransition, useEffect, useState } from "react";
 
 import { fetchGatewayJson } from "@/lib/gateway-connection";
 import type {
-  DeviceSummary,
+  GatewayRuntimeDeviceSummary,
   MotionEventSummary,
   MotionStreamPayload,
 } from "@/lib/motion";
 import { formatLocalTime } from "@/lib/format-time";
-import { mergeDeviceUpdate, mergeEventUpdate } from "@/lib/motion";
+import { mergeEventUpdate, mergeGatewayDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
 import { GatewayConnectionPanel } from "./gateway-connection-panel";
@@ -17,16 +17,20 @@ import { useGatewayConnection } from "./gateway-connection-provider";
 import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-dashboard.module.css";
 
-function formatState(state: DeviceSummary["lastState"] | MotionEventSummary["state"]) {
+function formatState(
+  state: GatewayRuntimeDeviceSummary["lastState"] | MotionEventSummary["state"],
+) {
   return state.toUpperCase();
 }
 
-function formatHealthStatus(status: DeviceSummary["healthStatus"]) {
-  return status.toUpperCase();
+function formatGatewayConnectionStatus(
+  status: GatewayRuntimeDeviceSummary["gatewayConnectionState"],
+) {
+  return status.replaceAll("-", " ").toUpperCase();
 }
 
 type DeviceDashboardProps = {
-  initialDevices: DeviceSummary[];
+  initialDevices: GatewayRuntimeDeviceSummary[];
   initialEvents: MotionEventSummary[];
 };
 
@@ -34,11 +38,12 @@ export function DeviceDashboard({
   initialDevices,
   initialEvents,
 }: DeviceDashboardProps) {
-  const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
+  const [devices, setDevices] = useState<GatewayRuntimeDeviceSummary[]>(initialDevices);
   const [events, setEvents] = useState<MotionEventSummary[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
   const { gatewayBaseUrl } = useGatewayConnection();
-  const { subscribeToMotion } = useLiveStream();
+  const { gatewayHealth, liveStatus, subscribeToGatewayDevices, subscribeToMotion } =
+    useLiveStream();
 
   useEffect(() => {
     if (!gatewayBaseUrl) {
@@ -49,7 +54,10 @@ export function DeviceDashboard({
 
     async function loadDashboard() {
       const [devicePayload, eventPayload] = await Promise.all([
-        fetchGatewayJson<{ devices: DeviceSummary[] }>(gatewayBaseUrl, "/api/devices"),
+        fetchGatewayJson<{ devices: GatewayRuntimeDeviceSummary[] }>(
+          gatewayBaseUrl,
+          "/api/gateway/devices",
+        ),
         fetchGatewayJson<{ events: MotionEventSummary[] }>(gatewayBaseUrl, "/api/events"),
       ]);
 
@@ -76,33 +84,40 @@ export function DeviceDashboard({
   }, [gatewayBaseUrl]);
 
   useEffect(() => {
-    return subscribeToMotion((payload: MotionStreamPayload) => {
-      const nextEvent = payload.event;
-
+    const unsubscribeGatewayDevices = subscribeToGatewayDevices((payload) => {
       setDevices((currentDevices) =>
-        mergeDeviceUpdate(currentDevices, payload.device),
+        mergeGatewayDeviceUpdate(currentDevices, payload.device),
       );
+      setError(null);
+    });
 
+    const unsubscribeMotion = subscribeToMotion((payload: MotionStreamPayload) => {
+      const nextEvent = payload.event;
       if (nextEvent) {
         setEvents((currentEvents) => mergeEventUpdate(currentEvents, nextEvent));
       }
-
       setError(null);
     });
-  }, [subscribeToMotion]);
+
+    return () => {
+      unsubscribeGatewayDevices();
+      unsubscribeMotion();
+    };
+  }, [subscribeToGatewayDevices, subscribeToMotion]);
 
   if (devices.length === 0) {
     return (
       <AppShell
-        description="Pick the gateway on this Wi-Fi network. The live board wakes up as soon as that gateway forwards the first BLE node update."
+        description="This live board follows the Linux gateway that served the page. As soon as that gateway sees a BLE node and receives telemetry, the board updates automatically."
         eyebrow="Live board"
         title="Motion status"
       >
         <article className={styles.emptyCard}>
           <h2 className={styles.emptyTitle}>No motion data yet</h2>
           <p className={styles.emptyText}>
-            Connect this console to the right gateway host, then move a BLE node so
-            the gateway can forward a packet into the live board.
+            {gatewayHealth?.gateway.adapterState === "poweredOn"
+              ? "The gateway is up and scanning. Power the BLE node or move it so the gateway can connect and forward telemetry."
+              : "The frontend is waiting for the local gateway runtime. Start the gateway on the Linux box and this board will wake up automatically."}
           </p>
           <GatewayConnectionPanel compact />
           {error ? <p className={styles.banner}>{error}</p> : null}
@@ -112,14 +127,23 @@ export function DeviceDashboard({
   }
 
   const movingCount = devices.filter((device) => device.lastState === "moving").length;
-  const onlineCount = devices.filter((device) => device.healthStatus === "online").length;
+  const onlineCount = devices.filter(
+    (device) => device.gatewayConnectionState === "connected",
+  ).length;
 
   return (
     <AppShell
-      description="Live multi-device motion state from the selected gateway, plus the most recent forwarded BLE node events on this local network."
+      description="Live multi-device motion state from the local Linux gateway, plus the most recent forwarded BLE node events on this Wi-Fi network."
       eyebrow="Live board"
       status={
         <div className={styles.heroStatus}>
+          <span className={styles.heroStatusLabel}>Gateway</span>
+          <strong>{liveStatus}</strong>
+          <span className={styles.heroStatusDivider} />
+          <strong>{gatewayHealth?.gateway.connectedNodeCount ?? onlineCount} connected</strong>
+          <span className={styles.heroStatusDivider} />
+          <strong>{gatewayHealth?.gateway.reconnectingNodeCount ?? 0} reconnecting</strong>
+          <span className={styles.heroStatusDivider} />
           <span className={styles.heroStatusLabel}>Fleet</span>
           <strong>{devices.length} devices</strong>
           <span className={styles.heroStatusDivider} />
@@ -140,8 +164,17 @@ export function DeviceDashboard({
                 <div className={styles.deviceId}>{device.id}</div>
                 <h2 className={styles.deviceTitle}>{device.machineLabel ?? device.id}</h2>
               </div>
-              <span className={styles.healthBadge} data-health={device.healthStatus}>
-                {formatHealthStatus(device.healthStatus)}
+              <span
+                className={styles.healthBadge}
+                data-health={
+                  liveStatus === "Gateway live"
+                    ? device.healthStatus
+                    : "offline"
+                }
+              >
+                {liveStatus === "Gateway live"
+                  ? formatGatewayConnectionStatus(device.gatewayConnectionState)
+                  : "GATEWAY OFFLINE"}
               </span>
             </div>
 
@@ -159,21 +192,27 @@ export function DeviceDashboard({
                 <strong>{device.firmwareVersion}</strong>
               </div>
               <div className={styles.metaCard}>
-                <span className={styles.metaLabel}>Last contact</span>
-                <strong>{formatLocalTime(device.updatedAt)}</strong>
+                <span className={styles.metaLabel}>Gateway link</span>
+                <strong>{formatGatewayConnectionStatus(device.gatewayConnectionState)}</strong>
               </div>
               <div className={styles.metaCard}>
-                <span className={styles.metaLabel}>Device millis</span>
-                <strong>{device.lastSeenAt}</strong>
+                <span className={styles.metaLabel}>Last BLE packet</span>
+                <strong>
+                  {device.gatewayLastTelemetryAt
+                    ? formatLocalTime(device.gatewayLastTelemetryAt)
+                    : "Waiting"}
+                </strong>
               </div>
             </div>
 
             <div className={styles.debugMeta}>
               <div>
-                Delta <strong>{device.lastDelta ?? "N/A"}</strong>
+                Gateway seen <strong>{formatLocalTime(device.updatedAt)}</strong>
               </div>
               <div>
-                Update status <strong>{device.updateStatus}</strong>
+                {device.gatewayDisconnectReason
+                  ? <>Last link loss <strong>{device.gatewayDisconnectReason}</strong></>
+                  : <>Update status <strong>{device.updateStatus}</strong></>}
               </div>
             </div>
           </article>

@@ -1,11 +1,11 @@
 "use client";
 
-import type { DeviceSummary, MotionEventSummary } from "@/lib/motion";
+import type { GatewayRuntimeDeviceSummary, MotionEventSummary } from "@/lib/motion";
 
 import { DeviceDashboard } from "./device-dashboard";
 
 type HomeShellProps = {
-  initialDevices: DeviceSummary[];
+  initialDevices: GatewayRuntimeDeviceSummary[];
   initialEvents: MotionEventSummary[];
 };
 

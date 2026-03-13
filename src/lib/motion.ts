@@ -17,6 +17,14 @@ export const updateStatusSchema = z.enum([
 ]);
 export const healthStatusSchema = z.enum(["online", "stale", "offline"]);
 export const deviceLogLevelSchema = z.enum(["info", "warn", "error"]);
+export const gatewayConnectionStateSchema = z.enum([
+  "discovered",
+  "connecting",
+  "connected",
+  "reconnecting",
+  "disconnected",
+  "unreachable",
+]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
@@ -97,6 +105,7 @@ export type ProvisioningState = z.infer<typeof provisioningStateSchema>;
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
 export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
+export type GatewayConnectionState = z.infer<typeof gatewayConnectionStateSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -114,6 +123,45 @@ export type DeviceSummary = {
   lastHeartbeatAt: string | null;
   lastEventReceivedAt: string | null;
   healthStatus: HealthStatus;
+};
+
+export type GatewayStatusSummary = {
+  hostname: string;
+  mode: string;
+  sessionId: string;
+  adapterState: string;
+  scanState: string;
+  connectedNodeCount: number;
+  reconnectingNodeCount: number;
+  knownNodeCount: number;
+  startedAt: string;
+  updatedAt: string;
+  lastAdvertisementAt: string | null;
+};
+
+export type GatewayHealthResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  error?: string;
+};
+
+export type GatewayRuntimeDeviceSummary = DeviceSummary & {
+  gatewayConnectionState: GatewayConnectionState;
+  peripheralId: string | null;
+  gatewayLastAdvertisementAt: string | null;
+  gatewayLastConnectedAt: string | null;
+  gatewayLastDisconnectedAt: string | null;
+  gatewayLastTelemetryAt: string | null;
+  gatewayDisconnectReason: string | null;
+  advertisedName: string | null;
+  lastRssi: number | null;
+};
+
+export type GatewayRuntimeDevicesResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  devices: GatewayRuntimeDeviceSummary[];
+  error?: string;
 };
 
 export type DeviceCleanupResult = {
@@ -157,6 +205,12 @@ export type DeviceLogStreamPayload = {
   log: DeviceLogSummary;
 };
 
+export type GatewayDeviceStreamPayload = {
+  device: GatewayRuntimeDeviceSummary;
+};
+
+export type GatewayStatusStreamPayload = GatewayHealthResponse;
+
 export type FirmwareReleaseSummary = {
   version: string;
   gitSha: string;
@@ -172,6 +226,18 @@ export function mergeDeviceUpdate(
   devices: DeviceSummary[],
   device: DeviceSummary,
 ): DeviceSummary[] {
+  const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
+
+  return nextDevices.sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
+}
+
+export function mergeGatewayDeviceUpdate(
+  devices: GatewayRuntimeDeviceSummary[],
+  device: GatewayRuntimeDeviceSummary,
+): GatewayRuntimeDeviceSummary[] {
   const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
 
   return nextDevices.sort(

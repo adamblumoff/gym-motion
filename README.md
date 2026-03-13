@@ -32,6 +32,7 @@ AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
 The gateway uses `API_URL` when forwarding locally. It defaults to `http://localhost:3000`.
+The gateway also exposes a local runtime API for the Next app on `GATEWAY_RUNTIME_PORT`, which defaults to `4010`.
 
 ## Local setup
 
@@ -110,10 +111,11 @@ Linux notes:
 
 The operator console:
 
-- connects to the gateway over local Wi-Fi
-- subscribes to live device updates from the selected gateway
+- automatically follows the same Linux gateway host that served the page
+- reads live BLE connection state from the gateway runtime, not stale backend timestamps
+- subscribes to gateway runtime updates and forwarded motion events over the local network
 - does not require browser Bluetooth support for the normal monitoring flow
-- can be pointed at a gateway by hostname, ideally a `.local` mDNS name
+- does not require a separate "find your gateway" step in the normal same-host flow
 
 ### Backend
 
@@ -159,6 +161,12 @@ bun run gateway
 ```
 
 6. Move a node. The dashboard should show the device as `MOVING` or `STILL`.
+
+The frontend now treats the gateway as the source of truth for node connectivity:
+
+- if the gateway sees a node and connects, the device card updates immediately
+- if the gateway restarts or loses the BLE link, the frontend shows that runtime state directly
+- the node no longer appears "online" just because the database has an old heartbeat
 
 ## Reference Firmware Flow
 

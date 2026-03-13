@@ -1,12 +1,17 @@
 import { cache } from "react";
 
+import { getGatewayRuntimeDevices, getGatewayRuntimeHealth } from "@/lib/gateway-runtime-client";
 import {
   listDeviceLogs,
-  listDevices,
   listRecentEvents,
 } from "@/lib/repository";
 
-export const getInitialDevices = cache(async () => listDevices());
+export const getInitialGatewayHealth = cache(async () => getGatewayRuntimeHealth());
+
+export const getInitialDevices = cache(async () => {
+  const payload = await getGatewayRuntimeDevices();
+  return payload.devices;
+});
 
 export const getInitialEvents = cache(async () => listRecentEvents());
 

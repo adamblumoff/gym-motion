@@ -34,40 +34,21 @@
   gap: 0.65rem;
 }
 
-.input {
-  min-width: min(24rem, 100%);
-  flex: 1 1 18rem;
-  padding: 0.85rem 1rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: inherit;
-}
-
-.button,
-.link {
+.statusPill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.8rem;
-  padding: 0 1rem;
+  min-height: 2.35rem;
+  padding: 0 0.95rem;
   border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-elevated);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 85%, transparent);
   color: inherit;
-  text-decoration: none;
+  font-size: 0.92rem;
 }
 
-.status,
 .error {
   margin: 0;
   font-size: 0.95rem;
-}
-
-.status {
-  color: var(--accent-strong);
-}
-
-.error {
   color: var(--danger);
 }
