@@ -61,6 +61,7 @@ BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeOtaDataCharacteristic = nullptr;
 String provisioningCommandBuffer;
+String runtimeCommandBuffer;
 
 String hardwareId;
 String bootId;
@@ -837,7 +838,19 @@ class RuntimeControlCallbacks : public BLECharacteristicCallbacks {
       return;
     }
 
-    handleRuntimeControl(value);
+    if (value.startsWith("BEGIN:")) {
+      runtimeCommandBuffer = "";
+      return;
+    }
+
+    if (value == "END") {
+      const String command = runtimeCommandBuffer;
+      runtimeCommandBuffer = "";
+      handleRuntimeControl(command);
+      return;
+    }
+
+    runtimeCommandBuffer += value;
   }
 };
 

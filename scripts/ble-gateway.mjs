@@ -45,6 +45,9 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
 const SUBSCRIBE_TIMEOUT_MS = 8_000;
 const READ_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = Number(process.env.GATEWAY_BLE_POLL_MS ?? 2_000);
+const CONTROL_COMMAND_CHUNK_SIZE = Number(
+  process.env.GATEWAY_BLE_CONTROL_CHUNK_SIZE ?? 120,
+);
 
 function normalizeUuid(value) {
   return value.replaceAll("-", "").toLowerCase();
@@ -514,6 +517,21 @@ async function writeCharacteristic(characteristic, value, withoutResponse = fals
   );
 }
 
+async function writeChunkedJsonCommand(characteristic, payload) {
+  const serialized = JSON.stringify(payload);
+
+  await writeCharacteristic(characteristic, `BEGIN:${serialized.length}`);
+
+  for (let index = 0; index < serialized.length; index += CONTROL_COMMAND_CHUNK_SIZE) {
+    await writeCharacteristic(
+      characteristic,
+      serialized.slice(index, index + CONTROL_COMMAND_CHUNK_SIZE),
+    );
+  }
+
+  await writeCharacteristic(characteristic, "END");
+}
+
 async function runHistorySync(context, payload) {
   if (
     !context.controlCharacteristic ||
@@ -639,14 +657,21 @@ async function runHistorySync(context, payload) {
   await context.historySyncPromise;
 }
 
-function createStatusWaiter(context, predicate, timeoutMs = 30_000) {
+function createStatusWaiter(context, predicate, timeoutMs = 30_000, label = "OTA") {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       context.statusListeners.delete(listener);
-      reject(new Error(`Timed out waiting for OTA status on ${context.deviceId}.`));
+      reject(new Error(`Timed out waiting for ${label} status on ${context.deviceId}.`));
     }, timeoutMs);
 
     const listener = (status) => {
+      if (status.type === "ota-status" && status.phase === "error") {
+        clearTimeout(timeoutId);
+        context.statusListeners.delete(listener);
+        reject(new Error(`Device reported OTA error on ${context.deviceId}: ${status.message}`));
+        return;
+      }
+
       if (!predicate(status)) {
         return;
       }
@@ -829,21 +854,24 @@ async function pushFirmwareOverBle(context, release) {
   const readyWaiter = createStatusWaiter(
     context,
     (status) => status.type === "ota-status" && status.phase === "ready",
+    30_000,
+    "OTA ready",
   );
   const appliedWaiter = createStatusWaiter(
     context,
     (status) => status.type === "ota-status" && status.phase === "applied",
     120_000,
+    "OTA applied",
   );
 
-  await writeCharacteristic(
+  await writeChunkedJsonCommand(
     context.controlCharacteristic,
-    JSON.stringify({
+    {
       type: "ota-begin",
       version: release.version,
       size: release.sizeBytes,
       sha256: release.sha256 ?? null,
-    }),
+    },
   );
 
   await readyWaiter;
@@ -863,11 +891,11 @@ async function pushFirmwareOverBle(context, release) {
     }
   }
 
-  await writeCharacteristic(
+  await writeChunkedJsonCommand(
     context.controlCharacteristic,
-    JSON.stringify({
+    {
       type: "ota-end",
-    }),
+    },
   );
 
   await appliedWaiter;
