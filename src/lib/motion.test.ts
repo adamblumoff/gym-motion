@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  mergeActivityUpdate,
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
   parseDeviceLog,
@@ -161,6 +162,51 @@ describe("mergeLogUpdate", () => {
     );
 
     expect(merged.map((item) => item.id)).toEqual([2, 1]);
+  });
+});
+
+describe("mergeActivityUpdate", () => {
+  it("keeps a merged device timeline newest-first across motion and lifecycle items", () => {
+    const merged = mergeActivityUpdate(
+      [
+        {
+          id: "log-1",
+          deviceId: "stack-001",
+          kind: "lifecycle",
+          title: "node.connected",
+          message: "Gateway connected to stack-001.",
+          state: null,
+          level: "info",
+          code: "node.connected",
+          delta: null,
+          eventTimestamp: 20,
+          receivedAt: new Date("2026-03-06T05:00:00.000Z").toISOString(),
+          bootId: "boot-001",
+          firmwareVersion: "0.5.0",
+          hardwareId: "node-001",
+          metadata: null,
+        },
+      ],
+      {
+        id: "motion-2",
+        deviceId: "stack-001",
+        kind: "motion",
+        title: "MOVING",
+        message: "Gateway recorded moving for stack-001.",
+        state: "moving",
+        level: null,
+        code: "motion.state",
+        delta: 18,
+        eventTimestamp: 25,
+        receivedAt: new Date("2026-03-06T05:01:00.000Z").toISOString(),
+        bootId: "boot-001",
+        firmwareVersion: "0.5.0",
+        hardwareId: "node-001",
+        metadata: { delta: 18 },
+      },
+    );
+
+    expect(merged.map((item) => item.id)).toEqual(["motion-2", "log-1"]);
   });
 });
 

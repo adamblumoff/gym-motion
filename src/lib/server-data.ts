@@ -2,6 +2,7 @@ import { cache } from "react";
 
 import { getGatewayRuntimeDevices, getGatewayRuntimeHealth } from "@/lib/gateway-runtime-client";
 import {
+  listDeviceActivity,
   listDeviceLogs,
   listRecentEvents,
 } from "@/lib/repository";
@@ -21,6 +22,17 @@ export const getInitialDeviceLogs = cache(async (deviceId: string | null) => {
   }
 
   return listDeviceLogs({
+    deviceId,
+    limit: 100,
+  });
+});
+
+export const getInitialDeviceActivity = cache(async (deviceId: string | null) => {
+  if (!deviceId) {
+    return [];
+  }
+
+  return listDeviceActivity({
     deviceId,
     limit: 100,
   });

@@ -674,5 +674,9 @@ export function createGatewayRuntimeServer({
       emitDevice(deviceId);
       broadcastGatewayStatus();
     },
+
+    resolveKnownDeviceId(input) {
+      return resolveKnownDeviceIdByDiscovery(input);
+    },
   };
 }

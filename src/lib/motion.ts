@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-export const GATEWAY_LOG_DEVICE_ID = "gateway";
-
 export const motionStateSchema = z.enum(["moving", "still"]);
 export const provisioningStateSchema = z.enum([
   "unassigned",
@@ -198,6 +196,24 @@ export type DeviceLogSummary = {
   receivedAt: string;
 };
 
+export type DeviceActivitySummary = {
+  id: string;
+  deviceId: string;
+  kind: "motion" | "lifecycle";
+  title: string;
+  message: string;
+  state: MotionState | null;
+  level: DeviceLogLevel | null;
+  code: string | null;
+  delta: number | null;
+  eventTimestamp: number | null;
+  receivedAt: string;
+  bootId: string | null;
+  firmwareVersion: string | null;
+  hardwareId: string | null;
+  metadata: Record<string, string | number | boolean | null> | null;
+};
+
 export type MotionStreamPayload = {
   device: DeviceSummary;
   event?: MotionEventSummary;
@@ -212,6 +228,10 @@ export type GatewayDeviceStreamPayload = {
 };
 
 export type GatewayStatusStreamPayload = GatewayHealthResponse;
+
+export type DeviceActivityResponse = {
+  activities: DeviceActivitySummary[];
+};
 
 export type FirmwareReleaseSummary = {
   version: string;
@@ -290,6 +310,19 @@ export function mergeLogUpdate(
   limit = 100,
 ): DeviceLogSummary[] {
   return [log, ...logs.filter((item) => item.id !== log.id)].slice(0, limit);
+}
+
+export function mergeActivityUpdate(
+  activities: DeviceActivitySummary[],
+  activity: DeviceActivitySummary,
+  limit = 100,
+): DeviceActivitySummary[] {
+  return [activity, ...activities.filter((item) => item.id !== activity.id)]
+    .toSorted(
+      (left, right) =>
+        new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime(),
+    )
+    .slice(0, limit);
 }
 
 export function formatZodError(message: z.ZodError) {

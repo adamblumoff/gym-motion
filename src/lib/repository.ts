@@ -4,6 +4,7 @@ import type {
   DeviceAssignmentInput,
   DeviceCleanupResult,
   DeviceLogInput,
+  DeviceActivitySummary,
   DeviceLogSummary,
   DeviceRegistrationInput,
   DeviceSummary,
@@ -149,6 +150,46 @@ function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
       row.device_timestamp === null ? null : toSafeNumber(row.device_timestamp),
     metadata: row.metadata ?? null,
     receivedAt: row.received_at.toISOString(),
+  };
+}
+
+function mapMotionEventToActivity(event: MotionEventSummary): DeviceActivitySummary {
+  return {
+    id: `motion-${event.id}`,
+    deviceId: event.deviceId,
+    kind: "motion",
+    title: event.state.toUpperCase(),
+    message: `Gateway recorded ${event.state} for ${event.deviceId}.`,
+    state: event.state,
+    level: null,
+    code: "motion.state",
+    delta: event.delta,
+    eventTimestamp: event.eventTimestamp,
+    receivedAt: event.receivedAt,
+    bootId: event.bootId,
+    firmwareVersion: event.firmwareVersion,
+    hardwareId: event.hardwareId,
+    metadata: event.delta === null ? null : { delta: event.delta },
+  };
+}
+
+function mapDeviceLogToActivity(log: DeviceLogSummary): DeviceActivitySummary {
+  return {
+    id: `log-${log.id}`,
+    deviceId: log.deviceId,
+    kind: "lifecycle",
+    title: log.code ?? log.level.toUpperCase(),
+    message: log.message,
+    state: null,
+    level: log.level,
+    code: log.code,
+    delta: null,
+    eventTimestamp: log.deviceTimestamp,
+    receivedAt: log.receivedAt,
+    bootId: log.bootId,
+    firmwareVersion: log.firmwareVersion,
+    hardwareId: log.hardwareId,
+    metadata: log.metadata,
   };
 }
 
@@ -450,6 +491,61 @@ export async function listDeviceLogs(options?: {
       );
 
   return result.rows.map(mapDeviceLogRow);
+}
+
+export async function listDeviceActivity(options: {
+  deviceId: string;
+  limit?: number;
+}): Promise<DeviceActivitySummary[]> {
+  const limit = Math.min(Math.max(options.limit ?? 100, 1), 250);
+  const [events, logs] = await Promise.all([
+    getDb().query<MotionEventRow>(
+      `select
+         id,
+         device_id,
+         state,
+         delta,
+         event_timestamp,
+         received_at,
+         boot_id,
+         firmware_version,
+         hardware_id
+       from motion_events
+       where device_id = $1
+       order by received_at desc, id desc
+       limit $2`,
+      [options.deviceId, limit],
+    ),
+    getDb().query<DeviceLogRow>(
+      `select
+         id,
+         device_id,
+         level,
+         code,
+         message,
+         boot_id,
+         firmware_version,
+         hardware_id,
+         device_timestamp,
+         metadata,
+         received_at
+       from device_logs
+       where device_id = $1
+       order by received_at desc, id desc
+       limit $2`,
+      [options.deviceId, limit],
+    ),
+  ]);
+
+  return [
+    ...events.rows.map(mapMotionEventRow).map(mapMotionEventToActivity),
+    ...logs.rows.map(mapDeviceLogRow).map(mapDeviceLogToActivity),
+  ]
+    .toSorted(
+      (left, right) =>
+        new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime(),
+    )
+    .slice(0, limit);
 }
 
 export async function createOrUpdateDeviceRegistration(

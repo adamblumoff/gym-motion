@@ -4,7 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
 import { fetchGatewayJson, buildGatewayUrl } from "@/lib/gateway-connection";
-import { GATEWAY_LOG_DEVICE_ID, type GatewayRuntimeDeviceSummary } from "@/lib/motion";
+import type { GatewayRuntimeDeviceSummary } from "@/lib/motion";
 import { mergeGatewayDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
@@ -380,8 +380,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                   <strong>{selectedDevice.updateStatus}</strong>
                 </div>
                 <div>
-                  <span className={styles.telemetryLabel}>Logs</span>
-                  <strong>{selectedDevice.id === GATEWAY_LOG_DEVICE_ID ? "Gateway" : "Node"}</strong>
+                  <span className={styles.telemetryLabel}>Activity scope</span>
+                  <strong>Node-specific</strong>
                 </div>
               </div>
 

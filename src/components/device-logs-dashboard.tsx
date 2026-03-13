@@ -4,14 +4,15 @@ import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
-import { buildGatewayUrl, fetchGatewayJson } from "@/lib/gateway-connection";
+import { fetchGatewayJson } from "@/lib/gateway-connection";
 import type {
+  DeviceActivityResponse,
+  DeviceActivitySummary,
   DeviceLogStreamPayload,
-  DeviceLogSummary,
   GatewayRuntimeDeviceSummary,
+  MotionStreamPayload,
 } from "@/lib/motion";
-import { GATEWAY_LOG_DEVICE_ID } from "@/lib/motion";
-import { mergeGatewayDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
+import { mergeActivityUpdate, mergeGatewayDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
 import { GatewayConnectionPanel } from "./gateway-connection-panel";
@@ -19,11 +20,15 @@ import { useGatewayConnection } from "./gateway-connection-provider";
 import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-logs-dashboard.module.css";
 
-function formatLevel(level: DeviceLogSummary["level"]) {
+function formatLevel(level: DeviceActivitySummary["level"]) {
+  if (!level) {
+    return "EVENT";
+  }
+
   return level.toUpperCase();
 }
 
-function formatMetadata(metadata: DeviceLogSummary["metadata"]) {
+function formatMetadata(metadata: DeviceActivitySummary["metadata"]) {
   if (!metadata || Object.keys(metadata).length === 0) {
     return null;
   }
@@ -31,32 +36,82 @@ function formatMetadata(metadata: DeviceLogSummary["metadata"]) {
   return JSON.stringify(metadata, null, 2);
 }
 
+function motionActivityFromStream(payload: MotionStreamPayload): DeviceActivitySummary | null {
+  if (!payload.event) {
+    return null;
+  }
+
+  return {
+    id: `motion-${payload.event.id}`,
+    deviceId: payload.event.deviceId,
+    kind: "motion",
+    title: payload.event.state.toUpperCase(),
+    message: `Gateway recorded ${payload.event.state} for ${payload.event.deviceId}.`,
+    state: payload.event.state,
+    level: null,
+    code: "motion.state",
+    delta: payload.event.delta,
+    eventTimestamp: payload.event.eventTimestamp,
+    receivedAt: payload.event.receivedAt,
+    bootId: payload.event.bootId,
+    firmwareVersion: payload.event.firmwareVersion,
+    hardwareId: payload.event.hardwareId,
+    metadata:
+      payload.event.delta === null ? null : { delta: payload.event.delta },
+  };
+}
+
+function lifecycleActivityFromStream(payload: DeviceLogStreamPayload): DeviceActivitySummary {
+  return {
+    id: `log-${payload.log.id}`,
+    deviceId: payload.log.deviceId,
+    kind: "lifecycle",
+    title: payload.log.code ?? payload.log.level.toUpperCase(),
+    message: payload.log.message,
+    state: null,
+    level: payload.log.level,
+    code: payload.log.code,
+    delta: null,
+    eventTimestamp: payload.log.deviceTimestamp,
+    receivedAt: payload.log.receivedAt,
+    bootId: payload.log.bootId,
+    firmwareVersion: payload.log.firmwareVersion,
+    hardwareId: payload.log.hardwareId,
+    metadata: payload.log.metadata,
+  };
+}
+
 type DeviceLogsDashboardProps = {
   initialDevices: GatewayRuntimeDeviceSummary[];
-  initialLogs: DeviceLogSummary[];
+  initialActivities: DeviceActivitySummary[];
   initialSelectedDeviceId: string | null;
 };
 
 export function DeviceLogsDashboard({
   initialDevices,
-  initialLogs,
+  initialActivities,
   initialSelectedDeviceId,
 }: DeviceLogsDashboardProps) {
   const router = useRouter();
   const [devices, setDevices] = useState<GatewayRuntimeDeviceSummary[]>(initialDevices);
-  const [logs, setLogs] = useState<DeviceLogSummary[]>(initialLogs);
+  const [activities, setActivities] = useState<DeviceActivitySummary[]>(initialActivities);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
-    initialSelectedDeviceId ?? initialDevices[0]?.id ?? GATEWAY_LOG_DEVICE_ID,
+    initialSelectedDeviceId ?? initialDevices[0]?.id ?? null,
   );
   const [status, setStatus] = useState<string | null>(null);
   const { gatewayBaseUrl } = useGatewayConnection();
-  const { liveStatus, subscribeToDeviceLogs, subscribeToGatewayDevices } =
-    useLiveStream();
+  const {
+    liveStatus,
+    subscribeToDeviceLogs,
+    subscribeToGatewayDevices,
+    subscribeToMotion,
+  } = useLiveStream();
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,
     [devices, selectedDeviceId],
   );
+  const visibleActivities = selectedDeviceId ? activities : [];
 
   useEffect(() => {
     if (!gatewayBaseUrl) {
@@ -77,9 +132,7 @@ export function DeviceLogsDashboard({
 
       startTransition(() => {
         setDevices(payload.devices);
-        setSelectedDeviceId(
-          (current) => current ?? payload.devices[0]?.id ?? GATEWAY_LOG_DEVICE_ID,
-        );
+        setSelectedDeviceId((current) => current ?? payload.devices[0]?.id ?? null);
       });
     }
 
@@ -99,40 +152,36 @@ export function DeviceLogsDashboard({
       return;
     }
 
-    const deviceId = selectedDeviceId;
     let cancelled = false;
 
-    async function loadLogs() {
-      const response = await fetch(
-        buildGatewayUrl(
-          gatewayBaseUrl,
-          `/api/device-logs?deviceId=${encodeURIComponent(deviceId)}&limit=100`,
-        ),
-        { cache: "no-store" },
-      );
+    async function loadActivity() {
+      const deviceId = selectedDeviceId;
 
-      if (!response.ok) {
-        throw new Error("Could not load logs.");
+      if (!deviceId) {
+        return;
       }
 
-      const data = (await response.json()) as { logs: DeviceLogSummary[] };
+      const payload = await fetchGatewayJson<DeviceActivityResponse>(
+        gatewayBaseUrl,
+        `/api/device-activity?deviceId=${encodeURIComponent(deviceId)}&limit=100`,
+      );
 
       if (!cancelled) {
-        setLogs(data.logs);
+        setActivities(payload.activities);
         setStatus(null);
       }
     }
 
-    void loadLogs().catch(() => {
+    void loadActivity().catch(() => {
       if (!cancelled) {
-        setStatus(`Could not load logs for ${deviceId}.`);
+        setStatus(`Could not load activity for ${selectedDeviceId}.`);
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [gatewayBaseUrl, initialLogs, selectedDeviceId]);
+  }, [gatewayBaseUrl, selectedDeviceId]);
 
   useEffect(() => {
     const unsubscribeGatewayDevices = subscribeToGatewayDevices((payload) => {
@@ -141,17 +190,34 @@ export function DeviceLogsDashboard({
       );
     });
 
-    const unsubscribeLogs = subscribeToDeviceLogs((payload: DeviceLogStreamPayload) => {
-      if (payload.log.deviceId === selectedDeviceId) {
-        setLogs((currentLogs) => mergeLogUpdate(currentLogs, payload.log));
+    const unsubscribeLogs = subscribeToDeviceLogs((payload) => {
+      if (payload.log.deviceId !== selectedDeviceId) {
+        return;
       }
+
+      setActivities((currentActivities) =>
+        mergeActivityUpdate(currentActivities, lifecycleActivityFromStream(payload)),
+      );
+    });
+
+    const unsubscribeMotion = subscribeToMotion((payload) => {
+      const activity = motionActivityFromStream(payload);
+
+      if (!activity || activity.deviceId !== selectedDeviceId) {
+        return;
+      }
+
+      setActivities((currentActivities) =>
+        mergeActivityUpdate(currentActivities, activity),
+      );
     });
 
     return () => {
       unsubscribeGatewayDevices();
       unsubscribeLogs();
+      unsubscribeMotion();
     };
-  }, [selectedDeviceId, subscribeToDeviceLogs, subscribeToGatewayDevices]);
+  }, [selectedDeviceId, subscribeToDeviceLogs, subscribeToGatewayDevices, subscribeToMotion]);
 
   function handleDeviceChange(nextDeviceId: string) {
     setSelectedDeviceId(nextDeviceId);
@@ -162,7 +228,7 @@ export function DeviceLogsDashboard({
 
   return (
     <AppShell
-      description="Gateway-local lifecycle logs for BLE-only sensor nodes, streamed into this console over the same Wi-Fi network."
+      description="Per-device gateway activity for BLE-only sensor nodes, combining motion transitions with lifecycle events in real time."
       eyebrow="Observability"
       status={
         <div className={styles.heroStatus}>
@@ -170,7 +236,7 @@ export function DeviceLogsDashboard({
           <strong>{liveStatus}</strong>
         </div>
       }
-      title="Device logs"
+      title="Device activity"
     >
       {status ? <p className={styles.banner}>{status}</p> : null}
       {!selectedDevice ? <GatewayConnectionPanel compact /> : null}
@@ -190,7 +256,6 @@ export function DeviceLogsDashboard({
               <option value="" disabled>
                 Select a device
               </option>
-              <option value={GATEWAY_LOG_DEVICE_ID}>Gateway runtime</option>
               {devices.map((device) => (
                 <option key={device.id} value={device.id}>
                   {device.machineLabel ? `${device.machineLabel} (${device.id})` : device.id}
@@ -222,24 +287,7 @@ export function DeviceLogsDashboard({
               <span>{selectedDevice.id}</span>
               <span>firmware {selectedDevice.firmwareVersion}</span>
               <span>boot {selectedDevice.bootId ?? "unknown"}</span>
-              <span>Logs below use server received time</span>
-            </div>
-          </>
-        ) : selectedDeviceId === GATEWAY_LOG_DEVICE_ID ? (
-          <>
-            <div className={styles.summaryTopRow}>
-              <div>
-                <div className={styles.summaryLabel}>Selected source</div>
-                <strong>Gateway runtime</strong>
-              </div>
-              <span className={styles.healthBadge} data-health={liveStatus === "Gateway live" ? "online" : "offline"}>
-                {liveStatus === "Gateway live" ? "gateway live" : "gateway offline"}
-              </span>
-            </div>
-            <div className={styles.summaryMeta}>
-              <span>{GATEWAY_LOG_DEVICE_ID}</span>
-              <span>adapter and reconnect lifecycle</span>
-              <span>Logs below use server received time</span>
+              <span>Activity below uses server received time</span>
             </div>
           </>
         ) : (
@@ -252,44 +300,52 @@ export function DeviceLogsDashboard({
 
       <section className={styles.logPanel}>
         <div className={styles.panelHeader}>
-          <span>Recent logs</span>
+          <span>Recent activity</span>
           <span>
-            {selectedDeviceId === GATEWAY_LOG_DEVICE_ID
-              ? "gateway runtime · newest first · server received time"
-              : selectedDevice
-              ? `${selectedDevice.id} · newest first · server received time`
+            {selectedDevice
+              ? `${selectedDevice.id} · motion + lifecycle · newest first`
               : "Waiting for device selection"}
           </span>
         </div>
 
-        {logs.length === 0 ? (
+        {visibleActivities.length === 0 ? (
           <div className={styles.emptyState}>
-            {selectedDeviceId === GATEWAY_LOG_DEVICE_ID
-              ? "No gateway lifecycle logs yet. As soon as the gateway records scan, reconnect, or adapter events, they will appear here."
-              : "No logs yet for this node. As soon as the selected gateway records node lifecycle events, they will appear here."}
+            {selectedDevice
+              ? "No gateway activity recorded for this node yet. As soon as the gateway sees motion or lifecycle events for it, they will appear here."
+              : "The gateway has not seen any devices yet."}
           </div>
         ) : (
           <ul className={styles.logList}>
-            {logs.map((log) => {
-              const metadata = formatMetadata(log.metadata);
+            {visibleActivities.map((activity) => {
+              const metadata = formatMetadata(activity.metadata);
 
               return (
-                <li className={styles.logRow} key={log.id}>
+                <li className={styles.logRow} key={activity.id}>
                   <div className={styles.logHeader}>
-                    <span className={styles.logLevel} data-level={log.level}>
-                      {formatLevel(log.level)}
+                    <span
+                      className={styles.logLevel}
+                      data-level={activity.kind === "motion" ? "info" : activity.level ?? "info"}
+                    >
+                      {activity.kind === "motion" ? "MOTION" : formatLevel(activity.level)}
                     </span>
-                    <span className={styles.logCode}>{log.code}</span>
+                    <span className={styles.logCode}>
+                      {activity.kind === "motion"
+                        ? activity.state?.toUpperCase() ?? "MOTION"
+                        : activity.code ?? activity.title}
+                    </span>
                     <span className={styles.logTimeLabel}>Received</span>
-                    <span className={styles.logTime}>{formatLocalTime(log.receivedAt)}</span>
+                    <span className={styles.logTime}>{formatLocalTime(activity.receivedAt)}</span>
                   </div>
 
-                  <p className={styles.logMessage}>{log.message}</p>
+                  <p className={styles.logMessage}>{activity.message}</p>
 
                   <div className={styles.logMeta}>
-                    <span>firmware {log.firmwareVersion ?? "unknown"}</span>
-                    <span>boot {log.bootId ?? "unknown"}</span>
-                    {log.deviceTimestamp ? <span>device millis {log.deviceTimestamp}</span> : null}
+                    <span>{activity.kind}</span>
+                    <span>firmware {activity.firmwareVersion ?? "unknown"}</span>
+                    <span>boot {activity.bootId ?? "unknown"}</span>
+                    {activity.eventTimestamp ? (
+                      <span>device millis {activity.eventTimestamp}</span>
+                    ) : null}
                   </div>
 
                   {metadata ? (

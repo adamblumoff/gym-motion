@@ -34,6 +34,7 @@ const config = {
 
 const peripherals = new Map();
 const deviceContexts = new Map();
+const pendingNodeLogs = new Map();
 let scanningStarted = false;
 let shuttingDown = false;
 let adapterState = "unknown";
@@ -72,8 +73,8 @@ const runtimeServer = createGatewayRuntimeServer({
   verbose: config.verbose,
 });
 
-async function writeGatewayLog({
-  deviceId = "gateway",
+async function writeDeviceLog({
+  deviceId,
   level = "info",
   code,
   message,
@@ -101,6 +102,59 @@ async function writeGatewayLog({
   }
 }
 
+function queueNodeLog(peripheralInfo, entry) {
+  const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
+  const knownDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
+
+  if (knownDeviceId) {
+    void writeDeviceLog({
+      deviceId: knownDeviceId,
+      ...entry,
+    });
+    return;
+  }
+
+  const pendingEntries = pendingNodeLogs.get(key) ?? [];
+  pendingEntries.push({
+    ...entry,
+    peripheralInfo,
+  });
+  pendingNodeLogs.set(key, pendingEntries);
+}
+
+function flushNodeLogs(deviceId, peripheralInfo, devicePayload) {
+  const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
+  const pendingEntries = pendingNodeLogs.get(key);
+
+  if (!pendingEntries?.length) {
+    return;
+  }
+
+  pendingNodeLogs.delete(key);
+
+  for (const entry of pendingEntries) {
+    void writeDeviceLog({
+      deviceId,
+      level: entry.level,
+      code: entry.code,
+      message: entry.message,
+      bootId: devicePayload?.bootId ?? null,
+      firmwareVersion: devicePayload?.firmwareVersion ?? null,
+      hardwareId: devicePayload?.hardwareId ?? null,
+      metadata: entry.metadata,
+    });
+  }
+}
+
+function describePeripheral(peripheral, advertisedName) {
+  return {
+    peripheralId: peripheral.id,
+    address: peripheral.address,
+    localName: advertisedName || null,
+    rssi: peripheral.rssi,
+  };
+}
+
 async function ensureScanning(reason) {
   if (shuttingDown || adapterState !== "poweredOn" || scanningStarted) {
     return;
@@ -111,22 +165,8 @@ async function ensureScanning(reason) {
     scanningStarted = true;
     runtimeServer.setScanState("scanning");
     log(`scanning for BLE peripherals; filtering for runtime service in-process (${reason})`);
-    await writeGatewayLog({
-      code: "gateway.scan.started",
-      message: "Gateway scanning for BLE nodes.",
-      metadata: { reason },
-    });
   } catch (error) {
     console.error("[gateway] failed to start scanning", error);
-    await writeGatewayLog({
-      level: "error",
-      code: "gateway.scan.failed",
-      message: "Gateway failed to start BLE scanning.",
-      metadata: {
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
   }
 }
 
@@ -503,6 +543,15 @@ async function forwardTelemetry(payload) {
   }
 
   context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion;
+  flushNodeLogs(
+    payload.deviceId,
+    {
+      peripheralId: context.peripheralId ?? null,
+      address: context.address ?? null,
+      localName: context.advertisedName ?? null,
+    },
+    payload,
+  );
   await runtimeServer.noteTelemetry(payload, {
     peripheralId: context.peripheralId ?? null,
     address: context.address ?? null,
@@ -708,13 +757,11 @@ async function registerPeripheral(peripheral) {
     stopPolling: [],
   };
   peripherals.set(peripheral.id, peripheralContext);
+  const peripheralInfo = describePeripheral(peripheral, advertisedName);
   runtimeServer.noteDiscovery({
-    peripheralId: peripheral.id,
-    address: peripheral.address,
-    localName: advertisedName || null,
-    rssi: peripheral.rssi,
+    ...peripheralInfo,
   });
-  void writeGatewayLog({
+  queueNodeLog(peripheralInfo, {
     code: "node.discovered",
     message: `Gateway discovered ${advertisedName || peripheral.id}.`,
     metadata: {
@@ -731,12 +778,10 @@ async function registerPeripheral(peripheral) {
     }
     log(`disconnected from ${advertisedName || peripheral.id}`);
     runtimeServer.noteDisconnected({
-      peripheralId: peripheral.id,
-      localName: advertisedName || null,
-      address: peripheral.address,
+      ...peripheralInfo,
       reason: shuttingDown ? "gateway-shutdown" : "ble-disconnected",
     });
-    void writeGatewayLog({
+    queueNodeLog(peripheralInfo, {
       code: "node.disconnected",
       message: `Gateway lost the BLE link to ${advertisedName || peripheral.id}.`,
       metadata: {
@@ -754,12 +799,9 @@ async function registerPeripheral(peripheral) {
   try {
     debug(`connecting to ${advertisedName || peripheral.id}`);
     runtimeServer.noteConnecting({
-      peripheralId: peripheral.id,
-      address: peripheral.address,
-      localName: advertisedName || null,
-      rssi: peripheral.rssi,
+      ...peripheralInfo,
     });
-    void writeGatewayLog({
+    queueNodeLog(peripheralInfo, {
       code: "node.connecting",
       message: `Gateway is connecting to ${advertisedName || peripheral.id}.`,
       metadata: {
@@ -818,9 +860,9 @@ async function registerPeripheral(peripheral) {
         void forwardTelemetry(payload);
       } catch (error) {
         console.error("[gateway] failed to parse telemetry", error);
-        void writeGatewayLog({
+        queueNodeLog(peripheralInfo, {
           level: "error",
-          code: "gateway.telemetry.parse_failed",
+          code: "node.telemetry.parse_failed",
           message: "Gateway failed to parse BLE telemetry.",
           metadata: {
             peripheralId: peripheral.id,
@@ -849,9 +891,9 @@ async function registerPeripheral(peripheral) {
         handleStatusMessage(context, payload);
       } catch (error) {
         console.error("[gateway] failed to parse device status", error);
-        void writeGatewayLog({
+        queueNodeLog(peripheralInfo, {
           level: "error",
-          code: "gateway.status.parse_failed",
+          code: "node.status.parse_failed",
           message: "Gateway failed to parse BLE status payload.",
           metadata: {
             peripheralId: peripheral.id,
@@ -889,12 +931,9 @@ async function registerPeripheral(peripheral) {
 
     peripheralContext.connected = true;
     runtimeServer.noteConnected({
-      peripheralId: peripheral.id,
-      address: peripheral.address,
-      localName: advertisedName || null,
-      rssi: peripheral.rssi,
+      ...peripheralInfo,
     });
-    void writeGatewayLog({
+    queueNodeLog(peripheralInfo, {
       code: "node.connected",
       message: `Gateway connected to ${advertisedName || peripheral.id}.`,
       metadata: {
@@ -908,7 +947,7 @@ async function registerPeripheral(peripheral) {
     log(`connected to ${advertisedName || peripheral.id}`);
   } catch (error) {
     console.error(`[gateway] failed to connect to ${advertisedName || peripheral.id}`, error);
-    void writeGatewayLog({
+    queueNodeLog(peripheralInfo, {
       level: "warn",
       code: "node.connect_failed",
       message: `Gateway could not connect to ${advertisedName || peripheral.id}.`,
@@ -931,14 +970,6 @@ async function start() {
     log(`bluetooth adapter state: ${state}`);
     adapterState = state;
     runtimeServer.setAdapterState(state);
-    void writeGatewayLog({
-      code: state === "poweredOn" ? "gateway.adapter.ready" : "gateway.adapter.state",
-      message:
-        state === "poweredOn"
-          ? "Gateway Bluetooth adapter is ready."
-          : `Gateway Bluetooth adapter changed to ${state}.`,
-      metadata: { state },
-    });
 
     if (state === "poweredOn") {
       await ensureScanning("adapter-ready");
@@ -951,11 +982,6 @@ async function start() {
       });
       scanningStarted = false;
       runtimeServer.setScanState("stopped");
-      void writeGatewayLog({
-        code: "gateway.scan.stopped",
-        message: "Gateway BLE scanning stopped.",
-        metadata: { reason: `adapter-${state}` },
-      });
     }
   });
 
@@ -963,22 +989,11 @@ async function start() {
     debug("scanStop event received");
     scanningStarted = false;
     runtimeServer.setScanState("stopped");
-    void writeGatewayLog({
-      code: "gateway.scan.stopped",
-      message: "Gateway BLE scanning stopped.",
-      metadata: { reason: shuttingDown ? "shutdown" : "unexpected" },
-    });
     void ensureScanning("scan-stop");
   });
 
   noble.on("warning", (message) => {
     console.warn("[gateway] noble warning:", message);
-    void writeGatewayLog({
-      level: "warn",
-      code: "gateway.warning",
-      message: "Gateway BLE stack emitted a warning.",
-      metadata: { message: String(message) },
-    });
   });
 
   noble.on("discover", (peripheral) => {
