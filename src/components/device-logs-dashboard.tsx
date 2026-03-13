@@ -10,6 +10,7 @@ import type {
   DeviceLogSummary,
   GatewayRuntimeDeviceSummary,
 } from "@/lib/motion";
+import { GATEWAY_LOG_DEVICE_ID } from "@/lib/motion";
 import { mergeGatewayDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
@@ -45,7 +46,7 @@ export function DeviceLogsDashboard({
   const [devices, setDevices] = useState<GatewayRuntimeDeviceSummary[]>(initialDevices);
   const [logs, setLogs] = useState<DeviceLogSummary[]>(initialLogs);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
-    initialSelectedDeviceId ?? initialDevices[0]?.id ?? null,
+    initialSelectedDeviceId ?? initialDevices[0]?.id ?? GATEWAY_LOG_DEVICE_ID,
   );
   const [status, setStatus] = useState<string | null>(null);
   const { gatewayBaseUrl } = useGatewayConnection();
@@ -76,7 +77,9 @@ export function DeviceLogsDashboard({
 
       startTransition(() => {
         setDevices(payload.devices);
-        setSelectedDeviceId((current) => current ?? payload.devices[0]?.id ?? null);
+        setSelectedDeviceId(
+          (current) => current ?? payload.devices[0]?.id ?? GATEWAY_LOG_DEVICE_ID,
+        );
       });
     }
 
@@ -187,6 +190,7 @@ export function DeviceLogsDashboard({
               <option value="" disabled>
                 Select a device
               </option>
+              <option value={GATEWAY_LOG_DEVICE_ID}>Gateway runtime</option>
               {devices.map((device) => (
                 <option key={device.id} value={device.id}>
                   {device.machineLabel ? `${device.machineLabel} (${device.id})` : device.id}
@@ -221,6 +225,23 @@ export function DeviceLogsDashboard({
               <span>Logs below use server received time</span>
             </div>
           </>
+        ) : selectedDeviceId === GATEWAY_LOG_DEVICE_ID ? (
+          <>
+            <div className={styles.summaryTopRow}>
+              <div>
+                <div className={styles.summaryLabel}>Selected source</div>
+                <strong>Gateway runtime</strong>
+              </div>
+              <span className={styles.healthBadge} data-health={liveStatus === "Gateway live" ? "online" : "offline"}>
+                {liveStatus === "Gateway live" ? "gateway live" : "gateway offline"}
+              </span>
+            </div>
+            <div className={styles.summaryMeta}>
+              <span>{GATEWAY_LOG_DEVICE_ID}</span>
+              <span>adapter and reconnect lifecycle</span>
+              <span>Logs below use server received time</span>
+            </div>
+          </>
         ) : (
           <>
             <div className={styles.summaryLabel}>Selected device</div>
@@ -241,8 +262,9 @@ export function DeviceLogsDashboard({
 
         {logs.length === 0 ? (
           <div className={styles.emptyState}>
-            No logs yet for this device. As soon as the selected gateway records
-            node lifecycle events, they will appear here.
+            {selectedDeviceId === GATEWAY_LOG_DEVICE_ID
+              ? "No gateway lifecycle logs yet. As soon as the gateway records scan, reconnect, or adapter events, they will appear here."
+              : "No logs yet for this node. As soon as the selected gateway records node lifecycle events, they will appear here."}
           </div>
         ) : (
           <ul className={styles.logList}>

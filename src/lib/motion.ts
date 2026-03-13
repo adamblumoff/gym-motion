@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const GATEWAY_LOG_DEVICE_ID = "gateway";
+
 export const motionStateSchema = z.enum(["moving", "still"]);
 export const provisioningStateSchema = z.enum([
   "unassigned",

@@ -1,5 +1,6 @@
 import { LiveStreamProvider } from "@/components/live-stream-provider";
 import { DeviceLogsDashboard } from "@/components/device-logs-dashboard";
+import { GATEWAY_LOG_DEVICE_ID } from "@/lib/motion";
 import { getInitialDeviceLogs, getInitialDevices } from "@/lib/server-data";
 
 type LogsPageProps = {
@@ -15,7 +16,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
     getInitialDevices(),
     getInitialDeviceLogs(requestedDeviceId),
   ]);
-  const selectedDeviceId = requestedDeviceId ?? devices[0]?.id ?? null;
+  const selectedDeviceId = requestedDeviceId ?? devices[0]?.id ?? GATEWAY_LOG_DEVICE_ID;
   const logs =
     requestedDeviceId === selectedDeviceId
       ? requestedLogs

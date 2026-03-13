@@ -4,7 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
 import { fetchGatewayJson, buildGatewayUrl } from "@/lib/gateway-connection";
-import type { GatewayRuntimeDeviceSummary } from "@/lib/motion";
+import { GATEWAY_LOG_DEVICE_ID, type GatewayRuntimeDeviceSummary } from "@/lib/motion";
 import { mergeGatewayDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
@@ -219,8 +219,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
   return (
     <AppShell
-      description="Review what the local Linux gateway is seeing over BLE and manage the metadata it uses for the live board."
-      eyebrow="Setup"
+      description="Monitor the Linux gateway, review known BLE nodes, and manage the metadata the gateway uses for the live board."
+      eyebrow="Gateway"
       status={
         <div className={styles.heroStatus}>
           <span className={styles.heroStatusLabel}>Gateway</span>
@@ -236,7 +236,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
           <strong>{fleetHealth}</strong>
         </div>
       }
-      title="Provision & manage sensors"
+      title="Gateway control"
     >
       {status ? <p className={styles.banner}>{status}</p> : null}
 
@@ -246,20 +246,20 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
             <div className={styles.panelEyebrow}>Primary action</div>
             <h2 className={styles.panelTitle}>Gateway status</h2>
             <p className={styles.panelCopy}>
-              The browser no longer needs Bluetooth. This page follows the Linux
-              gateway that served it, and that gateway stays in charge of BLE node
-              discovery and reconnects.
+              This page automatically follows the Linux gateway that served it.
+              The gateway owns BLE discovery, reconnects to known nodes, and
+              streams that runtime state here in real time.
             </p>
             <GatewayConnectionPanel compact />
           </section>
 
           <section className={styles.panel}>
-            <div className={styles.panelEyebrow}>Provisioning model</div>
-            <h2 className={styles.panelTitle}>Gateway-managed BLE setup</h2>
+            <div className={styles.panelEyebrow}>Gateway actions</div>
+            <h2 className={styles.panelTitle}>Operational controls</h2>
             <p className={styles.panelCopy}>
-              This product direction assumes lower-power BLE nodes that never join
-              Wi-Fi. The gateway owns node discovery and telemetry collection; this
-              console only talks to the gateway over the LAN.
+              BLE nodes connect automatically when the gateway sees them. Future
+              actions like restarting the gateway can live here without requiring a
+              separate setup route.
             </p>
           </section>
 
@@ -364,6 +364,10 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                   <strong>{selectedDevice.gatewayConnectionState}</strong>
                 </div>
                 <div>
+                  <span className={styles.telemetryLabel}>Last advertisement</span>
+                  <strong>{formatLocalTime(selectedDevice.gatewayLastAdvertisementAt)}</strong>
+                </div>
+                <div>
                   <span className={styles.telemetryLabel}>Last BLE packet</span>
                   <strong>{formatLocalTime(selectedDevice.gatewayLastTelemetryAt)}</strong>
                 </div>
@@ -374,6 +378,10 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                 <div>
                   <span className={styles.telemetryLabel}>Update status</span>
                   <strong>{selectedDevice.updateStatus}</strong>
+                </div>
+                <div>
+                  <span className={styles.telemetryLabel}>Logs</span>
+                  <strong>{selectedDevice.id === GATEWAY_LOG_DEVICE_ID ? "Gateway" : "Node"}</strong>
                 </div>
               </div>
 
@@ -399,8 +407,8 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
               <div className={styles.panelEyebrow}>No selection</div>
               <h2 className={styles.panelTitle}>Choose a gateway-backed sensor</h2>
               <p className={styles.panelCopy}>
-                As soon as the gateway sees a BLE node and receives telemetry, it
-                will appear here for labeling and lifecycle tracking.
+                As soon as the gateway sees a BLE node, it will appear here for
+                labeling, lifecycle tracking, and reconnect monitoring.
               </p>
               <GatewayConnectionPanel compact />
             </section>

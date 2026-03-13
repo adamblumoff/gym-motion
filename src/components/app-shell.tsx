@@ -19,7 +19,6 @@ type AppShellProps = {
 const NAV_ITEMS = [
   { href: "/connect", label: "Gateway" },
   { href: "/", label: "Live" },
-  { href: "/setup", label: "Setup" },
   { href: "/logs", label: "Logs" },
 ];
 

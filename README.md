@@ -45,7 +45,7 @@ bun dev
 Open:
 
 - dashboard: `http://localhost:3000`
-- setup screen: `http://localhost:3000/setup`
+- gateway control: `http://localhost:3000/connect`
 - device logs: `http://localhost:3000/logs`
 
 ## POC architecture
