@@ -2,6 +2,7 @@
   "name": "gym-motion",
   "version": "0.1.0",
   "private": true,
+  "description": "Gateway-first motion dashboard for BLE sensor nodes with an ESP32 reference node implementation.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -16,6 +17,9 @@
     "firmware:sync:windows": "./scripts/sync-windows-firmware.sh",
     "firmware:upload": "./scripts/upload-firmware.sh",
     "firmware:publish": "bun run scripts/publish-firmware.ts",
+    "reference-node:build": "./scripts/build-firmware.sh",
+    "reference-node:upload": "./scripts/upload-firmware.sh",
+    "reference-node:publish": "bun run scripts/publish-firmware.ts",
     "device:purge": "bun run scripts/purge-device.ts"
   },
   "dependencies": {

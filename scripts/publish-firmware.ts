@@ -37,7 +37,7 @@ async function main() {
   const filePath = readArg("file") ?? "build/firmware/gym_motion.ino.bin";
   const shaFile = readArg("sha") ?? `${filePath}.sha256`;
   const md5File = readArg("md5") ?? `${filePath}.md5`;
-  const objectKey = `firmware/${version}/gym_motion.ino.bin`;
+  const objectKey = `reference-node-firmware/${version}/gym_motion.ino.bin`;
   const gitSha = await resolveGitSha();
 
   const upload = await uploadFirmwareObject({
@@ -71,6 +71,7 @@ async function main() {
     JSON.stringify(
       {
         ok: true,
+        artifactType: "reference-ble-node-firmware",
         bucket: upload.bucketName,
         objectKey,
         apiBaseUrl,

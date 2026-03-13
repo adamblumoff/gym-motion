@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Archivo, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 
+import { GatewayConnectionProvider } from "@/components/gateway-connection-provider";
 import { themeBootstrapScript } from "@/lib/theme";
 
 import "./globals.css";
@@ -24,7 +25,7 @@ const monoFont = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Gym Motion",
-  description: "Minimal motion sensor dashboard for ESP32 devices.",
+  description: "Gateway-first motion dashboard for BLE sensor nodes.",
 };
 
 export default function RootLayout({
@@ -41,7 +42,7 @@ export default function RootLayout({
       <body
         className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}
       >
-        {children}
+        <GatewayConnectionProvider>{children}</GatewayConnectionProvider>
       </body>
     </html>
   );

@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 
+import { createCorsPreflightResponse, withCors } from "@/lib/api-cors";
 import { formatZodError, parseDeviceAssignment } from "@/lib/motion";
 import { broadcastMotionUpdate } from "@/lib/motion-stream";
 import { purgeDeviceData, updateDeviceAssignment } from "@/lib/repository";
 
 export const runtime = "nodejs";
+
+export function OPTIONS() {
+  return createCorsPreflightResponse();
+}
 
 type RouteContext = {
   params: Promise<{
@@ -27,9 +32,11 @@ export async function PATCH(request: Request, context: RouteContext) {
   const parsedPayload = parseDeviceAssignment(payload);
 
   if (!parsedPayload.success) {
-    return NextResponse.json(
-      { ok: false, error: formatZodError(parsedPayload.error) },
-      { status: 400 },
+    return withCors(
+      NextResponse.json(
+        { ok: false, error: formatZodError(parsedPayload.error) },
+        { status: 400 },
+      ),
     );
   }
 
@@ -39,21 +46,25 @@ export async function PATCH(request: Request, context: RouteContext) {
     const device = await updateDeviceAssignment(deviceId, parsedPayload.data);
 
     if (!device) {
-      return NextResponse.json(
-        { ok: false, error: "Device not found." },
-        { status: 404 },
+      return withCors(
+        NextResponse.json(
+          { ok: false, error: "Device not found." },
+          { status: 404 },
+        ),
       );
     }
 
     broadcastMotionUpdate({ device });
 
-    return NextResponse.json({ ok: true, device });
+    return withCors(NextResponse.json({ ok: true, device }));
   } catch (error) {
     console.error("Failed to update device assignment", error);
 
-    return NextResponse.json(
-      { ok: false, error: "Failed to update device." },
-      { status: 500 },
+    return withCors(
+      NextResponse.json(
+        { ok: false, error: "Failed to update device." },
+        { status: 500 },
+      ),
     );
   }
 }
@@ -65,19 +76,23 @@ export async function DELETE(_request: Request, context: RouteContext) {
     const result = await purgeDeviceData(deviceId);
 
     if (result.deletedDevices === 0) {
-      return NextResponse.json(
-        { ok: false, error: "Device not found." },
-        { status: 404 },
+      return withCors(
+        NextResponse.json(
+          { ok: false, error: "Device not found." },
+          { status: 404 },
+        ),
       );
     }
 
-    return NextResponse.json({ ok: true, result });
+    return withCors(NextResponse.json({ ok: true, result }));
   } catch (error) {
     console.error("Failed to delete device", error);
 
-    return NextResponse.json(
-      { ok: false, error: "Failed to delete device." },
-      { status: 500 },
+    return withCors(
+      NextResponse.json(
+        { ok: false, error: "Failed to delete device." },
+        { status: 500 },
+      ),
     );
   }
 }

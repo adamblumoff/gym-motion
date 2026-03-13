@@ -47,6 +47,8 @@ if [[ -z "$PORT" ]]; then
   exit 1
 fi
 
+echo "Uploading reference BLE node firmware to $PORT"
+
 "$REPO_ROOT/scripts/build-firmware.sh"
 
 UPLOAD_ARGS=(
@@ -63,4 +65,4 @@ fi
 
 "$ARDUINO_CLI_BIN" "${UPLOAD_ARGS[@]}"
 
-echo "Firmware uploaded to $PORT using $FQBN with PartitionScheme=$PARTITIONS"
+echo "Reference BLE node firmware uploaded to $PORT using $FQBN with PartitionScheme=$PARTITIONS"

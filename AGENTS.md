@@ -3,6 +3,7 @@
 ## Arduino Sketch Sync Note
 
 - Source-of-truth repo sketch: `/home/adamblumoff/gym-motion/gym_motion/gym_motion.ino`
+- Product framing note: this sketch is the current ESP32 reference implementation for a future BLE-only sensor node product. Avoid writing docs or scripts as if Wi-Fi-capable ESP32 hardware is the permanent node model.
 - Windows Arduino IDE sketch to mirror after every repo `.ino` update: `/mnt/c/Users/adamb/OneDrive/Desktop/gym_esp32_wifi_v1/gym_esp32_wifi_v1.ino`
 - Required workflow: whenever the repo `.ino` file changes, copy the updated repo version over to the Windows Arduino IDE file before the user opens/flashes it.
 - Deployment rule: normal firmware rollouts should go through the OTA release flow, not manual Arduino uploads.

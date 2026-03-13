@@ -22,6 +22,8 @@ SKETCH_PATH="${SKETCH_PATH:-gym_motion/gym_motion.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
+echo "Building reference BLE node firmware from $SKETCH_PATH"
+
 "$ARDUINO_CLI_BIN" compile \
   --fqbn "$FQBN" \
   --board-options "PartitionScheme=$PARTITIONS" \
@@ -29,4 +31,4 @@ PARTITIONS="${PARTITIONS:-min_spiffs}"
   --output-dir "$BUILD_PATH" \
   "$SKETCH_PATH"
 
-echo "Firmware build exported to $BUILD_PATH"
+echo "Reference BLE node firmware exported to $BUILD_PATH"

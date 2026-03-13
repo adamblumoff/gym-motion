@@ -2,6 +2,7 @@ import {
   subscribeToDeviceLogs,
   subscribeToMotionUpdates,
 } from "@/lib/motion-stream";
+import { withCors, createCorsPreflightResponse } from "@/lib/api-cors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +11,10 @@ const encoder = new TextEncoder();
 
 function formatEvent(event: string, payload: unknown) {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+export function OPTIONS() {
+  return createCorsPreflightResponse();
 }
 
 export async function GET(request: Request) {
@@ -50,11 +55,13 @@ export async function GET(request: Request) {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "Content-Type": "text/event-stream",
-    },
-  });
+  return withCors(
+    new Response(stream, {
+      headers: {
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "Content-Type": "text/event-stream",
+      },
+    }),
+  );
 }

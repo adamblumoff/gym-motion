@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
+import { fetchGatewayJson, buildGatewayUrl } from "@/lib/gateway-connection";
 import type { DeviceSummary, MotionStreamPayload } from "@/lib/motion";
 import { mergeDeviceUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
-import { DeviceProvisioningWizard } from "./device-provisioning-wizard";
+import { GatewayConnectionPanel } from "./gateway-connection-panel";
+import { useGatewayConnection } from "./gateway-connection-provider";
 import { useLiveStream } from "./live-stream-provider";
 import styles from "./setup-dashboard.module.css";
 
@@ -41,11 +43,47 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
   const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
   const [drafts, setDrafts] = useState<Drafts>(() => createDrafts(initialDevices));
   const [status, setStatus] = useState<string | null>(null);
-  const [showProvisioningWizard, setShowProvisioningWizard] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
     initialDevices[0]?.id ?? null,
   );
+  const { gatewayBaseUrl } = useGatewayConnection();
   const { subscribeToMotion } = useLiveStream();
+
+  useEffect(() => {
+    if (!gatewayBaseUrl) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDevices() {
+      const payload = await fetchGatewayJson<{ devices: DeviceSummary[] }>(
+        gatewayBaseUrl,
+        "/api/devices",
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      startTransition(() => {
+        setDevices(payload.devices);
+        setDrafts(createDrafts(payload.devices));
+        setSelectedDeviceId((current) => current ?? payload.devices[0]?.id ?? null);
+        setStatus(null);
+      });
+    }
+
+    void loadDevices().catch(() => {
+      if (!cancelled) {
+        setStatus("Could not load devices from the selected gateway.");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayBaseUrl]);
 
   useEffect(() => {
     return subscribeToMotion((payload: MotionStreamPayload) => {
@@ -101,7 +139,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
   async function handleDeviceSave(deviceId: string) {
     const draft = drafts[deviceId];
 
-    const response = await fetch(`/api/devices/${deviceId}`, {
+    const response = await fetch(buildGatewayUrl(gatewayBaseUrl, `/api/devices/${deviceId}`), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -126,14 +164,14 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
 
   async function handleDeviceDelete(deviceId: string) {
     const confirmed = window.confirm(
-      `Delete ${deviceId} from the app? After deletion, hold IO0 while tapping EN so the sensor clears its saved identity and re-enters BLE setup mode.`,
+      `Delete ${deviceId} from the selected gateway record?`,
     );
 
     if (!confirmed) {
       return;
     }
 
-    const response = await fetch(`/api/devices/${deviceId}`, {
+    const response = await fetch(buildGatewayUrl(gatewayBaseUrl, `/api/devices/${deviceId}`), {
       method: "DELETE",
     });
 
@@ -156,18 +194,12 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
     });
     setSelectedDeviceId(nextSelectedDeviceId);
 
-    if (!nextSelectedDeviceId) {
-      setShowProvisioningWizard(true);
-    }
-
-    setStatus(
-      `Deleted ${deviceId}. Hold IO0 while tapping EN so the sensor clears its saved identity and re-enters BLE setup mode.`,
-    );
+    setStatus(`Deleted ${deviceId} from the selected gateway.`);
   }
 
   return (
     <AppShell
-      description="Add BLE nodes, label installed machines, and manage the static metadata the laptop gateway forwards to the backend."
+      description="Connect to a gateway on this Wi-Fi network, review discovered BLE-only sensor nodes, and manage the metadata that gateway uses for the local live board."
       eyebrow="Setup"
       status={
         <div className={styles.heroStatus}>
@@ -185,28 +217,21 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
         <aside className={styles.sidebar}>
           <section className={styles.panel}>
             <div className={styles.panelEyebrow}>Primary action</div>
-            <h2 className={styles.panelTitle}>Add or re-add a device</h2>
+            <h2 className={styles.panelTitle}>Connect to a gateway</h2>
             <p className={styles.panelCopy}>
-              Provisioning uses Bluetooth from this browser to save the node
-              identity that the laptop gateway will use later.
+              The browser no longer needs Bluetooth. Use the gateway on this Wi-Fi
+              network and let it stay in charge of BLE node discovery.
             </p>
-            <button
-              className={styles.primaryButton}
-              onClick={() => setShowProvisioningWizard(true)}
-              type="button"
-            >
-              Add device
-            </button>
+            <GatewayConnectionPanel compact />
           </section>
 
           <section className={styles.panel}>
-            <div className={styles.panelEyebrow}>Re-provision</div>
-            <h2 className={styles.panelTitle}>Reset stored identity</h2>
+            <div className={styles.panelEyebrow}>Provisioning model</div>
+            <h2 className={styles.panelTitle}>Gateway-managed BLE setup</h2>
             <p className={styles.panelCopy}>
-              Deleting a device in the app only removes the server record. To run
-              setup again on the same ESP32, hold <strong>IO0</strong> while tapping{" "}
-              <strong>EN</strong> so it clears the saved device identity and
-              returns to BLE setup mode.
+              This product direction assumes lower-power BLE nodes that never join
+              Wi-Fi. The gateway owns node discovery and telemetry collection; this
+              console only talks to the gateway over the LAN.
             </p>
           </section>
 
@@ -223,7 +248,6 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
                         className={styles.rosterButton}
                         data-active={device.id === selectedDeviceId}
                         onClick={() => {
-                          setShowProvisioningWizard(false);
                           setSelectedDeviceId(device.id);
                         }}
                         type="button"
@@ -248,17 +272,7 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
         </aside>
 
         <div className={styles.mainPane}>
-          {showProvisioningWizard ? (
-            <DeviceProvisioningWizard
-              mode={devices.length === 0 ? "first-device" : "add-device"}
-              onCancel={() => setShowProvisioningWizard(false)}
-              onComplete={(device) => {
-                setShowProvisioningWizard(false);
-                setSelectedDeviceId(device.id);
-                setStatus("Device provisioned successfully.");
-              }}
-            />
-          ) : selectedDevice && selectedDraft ? (
+          {selectedDevice && selectedDraft ? (
             <section className={styles.detailPanel}>
               <div className={styles.detailHeader}>
                 <div>
@@ -355,18 +369,12 @@ export function SetupDashboard({ initialDevices }: SetupDashboardProps) {
           ) : (
             <section className={styles.emptyDetail}>
               <div className={styles.panelEyebrow}>No selection</div>
-              <h2 className={styles.panelTitle}>Choose a sensor or start provisioning</h2>
+              <h2 className={styles.panelTitle}>Choose a gateway-backed sensor</h2>
               <p className={styles.panelCopy}>
-                Pick a device from the roster to edit its labels, or add a new sensor
-                to launch the Bluetooth setup flow.
+                Once the selected gateway sees a BLE node and forwards telemetry,
+                it will appear here for labeling and lifecycle tracking.
               </p>
-              <button
-                className={styles.primaryButton}
-                onClick={() => setShowProvisioningWizard(true)}
-                type="button"
-              >
-                Add device
-              </button>
+              <GatewayConnectionPanel compact />
             </section>
           )}
         </div>

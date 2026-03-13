@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 
+import { fetchGatewayJson } from "@/lib/gateway-connection";
 import type {
   DeviceSummary,
   MotionEventSummary,
@@ -11,6 +12,8 @@ import { formatLocalTime } from "@/lib/format-time";
 import { mergeDeviceUpdate, mergeEventUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
+import { GatewayConnectionPanel } from "./gateway-connection-panel";
+import { useGatewayConnection } from "./gateway-connection-provider";
 import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-dashboard.module.css";
 
@@ -34,7 +37,43 @@ export function DeviceDashboard({
   const [devices, setDevices] = useState<DeviceSummary[]>(initialDevices);
   const [events, setEvents] = useState<MotionEventSummary[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
+  const { gatewayBaseUrl } = useGatewayConnection();
   const { subscribeToMotion } = useLiveStream();
+
+  useEffect(() => {
+    if (!gatewayBaseUrl) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDashboard() {
+      const [devicePayload, eventPayload] = await Promise.all([
+        fetchGatewayJson<{ devices: DeviceSummary[] }>(gatewayBaseUrl, "/api/devices"),
+        fetchGatewayJson<{ events: MotionEventSummary[] }>(gatewayBaseUrl, "/api/events"),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      startTransition(() => {
+        setDevices(devicePayload.devices);
+        setEvents(eventPayload.events);
+        setError(null);
+      });
+    }
+
+    void loadDashboard().catch(() => {
+      if (!cancelled) {
+        setError("Could not load live data from the selected gateway.");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayBaseUrl]);
 
   useEffect(() => {
     return subscribeToMotion((payload: MotionStreamPayload) => {
@@ -55,16 +94,17 @@ export function DeviceDashboard({
   if (devices.length === 0) {
     return (
       <AppShell
-        description="The live board wakes up as soon as the BLE gateway forwards the first device update."
+        description="Pick the gateway on this Wi-Fi network. The live board wakes up as soon as that gateway forwards the first BLE node update."
         eyebrow="Live board"
         title="Motion status"
       >
         <article className={styles.emptyCard}>
           <h2 className={styles.emptyTitle}>No motion data yet</h2>
           <p className={styles.emptyText}>
-            Start the BLE gateway, then move a node so it can forward a packet to
-            <code> /api/ingest</code>.
+            Connect this console to the right gateway host, then move a BLE node so
+            the gateway can forward a packet into the live board.
           </p>
+          <GatewayConnectionPanel compact />
           {error ? <p className={styles.banner}>{error}</p> : null}
         </article>
       </AppShell>
@@ -76,7 +116,7 @@ export function DeviceDashboard({
 
   return (
     <AppShell
-      description="Live multi-device motion state, BLE gateway health-by-proxy, and the most recent forwarded events."
+      description="Live multi-device motion state from the selected gateway, plus the most recent forwarded BLE node events on this local network."
       eyebrow="Live board"
       status={
         <div className={styles.heroStatus}>

@@ -11,10 +11,12 @@ import {
   type ReactNode,
 } from "react";
 
+import { buildGatewayUrl } from "@/lib/gateway-connection";
 import type {
   DeviceLogStreamPayload,
   MotionStreamPayload,
 } from "@/lib/motion";
+import { useGatewayConnection } from "./gateway-connection-provider";
 
 type MotionListener = (payload: MotionStreamPayload) => void;
 type DeviceLogListener = (payload: DeviceLogStreamPayload) => void;
@@ -31,9 +33,16 @@ export function LiveStreamProvider({ children }: { children: ReactNode }) {
   const [liveStatus, setLiveStatus] = useState("Connecting…");
   const motionListeners = useRef(new Set<MotionListener>());
   const deviceLogListeners = useRef(new Set<DeviceLogListener>());
+  const { gatewayBaseUrl } = useGatewayConnection();
 
   useEffect(() => {
-    const eventSource = new EventSource("/api/stream");
+    if (!gatewayBaseUrl) {
+      return;
+    }
+
+    const eventSource = new EventSource(
+      buildGatewayUrl(gatewayBaseUrl, "/api/stream"),
+    );
 
     eventSource.addEventListener("motion-update", (rawEvent) => {
       const event = rawEvent as MessageEvent<string>;
@@ -64,7 +73,7 @@ export function LiveStreamProvider({ children }: { children: ReactNode }) {
     return () => {
       eventSource.close();
     };
-  }, []);
+  }, [gatewayBaseUrl]);
 
   const subscribeToMotion = useCallback((listener: MotionListener) => {
     motionListeners.current.add(listener);
@@ -84,11 +93,11 @@ export function LiveStreamProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<LiveStreamContextValue>(
     () => ({
-      liveStatus,
+      liveStatus: gatewayBaseUrl ? liveStatus : "Pick a gateway",
       subscribeToMotion,
       subscribeToDeviceLogs,
     }),
-    [liveStatus, subscribeToMotion, subscribeToDeviceLogs],
+    [gatewayBaseUrl, liveStatus, subscribeToMotion, subscribeToDeviceLogs],
   );
 
   return (

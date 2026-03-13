@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { formatLocalTime } from "@/lib/format-time";
+import { buildGatewayUrl, fetchGatewayJson } from "@/lib/gateway-connection";
 import type {
   DeviceLogStreamPayload,
   DeviceLogSummary,
@@ -13,6 +14,8 @@ import type {
 import { mergeDeviceUpdate, mergeLogUpdate } from "@/lib/motion";
 
 import { AppShell } from "./app-shell";
+import { GatewayConnectionPanel } from "./gateway-connection-panel";
+import { useGatewayConnection } from "./gateway-connection-provider";
 import { useLiveStream } from "./live-stream-provider";
 import styles from "./device-logs-dashboard.module.css";
 
@@ -46,8 +49,8 @@ export function DeviceLogsDashboard({
     initialSelectedDeviceId ?? initialDevices[0]?.id ?? null,
   );
   const [status, setStatus] = useState<string | null>(null);
+  const { gatewayBaseUrl } = useGatewayConnection();
   const { liveStatus, subscribeToDeviceLogs, subscribeToMotion } = useLiveStream();
-  const skippedInitialFetch = useRef(false);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) ?? null,
@@ -55,12 +58,41 @@ export function DeviceLogsDashboard({
   );
 
   useEffect(() => {
-    if (!selectedDeviceId) {
+    if (!gatewayBaseUrl) {
       return;
     }
 
-    if (!skippedInitialFetch.current && selectedDeviceId === initialSelectedDeviceId) {
-      skippedInitialFetch.current = true;
+    let cancelled = false;
+
+    async function loadDevices() {
+      const payload = await fetchGatewayJson<{ devices: DeviceSummary[] }>(
+        gatewayBaseUrl,
+        "/api/devices",
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      startTransition(() => {
+        setDevices(payload.devices);
+        setSelectedDeviceId((current) => current ?? payload.devices[0]?.id ?? null);
+      });
+    }
+
+    void loadDevices().catch(() => {
+      if (!cancelled) {
+        setStatus("Could not load devices from the selected gateway.");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayBaseUrl]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) {
       return;
     }
 
@@ -69,7 +101,10 @@ export function DeviceLogsDashboard({
 
     async function loadLogs() {
       const response = await fetch(
-        `/api/device-logs?deviceId=${encodeURIComponent(deviceId)}&limit=100`,
+        buildGatewayUrl(
+          gatewayBaseUrl,
+          `/api/device-logs?deviceId=${encodeURIComponent(deviceId)}&limit=100`,
+        ),
         { cache: "no-store" },
       );
 
@@ -94,7 +129,7 @@ export function DeviceLogsDashboard({
     return () => {
       cancelled = true;
     };
-  }, [initialLogs, initialSelectedDeviceId, selectedDeviceId]);
+  }, [gatewayBaseUrl, initialLogs, selectedDeviceId]);
 
   useEffect(() => {
     const unsubscribeMotion = subscribeToMotion((payload: MotionStreamPayload) => {
@@ -122,7 +157,7 @@ export function DeviceLogsDashboard({
 
   return (
     <AppShell
-      description="Remote lifecycle logs for each ESP32, streamed into the app as the device reports Wi-Fi, OTA, and motion events."
+      description="Gateway-local lifecycle logs for BLE-only sensor nodes, streamed into this console over the same Wi-Fi network."
       eyebrow="Observability"
       status={
         <div className={styles.heroStatus}>
@@ -133,6 +168,7 @@ export function DeviceLogsDashboard({
       title="Device logs"
     >
       {status ? <p className={styles.banner}>{status}</p> : null}
+      {!selectedDevice ? <GatewayConnectionPanel compact /> : null}
 
       <section className={styles.controls}>
         <div className={styles.controlBlock}>
@@ -203,8 +239,8 @@ export function DeviceLogsDashboard({
 
         {logs.length === 0 ? (
           <div className={styles.emptyState}>
-            No logs yet for this device. As soon as it reports Wi-Fi, OTA, or
-            motion lifecycle events, they will appear here.
+            No logs yet for this device. As soon as the selected gateway records
+            node lifecycle events, they will appear here.
           </div>
         ) : (
           <ul className={styles.logList}>

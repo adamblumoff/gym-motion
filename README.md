@@ -1,14 +1,14 @@
 # Gym Motion
 
-BLE-first motion dashboard and proof-of-concept gateway for ESP32-based gym sensors.
+Gateway-first motion dashboard for BLE sensor nodes.
 
 This version is intentionally cheap and simple:
 
 - sensor nodes publish motion over BLE, not direct Wi-Fi HTTP
-- a local Linux gateway receives BLE updates and forwards them to the existing backend
+- a local Linux gateway receives BLE updates and serves the operator console on the same Wi-Fi network
 - the frontend shows multiple devices at once
 - device location is static metadata only, using labels like machine name and zone
-- OTA is now gateway-driven: the gateway downloads firmware once and pushes it to nearby BLE nodes
+- the current firmware is an ESP32 reference implementation for a future lower-power BLE-only node
 
 ## Stack
 
@@ -16,7 +16,7 @@ This version is intentionally cheap and simple:
 - Railway PostgreSQL
 - Bun for app/package management
 - local Node BLE gateway using `@abandonware/noble`
-- ESP32 Arduino sketch in `gym_motion/gym_motion.ino`
+- ESP32 reference node sketch in `gym_motion/gym_motion.ino`
 
 ## Required environment variables
 
@@ -49,9 +49,9 @@ Open:
 
 ## POC architecture
 
-### Node
+### BLE Node
 
-Each ESP32 node:
+Each sensor node:
 
 - reads motion from the ADXL345
 - reduces state to `moving` or `still`
@@ -71,7 +71,7 @@ Each ESP32 node:
 }
 ```
 
-The sketch also keeps a BLE provisioning service for saving `deviceId`, machine label, and zone metadata.
+The current repo uses an ESP32 sketch as a reference node implementation. The product direction assumes lower-power BLE-only nodes that never join Wi-Fi directly.
 
 ### Gateway
 
@@ -81,8 +81,8 @@ The gateway:
 - subscribes to node telemetry
 - forwards state changes to `POST /api/ingest`
 - forwards repeated keepalive packets to `POST /api/heartbeat`
-- checks the backend for active firmware releases
-- downloads firmware once and pushes OTA chunks over BLE to each node
+- serves the operator console on the same Wi-Fi network
+- acts as the live source of truth for the local operator console
 
 Run it with:
 
@@ -106,15 +106,24 @@ Linux notes:
 - if you run from WSL, BLE access may require extra host passthrough setup
 - native Linux is the safest path for bench testing
 
+### Frontend
+
+The operator console:
+
+- connects to the gateway over local Wi-Fi
+- subscribes to live device updates from the selected gateway
+- does not require browser Bluetooth support for the normal monitoring flow
+- can be pointed at a gateway by hostname, ideally a `.local` mDNS name
+
 ### Backend
 
-The backend contract stays intentionally small:
+The backend contract remains intentionally small:
 
 - `POST /api/ingest` stores forwarded motion events
 - `POST /api/heartbeat` keeps quiet devices marked alive
 - `GET /api/devices` returns the multi-device board
 - `POST /api/devices` and `PATCH /api/devices/:deviceId` manage static metadata
-- existing firmware release/check/report routes are reused by the gateway OTA flow
+- existing firmware release/check/report routes remain available for the current reference firmware flow
 
 The current schema already supports multiple devices. This POC reuses:
 
@@ -129,34 +138,37 @@ The current schema already supports multiple devices. This POC reuses:
 bun dev
 ```
 
-2. Flash the firmware:
+2. Flash the reference node firmware:
 
 ```bash
 bun run firmware:upload -- --port <serial-port>
 ```
 
-3. If needed, open `/setup` and pair a node over Web Bluetooth to save its `deviceId` and zone.
+3. Start the app on the gateway host:
 
-4. Start the BLE gateway:
+```bash
+bun dev
+```
+
+4. Open the app from another device on the same Wi-Fi using the gateway hostname, for example `http://gateway-host.local:3000`.
+
+5. Start the BLE gateway:
 
 ```bash
 bun run gateway
 ```
 
-5. Move a node. The dashboard should show the device as `MOVING` or `STILL`.
+6. Move a node. The dashboard should show the device as `MOVING` or `STILL`.
 
-## Firmware OTA flow
+## Reference Firmware Flow
 
-For this POC, OTA works like this:
+The repo still includes a working ESP32 reference firmware path for bench testing:
 
-1. publish a firmware release to the existing backend
-2. the gateway checks `/api/firmware/check` for each discovered device
-3. the gateway downloads the firmware asset over HTTP
-4. the gateway streams firmware chunks to the node over BLE
-5. the node applies the update and reboots
-6. the gateway reports update status back through `/api/firmware/report`
+- `bun run reference-node:build`
+- `bun run reference-node:upload -- --port <serial-port>`
+- `bun run reference-node:publish -- --version <version>`
 
-Nodes no longer download firmware directly over Wi-Fi.
+This should be treated as the current reference-node workflow rather than the permanent product firmware contract.
 
 ## Database setup
 
