@@ -143,6 +143,7 @@ export function createManagedGatewayRuntime(
   let windowsAdapterRetryTimer: NodeJS.Timeout | null = null;
   let discoveredAdapters: BleAdapterSummary[] = [];
   let autoSelectedAdapterId: string | null = null;
+  const intentionalChildExits = new WeakSet<ChildProcess>();
 
   function emit(event: DesktopRuntimeEvent) {
     for (const listener of listeners) {
@@ -245,10 +246,15 @@ export function createManagedGatewayRuntime(
 
   async function refreshAdapters() {
     const adapterPayload =
-      usesWindowsNativeGateway(process.platform) && child
-        ? await fetchJson<{ adapters: BleAdapterSummary[]; error?: string }>(
-            `http://127.0.0.1:${runtimePort}/adapters`,
-          )
+      usesWindowsNativeGateway(process.platform)
+        ? child
+          ? await fetchJson<{ adapters: BleAdapterSummary[]; error?: string }>(
+              `http://127.0.0.1:${runtimePort}/adapters`,
+            )
+          : {
+              adapters: discoveredAdapters,
+              error: undefined,
+            }
         : {
             adapters: await listBleAdapters(),
             error: undefined,
@@ -532,13 +538,15 @@ export function createManagedGatewayRuntime(
       windowsAdapterRetryTimer = null;
     }
 
-    child.kill("SIGTERM");
+    const exitingChild = child;
+    intentionalChildExits.add(exitingChild);
     child = null;
+    exitingChild.kill("SIGTERM");
   }
 
   function runtimeStartIssue() {
     if (usesWindowsNativeGateway(process.platform)) {
-      return setupState.adapterIssue;
+      return null;
     }
 
     if (setupState.adapterIssue) {
@@ -588,7 +596,7 @@ export function createManagedGatewayRuntime(
       env.NOBLE_HCI_DEVICE_ID = String(adapter?.runtimeDeviceId);
     }
 
-    child = spawn(
+    const spawnedChild = spawn(
       process.execPath,
       [
         resolveGatewayScriptPath({
@@ -604,16 +612,22 @@ export function createManagedGatewayRuntime(
       stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    child = spawnedChild;
 
-    child.stdout?.on("data", (chunk) => {
+    spawnedChild.stdout?.on("data", (chunk) => {
       process.stdout.write(`[gateway] ${chunk}`);
     });
-    child.stderr?.on("data", (chunk) => {
+    spawnedChild.stderr?.on("data", (chunk) => {
       process.stderr.write(`[gateway] ${chunk}`);
     });
-    child.once("exit", (code, signal) => {
-      child = null;
-      if (stopped) {
+    spawnedChild.once("exit", (code, signal) => {
+      const wasIntentional = intentionalChildExits.has(spawnedChild);
+
+      if (child === spawnedChild) {
+        child = null;
+      }
+
+      if (stopped || wasIntentional) {
         return;
       }
 
