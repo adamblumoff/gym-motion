@@ -1051,16 +1051,16 @@ export async function recordFirmwareReport(
     `update devices
      set update_status = $2,
          firmware_version = case
-           when $2 in ('applied', 'booted') and $3 is not null then $3
+           when $2 in ('applied', 'booted') and $3::text is not null then $3::text
            else firmware_version
          end,
          update_target_version = case
            when $2 = 'idle' then null
-           when $3 is not null then $3
+           when $3::text is not null then $3::text
            else update_target_version
          end,
          update_detail = case
-           when $4 is not null then $4
+           when $4::text is not null then $4::text
            when $2 in ('idle', 'available', 'downloading', 'applied', 'booted') then null
            else update_detail
          end,
