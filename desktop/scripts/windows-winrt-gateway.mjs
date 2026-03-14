@@ -3,6 +3,7 @@
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../legacy/scripts/gateway-runtime-server.mjs";
 
@@ -24,7 +25,7 @@ const config = {
   verbose: process.env.GATEWAY_VERBOSE === "1",
 };
 
-const approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
+let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let selectedAdapterId =
   typeof process.env.GATEWAY_SELECTED_ADAPTER_ID === "string" &&
     process.env.GATEWAY_SELECTED_ADAPTER_ID.length > 0
@@ -344,6 +345,61 @@ function sendCommand(type, payload = {}) {
   sidecar.stdin.write(`${JSON.stringify({ type, ...payload })}\n`);
 }
 
+function sidecarAllowedNodesPayload() {
+  return approvedNodeRules.map((node) => ({
+    id: node.id,
+    label: node.label,
+    peripheral_id: node.peripheralId ?? null,
+    address: node.address ?? null,
+    local_name: node.localName ?? null,
+    known_device_id: node.knownDeviceId ?? null,
+  }));
+}
+
+function syncAllowedNodes() {
+  sendCommand("set_allowed_nodes", {
+    nodes: sidecarAllowedNodesPayload(),
+  });
+}
+
+function attachControlReader() {
+  const controlReader = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+
+  controlReader.on("line", (line) => {
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      return;
+    }
+
+    try {
+      const command = JSON.parse(trimmed);
+
+      if (command.type === "set_allowed_nodes" && Array.isArray(command.nodes)) {
+        approvedNodeRules = command.nodes.map((node) => ({
+          id: node.id,
+          label: node.label,
+          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+          address: node.address ?? null,
+          localName: node.localName ?? node.local_name ?? null,
+          knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+        }));
+        syncAllowedNodes();
+        return;
+      }
+
+      if (command.type === "rescan") {
+        sendCommand("rescan");
+      }
+    } catch (error) {
+      console.error("[gateway-winrt] failed to parse control command", error);
+    }
+  });
+}
+
 function handleSidecarEvent(event) {
   switch (event.type) {
     case "ready":
@@ -490,16 +546,7 @@ async function startSidecar() {
   if (selectedAdapterId) {
     sendCommand("select_adapter", { adapter_id: selectedAdapterId });
   }
-  sendCommand("set_allowed_nodes", {
-    nodes: approvedNodeRules.map((node) => ({
-      id: node.id,
-      label: node.label,
-      peripheral_id: node.peripheralId ?? null,
-      address: node.address ?? null,
-      local_name: node.localName ?? null,
-      known_device_id: node.knownDeviceId ?? null,
-    })),
-  });
+  syncAllowedNodes();
   sendCommand("list_adapters");
   if (selectedAdapterId) {
     sidecarSessionStarted = true;
@@ -533,6 +580,8 @@ process.on("SIGINT", () => {
     process.exit(0);
   });
 });
+
+attachControlReader();
 
 void runtimeServer.start()
   .then(async () => {

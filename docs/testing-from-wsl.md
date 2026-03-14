@@ -18,7 +18,7 @@ Windows validation:
 3. Copy `.env.local` into that Windows repo.
 4. On Windows, install the Rust MSVC toolchain if it is not already present.
 5. On Windows, run `bun install` and `bun run dev`.
-6. Use the `Setup` tab to connect a node once and validate automatic reconnect behavior.
+6. Use the `Setup` tab to run a manual scan and connect a node.
 7. Build the Windows package on the Windows side with `bun run build:win`.
 8. From WSL, run `bun run test:windows-desktop` if you want a helper to launch an already-built `.exe`.
 

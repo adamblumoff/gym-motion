@@ -208,7 +208,7 @@ function GatewayStatePanel({
           <strong>{snapshot.liveStatus}</strong>
           <p>
             {snapshot.gatewayIssue ??
-              "Use Setup to connect a node for the first time. After that, approved nodes reconnect automatically."}
+              "Use Setup to run a manual Bluetooth scan and connect a node."}
           </p>
         </div>
       </div>
@@ -226,7 +226,7 @@ function GatewayStatePanel({
       <div className="device-list compact">
         {snapshot.devices.length === 0 ? (
           <div className="empty-state">
-            No approved nodes are connected yet. Open Setup to connect a visible node for the first time.
+            No approved nodes are connected yet. Open Setup and run a manual scan to connect a visible node.
           </div>
         ) : (
           snapshot.devices.map((device) => (
@@ -279,8 +279,8 @@ function SetupPanel({
 }: {
   setup: DesktopSetupState;
   now: number;
-  onRescanNodes: () => void;
-  onSetNodes: (nodes: ApprovedNodeRule[]) => void;
+  onRescanNodes: () => Promise<void>;
+  onSetNodes: (nodes: ApprovedNodeRule[]) => Promise<void>;
 }) {
   const visibleNodes = useMemo(
     () =>
@@ -303,19 +303,20 @@ function SetupPanel({
     [setup.approvedNodes, setup.nodes],
   );
 
-  function connectNode(node: DiscoveredNodeSummary) {
+  async function connectNode(node: DiscoveredNodeSummary) {
     const nextIds = new Set(setup.approvedNodes.map((approvedNode) => approvedNode.id));
     nextIds.add(node.id);
-    onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
+    await onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
+    await onRescanNodes();
   }
 
-  function removeNode(nodeId: string) {
+  async function removeNode(nodeId: string) {
     const nextIds = new Set(
       setup.approvedNodes
         .map((approvedNode) => approvedNode.id)
         .filter((approvedNodeId) => approvedNodeId !== nodeId),
     );
-    onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
+    await onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
   }
 
   return (
@@ -329,7 +330,7 @@ function SetupPanel({
         </div>
         <div className="setup-actions">
           <button className="secondary-button" onClick={onRescanNodes} type="button">
-            Rescan nodes
+            Scan nodes
           </button>
         </div>
       </div>
@@ -342,7 +343,7 @@ function SetupPanel({
         <section className="setup-block">
           <div className="setup-block-heading">
             <span className="section-label">Visible nodes</span>
-            <strong>Connect a node once, then let the gateway keep it online.</strong>
+            <strong>Run a manual scan, then connect the node you want online.</strong>
           </div>
 
           <div className="setup-summary-row">
@@ -354,7 +355,7 @@ function SetupPanel({
           <div className="node-list">
             {visibleNodes.length === 0 ? (
               <div className="empty-state">
-                No BLE nodes are visible yet. Keep the node powered nearby and rescan if it just came online.
+                No BLE nodes are visible yet. Keep the node powered nearby and start a manual scan if it just came online.
               </div>
             ) : (
               visibleNodes.map((node) => {
@@ -407,7 +408,7 @@ function SetupPanel({
             )}
           </div>
           <p className="setup-hint">
-            The first connection is manual. Once a node is managed here, the gateway reconnects it automatically later.
+            Bluetooth discovery is manual-only. Start a scan whenever you want to find or reconnect nodes.
           </p>
         </section>
       </div>
@@ -590,8 +591,8 @@ export function App() {
         <section className="dashboard-grid single-column">
           <SetupPanel
             now={now}
-            onRescanNodes={() => void rescanAdapters()}
-            onSetNodes={(nodes) => void setAllowedNodes(nodes)}
+            onRescanNodes={() => rescanAdapters()}
+            onSetNodes={(nodes) => setAllowedNodes(nodes)}
             setup={setup}
           />
         </section>

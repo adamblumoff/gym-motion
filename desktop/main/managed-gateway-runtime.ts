@@ -145,6 +145,14 @@ export function createManagedGatewayRuntime(
   let autoSelectedAdapterId: string | null = null;
   const intentionalChildExits = new WeakSet<ChildProcess>();
 
+  function sendWindowsGatewayCommand(command: Record<string, unknown>) {
+    if (!usesWindowsNativeGateway(process.platform) || !child?.stdin || child.killed) {
+      return;
+    }
+
+    child.stdin.write(`${JSON.stringify(command)}\n`);
+  }
+
   function emit(event: DesktopRuntimeEvent) {
     for (const listener of listeners) {
       listener(event);
@@ -609,7 +617,7 @@ export function createManagedGatewayRuntime(
       {
       cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       },
     );
     child = spawnedChild;
@@ -812,7 +820,7 @@ export function createManagedGatewayRuntime(
     },
     async rescanAdapters() {
       if (usesWindowsNativeGateway(process.platform)) {
-        await restartRuntime();
+        sendWindowsGatewayCommand({ type: "rescan" });
         return setupState;
       }
 
@@ -820,8 +828,19 @@ export function createManagedGatewayRuntime(
       return setupState;
     },
     async setAllowedNodes(nodes) {
-      store.setJson(APPROVED_NODES_KEY, dedupeApprovedNodes(nodes));
+      const nextNodes = dedupeApprovedNodes(nodes);
+      store.setJson(APPROVED_NODES_KEY, nextNodes);
       await refreshAdapters();
+
+      if (usesWindowsNativeGateway(process.platform)) {
+        sendWindowsGatewayCommand({
+          type: "set_allowed_nodes",
+          nodes: nextNodes,
+        });
+        mergeSetupNodes(setupState.nodes);
+        return setupState;
+      }
+
       await restartRuntime();
       return setupState;
     },

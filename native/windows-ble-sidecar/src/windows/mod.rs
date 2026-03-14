@@ -14,7 +14,7 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio::{
     io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{watch, Mutex, RwLock},
+    sync::{mpsc, watch, Mutex, RwLock},
     task::JoinHandle,
     time::sleep,
 };
@@ -88,7 +88,12 @@ impl EventWriter {
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
+    commands: mpsc::UnboundedSender<SessionCommand>,
     task: JoinHandle<()>,
+}
+
+enum SessionCommand {
+    StartScan,
 }
 
 struct Sidecar {
@@ -162,6 +167,15 @@ impl Sidecar {
     async fn handle_command(&mut self, command: Command) -> Result<bool> {
         match command {
             Command::ListAdapters | Command::Rescan => {
+                if matches!(command, Command::Rescan) {
+                    if self.session.is_none() {
+                        self.start_session().await?;
+                    }
+
+                    if let Some(session) = &self.session {
+                        let _ = session.commands.send(SessionCommand::StartScan);
+                    }
+                }
                 self.emit_adapters().await?;
             }
             Command::SelectAdapter { adapter_id } => {
@@ -208,6 +222,7 @@ impl Sidecar {
 
         let adapter = resolve_adapter(&self.manager, &selected_adapter_id).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
         let writer = self.writer.clone();
         let config = self.config.clone();
         let allowed_nodes = self.allowed_nodes.clone();
@@ -219,6 +234,7 @@ impl Sidecar {
                 config,
                 allowed_nodes,
                 shutdown_rx,
+                command_rx,
             )
             .await
             {
@@ -233,6 +249,7 @@ impl Sidecar {
 
         self.session = Some(SessionHandle {
             shutdown: shutdown_tx,
+            commands: command_tx,
             task,
         });
 
@@ -305,6 +322,7 @@ async fn run_session(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     mut shutdown: watch::Receiver<bool>,
+    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
 ) -> Result<()> {
     let adapter_state = normalize_adapter_state(
         adapter
@@ -316,7 +334,7 @@ async fn run_session(
         .send(&Event::GatewayState {
             gateway: GatewayStatePayload {
                 adapter_state,
-                scan_state: "starting".to_string(),
+                scan_state: "stopped".to_string(),
                 selected_adapter_id: Some(selected_adapter_id.clone()),
                 last_advertisement_at: None,
                 issue: None,
@@ -325,33 +343,42 @@ async fn run_session(
         .await?;
 
     let mut events = adapter.events().await?;
-    adapter.start_scan(ScanFilter::default()).await?;
-    writer
-        .send(&Event::GatewayState {
-            gateway: GatewayStatePayload {
-                adapter_state: normalize_adapter_state(
-                    adapter
-                        .adapter_state()
-                        .await
-                        .unwrap_or(CentralState::Unknown),
-                ),
-                scan_state: "scanning".to_string(),
-                selected_adapter_id: Some(selected_adapter_id.clone()),
-                last_advertisement_at: None,
-                issue: None,
-            },
-        })
-        .await?;
-
     let active_connections = Arc::new(Mutex::new(HashSet::<String>::new()));
     let known_device_ids = Arc::new(RwLock::new(HashMap::<String, String>::new()));
     let mut last_advertisement_at = None;
+    let mut scanning = false;
 
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_ok() && *shutdown.borrow() {
                     break;
+                }
+            }
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    break;
+                };
+
+                if matches!(command, SessionCommand::StartScan) && !scanning {
+                    adapter.start_scan(ScanFilter::default()).await?;
+                    scanning = true;
+                    writer
+                        .send(&Event::GatewayState {
+                            gateway: GatewayStatePayload {
+                                adapter_state: normalize_adapter_state(
+                                    adapter
+                                        .adapter_state()
+                                        .await
+                                        .unwrap_or(CentralState::Unknown),
+                                ),
+                                scan_state: "scanning".to_string(),
+                                selected_adapter_id: Some(selected_adapter_id.clone()),
+                                last_advertisement_at: last_advertisement_at.clone(),
+                                issue: None,
+                            },
+                        })
+                        .await?;
                 }
             }
             event = events.next() => {
@@ -364,7 +391,7 @@ async fn run_session(
                         writer.send(&Event::GatewayState {
                             gateway: GatewayStatePayload {
                                 adapter_state: normalize_adapter_state(state),
-                                scan_state: "scanning".to_string(),
+                                scan_state: if scanning { "scanning" } else { "stopped" }.to_string(),
                                 selected_adapter_id: Some(selected_adapter_id.clone()),
                                 last_advertisement_at: last_advertisement_at.clone(),
                                 issue: None,
@@ -372,6 +399,10 @@ async fn run_session(
                         }).await?;
                     }
                     CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => {
+                        if !scanning {
+                            continue;
+                        }
+
                         let peripheral = adapter.peripheral(&id).await?;
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
                             last_advertisement_at = node.last_seen_at.clone();
@@ -416,6 +447,24 @@ async fn run_session(
                     CentralEvent::DeviceConnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                            if scanning {
+                                let _ = adapter.stop_scan().await;
+                                scanning = false;
+                                writer.send(&Event::GatewayState {
+                                    gateway: GatewayStatePayload {
+                                        adapter_state: normalize_adapter_state(
+                                            adapter
+                                                .adapter_state()
+                                                .await
+                                                .unwrap_or(CentralState::Unknown),
+                                        ),
+                                        scan_state: "stopped".to_string(),
+                                        selected_adapter_id: Some(selected_adapter_id.clone()),
+                                        last_advertisement_at: last_advertisement_at.clone(),
+                                        issue: None,
+                                    }
+                                }).await?;
+                            }
                             writer.send(&Event::NodeConnectionState {
                                 node,
                                 gateway_connection_state: "connected".to_string(),
@@ -444,7 +493,9 @@ async fn run_session(
         }
     }
 
-    let _ = adapter.stop_scan().await;
+    if scanning {
+        let _ = adapter.stop_scan().await;
+    }
     writer
         .send(&Event::GatewayState {
             gateway: GatewayStatePayload {

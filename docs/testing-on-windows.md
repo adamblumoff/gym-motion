@@ -51,9 +51,9 @@ In the app:
 
 1. Open the `Setup` tab.
 2. Confirm Bluetooth comes up automatically without any adapter picker.
-3. Power the BLE node and confirm it appears in the visible node list.
+3. Click `Scan nodes`, then power the BLE node and confirm it appears in the visible node list.
 4. Click `Connect` on a visible node.
-5. Confirm the gateway manages that node and reconnects it automatically later.
+5. Confirm the gateway manages that node.
 6. Click `Remove` and confirm the node stops being managed.
 7. Confirm the restart control only exists in the header.
 
@@ -76,5 +76,5 @@ Validate the same Setup and reconnect flow in the packaged app.
 - The desktop runtime is real, not mock-backed.
 - Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
-- The `Setup` tab is node-only: connect a node once there, then let the gateway auto-reconnect it later.
+- The `Setup` tab is node-only, and Bluetooth discovery is manual-only. Scan when you want to find or reconnect nodes.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.
