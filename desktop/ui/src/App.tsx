@@ -196,6 +196,8 @@ function GatewayStatePanel({
   snapshot: NonNullable<ReturnType<typeof useDesktopApp>["snapshot"]>;
   now: number;
 }) {
+  const hasManagedNodes = snapshot.gateway.knownNodeCount > 0;
+
   return (
     <section className="panel live-panel">
       <div className="section-heading">
@@ -208,7 +210,9 @@ function GatewayStatePanel({
           <strong>{snapshot.liveStatus}</strong>
           <p>
             {snapshot.gatewayIssue ??
-              "Use Setup to run a manual Bluetooth scan and connect a node."}
+              (hasManagedNodes
+                ? "This machine already knows your node list. Run a manual scan in Setup only when you want to reconnect or add a node."
+                : "Use Setup to run a manual Bluetooth scan and connect a node.")}
           </p>
         </div>
       </div>
@@ -226,7 +230,9 @@ function GatewayStatePanel({
       <div className="device-list compact">
         {snapshot.devices.length === 0 ? (
           <div className="empty-state">
-            No approved nodes are connected yet. Open Setup and run a manual scan to connect a visible node.
+            {hasManagedNodes
+              ? "No managed nodes are connected right now. Open Setup only if you want to run a manual scan."
+              : "No managed nodes are connected yet. Open Setup and run a manual scan to connect a visible node."}
           </div>
         ) : (
           snapshot.devices.map((device) => (
@@ -343,7 +349,11 @@ function SetupPanel({
         <section className="setup-block">
           <div className="setup-block-heading">
             <span className="section-label">Visible nodes</span>
-            <strong>Run a manual scan, then connect the node you want online.</strong>
+            <strong>
+              {setup.approvedNodes.length > 0
+                ? "This machine already knows the managed nodes below."
+                : "Run a manual scan, then connect the node you want online."}
+            </strong>
           </div>
 
           <div className="setup-summary-row">
@@ -408,7 +418,9 @@ function SetupPanel({
             )}
           </div>
           <p className="setup-hint">
-            Bluetooth discovery is manual-only. Start a scan whenever you want to find or reconnect nodes.
+            {setup.approvedNodes.length > 0
+              ? "Bluetooth discovery is manual-only. Ignore this screen unless you want to reconnect or add a node."
+              : "Bluetooth discovery is manual-only. Start a scan whenever you want to find or connect a node."}
           </p>
         </section>
       </div>

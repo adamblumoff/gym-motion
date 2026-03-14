@@ -402,6 +402,23 @@ export function createGatewayRuntimeServer({
     touchGatewayState();
   }
 
+  function normalizeIdleConnectionStates() {
+    for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
+      if (
+        runtime.gatewayConnectionState === "connecting" ||
+        runtime.gatewayConnectionState === "reconnecting" ||
+        runtime.gatewayConnectionState === "discovered"
+      ) {
+        runtimeByDeviceId.set(deviceId, {
+          ...runtime,
+          gatewayConnectionState: "disconnected",
+          updatedAt: nowIso(),
+        });
+        emitDevice(deviceId);
+      }
+    }
+  }
+
   function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }) {
     if (knownDeviceId) {
       return `known:${knownDeviceId}`;
@@ -593,7 +610,10 @@ export function createGatewayRuntimeServer({
 
       if (state === "poweredOn") {
         for (const deviceId of knownNodesByDeviceId.keys()) {
-          updateRuntimeNode(deviceId, { gatewayConnectionState: "reconnecting" });
+          updateRuntimeNode(deviceId, {
+            gatewayConnectionState:
+              gatewayState.scanState === "scanning" ? "reconnecting" : "disconnected",
+          });
           emitDevice(deviceId);
         }
       }
@@ -614,6 +634,11 @@ export function createGatewayRuntimeServer({
 
     setScanState(scanState) {
       touchGatewayState({ scanState });
+
+      if (scanState !== "scanning") {
+        normalizeIdleConnectionStates();
+      }
+
       broadcastGatewayStatus();
     },
 
@@ -796,7 +821,9 @@ export function createGatewayRuntimeServer({
       updateRuntimeNode(deviceId, {
         peripheralId,
         gatewayConnectionState:
-          gatewayState.adapterState === "poweredOn" ? "reconnecting" : "disconnected",
+          gatewayState.adapterState === "poweredOn" && gatewayState.scanState === "scanning"
+            ? "reconnecting"
+            : "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
       });
