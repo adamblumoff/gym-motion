@@ -12,6 +12,7 @@ const config = {
   runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
   runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
   heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),
+  startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
   sidecarPath:
     process.env.GATEWAY_SIDECAR_PATH ??
     path.join(
@@ -45,6 +46,7 @@ let sidecar = null;
 let shuttingDown = false;
 let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
+let scanRequestedFromBoot = config.startScanOnBoot;
 
 function log(message, details) {
   if (details !== undefined) {
@@ -437,6 +439,11 @@ function handleSidecarEvent(event) {
           sidecarSessionStarted = true;
           sendCommand("start");
         }
+
+        if (scanRequestedFromBoot && selectedAdapterId) {
+          scanRequestedFromBoot = false;
+          sendCommand("rescan");
+        }
       }
       break;
     case "gateway_state":
@@ -520,6 +527,7 @@ function attachJsonLineReader(stream, onEvent) {
 
 async function startSidecar() {
   sidecarSessionStarted = false;
+  scanRequestedFromBoot = config.startScanOnBoot;
   sidecar = spawn(config.sidecarPath, [], {
     cwd: process.cwd(),
     env: {

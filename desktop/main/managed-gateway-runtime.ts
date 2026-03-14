@@ -143,6 +143,7 @@ export function createManagedGatewayRuntime(
   let windowsAdapterRetryTimer: NodeJS.Timeout | null = null;
   let discoveredAdapters: BleAdapterSummary[] = [];
   let autoSelectedAdapterId: string | null = null;
+  let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
 
   function sendWindowsGatewayCommand(command: Record<string, unknown>) {
@@ -595,6 +596,7 @@ export function createManagedGatewayRuntime(
 
     if (usesWindowsNativeGateway(process.platform)) {
       env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
+      env.GATEWAY_START_SCAN_ON_BOOT = windowsScanRequested ? "1" : "0";
       env.GATEWAY_SIDECAR_PATH = resolveWindowsSidecarPath({
         isPackaged: app.isPackaged,
         cwd: process.cwd(),
@@ -755,7 +757,9 @@ export function createManagedGatewayRuntime(
       await refreshHistory();
       emit({ type: "snapshot", snapshot });
       restartPolling();
+      windowsScanRequested = false;
     } catch (error) {
+      windowsScanRequested = false;
       updateGatewayStatus(
         { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
         "degraded",
@@ -820,7 +824,8 @@ export function createManagedGatewayRuntime(
     },
     async rescanAdapters() {
       if (usesWindowsNativeGateway(process.platform)) {
-        sendWindowsGatewayCommand({ type: "rescan" });
+        windowsScanRequested = true;
+        await restartRuntime();
         return setupState;
       }
 
