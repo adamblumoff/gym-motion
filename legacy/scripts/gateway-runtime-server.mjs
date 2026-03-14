@@ -441,7 +441,43 @@ export function createGatewayRuntimeServer({
 
   function upsertDiscovery({ peripheralId, address, localName, rssi, knownDeviceId = null }) {
     const id = discoveryIdFor({ peripheralId, address, localName, knownDeviceId });
-    const previous = discoveriesById.get(id) ?? {};
+    const aliasIds = new Set<string>();
+
+    if (knownDeviceId) {
+      aliasIds.add(`known:${knownDeviceId}`);
+    }
+
+    if (peripheralId) {
+      aliasIds.add(`peripheral:${peripheralId}`);
+    }
+
+    if (address) {
+      aliasIds.add(`address:${address}`);
+    }
+
+    if (localName) {
+      aliasIds.add(`name:${localName}`);
+    }
+
+    let previous = discoveriesById.get(id) ?? {};
+
+    for (const aliasId of aliasIds) {
+      if (aliasId === id) {
+        continue;
+      }
+
+      const aliasEntry = discoveriesById.get(aliasId);
+
+      if (!aliasEntry) {
+        continue;
+      }
+
+      previous = {
+        ...aliasEntry,
+        ...previous,
+      };
+      discoveriesById.delete(aliasId);
+    }
     const next = {
       ...previous,
       id,
