@@ -357,6 +357,10 @@ function handleSidecarEvent(event) {
               details: Array.isArray(adapter.details) ? adapter.details : [],
             }))
           : [];
+        log(
+          `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
+          adapters,
+        );
         runtimeServer.setAvailableAdapters(adapters);
         refreshSelectionIssue(adapters);
       }

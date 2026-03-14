@@ -145,6 +145,7 @@ export function createManagedGatewayRuntime(
   let setupState = createEmptySetupState();
   let startingPromise: Promise<void> | null = null;
   let stopped = false;
+  let windowsAdapterRetryTimer: NodeJS.Timeout | null = null;
 
   function emit(event: DesktopRuntimeEvent) {
     for (const listener of listeners) {
@@ -283,6 +284,21 @@ export function createManagedGatewayRuntime(
     };
 
     emitSetup();
+
+    if (
+      usesWindowsNativeGateway(process.platform) &&
+      child &&
+      adapters.length === 0 &&
+      windowsAdapterRetryTimer === null
+    ) {
+      windowsAdapterRetryTimer = setTimeout(() => {
+        windowsAdapterRetryTimer = null;
+        void refreshAdapters().catch((error) => {
+          console.error("[runtime] failed to retry Windows adapter refresh", error);
+        });
+      }, 1500);
+      windowsAdapterRetryTimer.unref?.();
+    }
   }
 
   function mergeSetupNodes(nodes: DiscoveredNodeSummary[]) {
@@ -513,6 +529,11 @@ export function createManagedGatewayRuntime(
   function stopChild() {
     if (!child) {
       return;
+    }
+
+    if (windowsAdapterRetryTimer) {
+      clearTimeout(windowsAdapterRetryTimer);
+      windowsAdapterRetryTimer = null;
     }
 
     child.kill("SIGTERM");

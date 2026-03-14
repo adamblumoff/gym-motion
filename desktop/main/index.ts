@@ -63,6 +63,12 @@ function createWindow() {
       return;
     }
 
+    if (!app.isPackaged) {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+
     event.preventDefault();
     window.hide();
   });

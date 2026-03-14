@@ -367,7 +367,7 @@ function SetupPanel({
           <div className="adapter-list">
             {setup.adapters.length === 0 ? (
               <div className="empty-state">
-                No compatible BLE adapters detected yet. On Windows, this noble stack usually needs a dedicated WinUSB-backed USB adapter.
+                No BLE adapters are visible yet. On Windows, the desktop app now uses the native Bluetooth stack, so the built-in radio should appear once the gateway runtime finishes binding to it.
               </div>
             ) : (
               setup.adapters.map((adapter) => (
