@@ -441,7 +441,7 @@ export function createGatewayRuntimeServer({
 
   function upsertDiscovery({ peripheralId, address, localName, rssi, knownDeviceId = null }) {
     const id = discoveryIdFor({ peripheralId, address, localName, knownDeviceId });
-    const aliasIds = new Set<string>();
+    const aliasIds = new Set();
 
     if (knownDeviceId) {
       aliasIds.add(`known:${knownDeviceId}`);
