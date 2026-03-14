@@ -607,7 +607,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {
     "{\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"state\":\"" + String(currentDetectedState) +
     "\",\"sequence\":" + String(lastJournaledSequence) +
-    "\",\"delta\":" + String(delta) +
+    ",\"delta\":" + String(delta) +
     ",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
