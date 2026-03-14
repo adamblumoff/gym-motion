@@ -683,13 +683,13 @@ async function runHistorySync(context, payload) {
             reject(new Error(`history sync timed out for ${payload.deviceId}`));
           }, 30_000);
 
-          void writeCharacteristic(
+          void writeChunkedJsonCommand(
             context.controlCharacteristic,
-            JSON.stringify({
+            {
               type: "history-sync-begin",
               afterSequence,
               maxRecords: config.historySyncPageSize,
-            }),
+            },
           ).catch((error) => {
             cleanup();
             reject(error);
@@ -715,13 +715,10 @@ async function runHistorySync(context, payload) {
           });
         }
 
-        await writeCharacteristic(
-          context.controlCharacteristic,
-          JSON.stringify({
-            type: "history-ack",
-            sequence: ackSequence,
-          }),
-        );
+        await writeChunkedJsonCommand(context.controlCharacteristic, {
+          type: "history-ack",
+          sequence: ackSequence,
+        });
 
         afterSequence = ackSequence;
         context.historySyncedThrough = ackSequence;
@@ -754,7 +751,22 @@ async function runHistorySync(context, payload) {
       });
   }
 
-  await context.historySyncPromise;
+  return context.historySyncPromise;
+}
+
+function triggerHistorySync(context, payload) {
+  if (
+    !context.controlCharacteristic ||
+    !payload.deviceId ||
+    payload.sequence === undefined ||
+    context.historySyncedThrough >= payload.sequence
+  ) {
+    return;
+  }
+
+  if (!context.historySyncPromise) {
+    void runHistorySync(context, payload);
+  }
 }
 
 function createStatusWaiter(
@@ -839,7 +851,7 @@ async function forwardTelemetry(payload) {
     context.historySyncedThrough ?? 0,
     0,
   );
-  await runHistorySync(context, payload);
+  triggerHistorySync(context, payload);
   flushNodeLogs(
     payload.deviceId,
     {

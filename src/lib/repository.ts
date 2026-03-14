@@ -198,6 +198,7 @@ function mapMotionEventToActivity(event: MotionEventSummary): DeviceActivitySumm
   return {
     id: `motion-${event.id}`,
     deviceId: event.deviceId,
+    sequence: event.sequence,
     kind: "motion",
     title: event.state.toUpperCase(),
     message: `Gateway recorded ${event.state} for ${event.deviceId}.`,
@@ -218,6 +219,7 @@ function mapDeviceLogToActivity(log: DeviceLogSummary): DeviceActivitySummary {
   return {
     id: `log-${log.id}`,
     deviceId: log.deviceId,
+    sequence: log.sequence,
     kind: "lifecycle",
     title: log.code ?? log.level.toUpperCase(),
     message: log.message,
@@ -612,8 +614,21 @@ export async function listDeviceActivity(options: {
     ...logs.rows.map(mapDeviceLogRow).map(mapDeviceLogToActivity),
   ]
     .toSorted(
-      (left, right) =>
-        new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime(),
+      (left, right) => {
+        if (left.sequence !== null && right.sequence !== null && left.sequence !== right.sequence) {
+          return right.sequence - left.sequence;
+        }
+
+        if (
+          left.eventTimestamp !== null &&
+          right.eventTimestamp !== null &&
+          left.eventTimestamp !== right.eventTimestamp
+        ) {
+          return right.eventTimestamp - left.eventTimestamp;
+        }
+
+        return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
+      },
     )
     .slice(0, limit);
 }

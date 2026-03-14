@@ -44,6 +44,7 @@ function motionActivityFromStream(payload: MotionStreamPayload): DeviceActivityS
   return {
     id: `motion-${payload.event.id}`,
     deviceId: payload.event.deviceId,
+    sequence: payload.event.sequence,
     kind: "motion",
     title: payload.event.state.toUpperCase(),
     message: `Gateway recorded ${payload.event.state} for ${payload.event.deviceId}.`,
@@ -65,6 +66,7 @@ function lifecycleActivityFromStream(payload: DeviceLogStreamPayload): DeviceAct
   return {
     id: `log-${payload.log.id}`,
     deviceId: payload.log.deviceId,
+    sequence: payload.log.sequence,
     kind: "lifecycle",
     title: payload.log.code ?? payload.log.level.toUpperCase(),
     message: payload.log.message,

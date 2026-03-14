@@ -204,6 +204,7 @@ describe("mergeActivityUpdate", () => {
         {
           id: "log-1",
           deviceId: "stack-001",
+          sequence: 20,
           kind: "lifecycle",
           title: "node.connected",
           message: "Gateway connected to stack-001.",
@@ -222,6 +223,7 @@ describe("mergeActivityUpdate", () => {
       {
         id: "motion-2",
         deviceId: "stack-001",
+        sequence: 25,
         kind: "motion",
         title: "MOVING",
         message: "Gateway recorded moving for stack-001.",
@@ -239,6 +241,51 @@ describe("mergeActivityUpdate", () => {
     );
 
     expect(merged.map((item) => item.id)).toEqual(["motion-2", "log-1"]);
+  });
+
+  it("places late backfill below newer live items when sequence proves it is older", () => {
+    const merged = mergeActivityUpdate(
+      [
+        {
+          id: "motion-live",
+          deviceId: "stack-001",
+          sequence: 25,
+          kind: "motion",
+          title: "STILL",
+          message: "Live event",
+          state: "still",
+          level: null,
+          code: "motion.state",
+          delta: 2,
+          eventTimestamp: 250,
+          receivedAt: new Date("2026-03-06T05:10:00.000Z").toISOString(),
+          bootId: "boot-001",
+          firmwareVersion: "0.5.0",
+          hardwareId: "node-001",
+          metadata: null,
+        },
+      ],
+      {
+        id: "motion-backfill",
+        deviceId: "stack-001",
+        sequence: 10,
+        kind: "motion",
+        title: "MOVING",
+        message: "Recovered event",
+        state: "moving",
+        level: null,
+        code: "motion.state",
+        delta: 18,
+        eventTimestamp: 100,
+        receivedAt: new Date("2026-03-06T05:11:00.000Z").toISOString(),
+        bootId: "boot-001",
+        firmwareVersion: "0.5.0",
+        hardwareId: "node-001",
+        metadata: { delta: 18 },
+      },
+    );
+
+    expect(merged.map((item) => item.id)).toEqual(["motion-live", "motion-backfill"]);
   });
 });
 

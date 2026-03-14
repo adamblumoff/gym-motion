@@ -227,6 +227,7 @@ export type DeviceLogSummary = {
 export type DeviceActivitySummary = {
   id: string;
   deviceId: string;
+  sequence: number | null;
   kind: "motion" | "lifecycle";
   title: string;
   message: string;
@@ -431,8 +432,21 @@ export function mergeActivityUpdate(
 ): DeviceActivitySummary[] {
   return [activity, ...activities.filter((item) => item.id !== activity.id)]
     .toSorted(
-      (left, right) =>
-        new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime(),
+      (left, right) => {
+        if (left.sequence !== null && right.sequence !== null && left.sequence !== right.sequence) {
+          return right.sequence - left.sequence;
+        }
+
+        if (
+          left.eventTimestamp !== null &&
+          right.eventTimestamp !== null &&
+          left.eventTimestamp !== right.eventTimestamp
+        ) {
+          return right.eventTimestamp - left.eventTimestamp;
+        }
+
+        return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
+      },
     )
     .slice(0, limit);
 }
