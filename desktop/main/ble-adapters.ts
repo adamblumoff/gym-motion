@@ -1,7 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 import type { BleAdapterSummary } from "@core/contracts";
+
+const require = createRequire(import.meta.url);
 
 type UsbDeviceListEntry = {
   idVendor: number;
@@ -57,9 +60,11 @@ function listLinuxAdapters(): BleAdapterSummary[] {
   });
 }
 
-async function listUsbAdapters(): Promise<BleAdapterSummary[]> {
-  const module = await import("@abandonware/bluetooth-hci-socket");
-  const BluetoothHciSocket = (module.default ?? module) as {
+function listUsbAdapters(): BleAdapterSummary[] {
+  const module = require("@abandonware/bluetooth-hci-socket") as
+    | { default?: new () => { getDeviceList?: () => UsbDeviceListEntry[] } }
+    | (new () => { getDeviceList?: () => UsbDeviceListEntry[] });
+  const BluetoothHciSocket = ("default" in module ? module.default : module) as {
     new (): { getDeviceList?: () => UsbDeviceListEntry[] };
   };
   const socket = new BluetoothHciSocket();
@@ -84,7 +89,7 @@ async function listUsbAdapters(): Promise<BleAdapterSummary[]> {
 export async function listBleAdapters(): Promise<BleAdapterSummary[]> {
   try {
     if (process.platform === "win32") {
-      return await listUsbAdapters();
+      return listUsbAdapters();
     }
 
     if (process.platform === "linux") {
