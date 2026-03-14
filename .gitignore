@@ -20,6 +20,8 @@
 # production
 /build
 /gym_motion/build
+/dist
+/release
 /bin/arduino-cli
 
 # misc
