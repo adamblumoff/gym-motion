@@ -47,4 +47,27 @@ describe("createJsonObjectDecoder", () => {
       },
     ])
   })
+
+  it("decodes a framed JSON message carried over multiple chunks", () => {
+    const payloads = []
+    const decoder = createJsonObjectDecoder({
+      label: "history:test",
+      onObject: (payload) => {
+        payloads.push(payload)
+      },
+    })
+
+    decoder.push("BEGIN:42")
+    decoder.push('{"type":"history-sync-complete","sentCount":2')
+    decoder.push(',"hasMore":false}')
+    decoder.push("END")
+
+    expect(payloads).toEqual([
+      {
+        type: "history-sync-complete",
+        sentCount: 2,
+        hasMore: false,
+      },
+    ])
+  })
 })

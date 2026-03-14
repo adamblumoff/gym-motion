@@ -43,6 +43,7 @@ const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
 const size_t HISTORY_SYNC_PAGE_SIZE = 80;
+const size_t STATUS_CHUNK_SIZE = 120;
 const char* HISTORY_LOG_PATH = "/history.log";
 const char* HISTORY_TEMP_PATH = "/history.tmp";
 
@@ -471,7 +472,7 @@ void sendHistorySyncComplete(
   }
 
   payload += "}";
-  notifyCharacteristic(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
 void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
@@ -504,7 +505,7 @@ void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
       break;
     }
 
-    notifyCharacteristic(
+    notifyCharacteristicChunked(
       runtimeStatusCharacteristic,
       runtimeBleConnected,
       "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
@@ -564,6 +565,30 @@ void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, con
   delay(30);
 }
 
+void notifyCharacteristicChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
+  Serial.print("BLE -> ");
+  Serial.println(payload);
+
+  if (characteristic == nullptr || !connected) {
+    return;
+  }
+
+  characteristic->setValue(("BEGIN:" + String(payload.length())).c_str());
+  characteristic->notify();
+  delay(30);
+
+  for (size_t offset = 0; offset < payload.length(); offset += STATUS_CHUNK_SIZE) {
+    const String chunk = payload.substring(offset, offset + STATUS_CHUNK_SIZE);
+    characteristic->setValue(chunk.c_str());
+    characteristic->notify();
+    delay(30);
+  }
+
+  characteristic->setValue("END");
+  characteristic->notify();
+  delay(30);
+}
+
 void sendProvisioningStatus(const String& payload) {
   notifyCharacteristic(provisioningStatusCharacteristic, provisioningBleConnected, payload);
 }
@@ -589,7 +614,7 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   }
 
   payload += "}";
-  notifyCharacteristic(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
 void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {

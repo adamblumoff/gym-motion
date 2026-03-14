@@ -2,6 +2,7 @@ const MAX_BUFFER_LENGTH = 64 * 1024
 
 export function createJsonObjectDecoder({ label, onObject, onParseError }) {
   let buffer = ""
+  let framedBuffer = null
 
   function emitParseError(error, candidate) {
     onParseError?.(
@@ -77,7 +78,41 @@ export function createJsonObjectDecoder({ label, onObject, onParseError }) {
 
   return {
     push(chunk) {
-      buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk)
+      const value = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk)
+
+      if (value.startsWith("BEGIN:")) {
+        framedBuffer = ""
+        return
+      }
+
+      if (framedBuffer !== null) {
+        if (value === "END") {
+          const candidate = framedBuffer
+          framedBuffer = null
+
+          try {
+            onObject(JSON.parse(candidate))
+          } catch (error) {
+            emitParseError(error, candidate)
+          }
+
+          return
+        }
+
+        framedBuffer += value
+
+        if (framedBuffer.length > MAX_BUFFER_LENGTH) {
+          emitParseError(
+            new Error(`${label} framed buffer overflow while waiting for END.`),
+            framedBuffer.slice(0, 200),
+          )
+          framedBuffer = null
+        }
+
+        return
+      }
+
+      buffer += value
 
       while (trimLeadingNoise()) {
         const objectEnd = findCompleteObjectEnd()
@@ -106,6 +141,7 @@ export function createJsonObjectDecoder({ label, onObject, onParseError }) {
 
     reset() {
       buffer = ""
+      framedBuffer = null
     },
   }
 }
