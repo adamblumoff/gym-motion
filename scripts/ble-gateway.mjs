@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import process from "node:process";
 
 import noble from "@abandonware/noble";
+import { createJsonObjectDecoder } from "./ble-json-decoder.mjs";
 import { createGatewayRuntimeServer } from "./gateway-runtime-server.mjs";
 
 const SERVICE_UUID = normalizeUuid(
@@ -1353,9 +1354,9 @@ async function registerPeripheral(peripheral) {
       );
     }
 
-    const telemetryHandler = (buffer) => {
-      try {
-        const payload = JSON.parse(buffer.toString("utf8"));
+    const telemetryDecoder = createJsonObjectDecoder({
+      label: `telemetry:${advertisedName || peripheral.id}`,
+      onObject: (payload) => {
         const context = deviceContexts.get(payload.deviceId) ?? createDeviceContext(
           payload.deviceId,
           {
@@ -1375,7 +1376,8 @@ async function registerPeripheral(peripheral) {
         context.hardwareId = payload.hardwareId ?? context.hardwareId ?? null;
         deviceContexts.set(payload.deviceId, context);
         void forwardTelemetry(payload);
-      } catch (error) {
+      },
+      onParseError: (error, candidate) => {
         console.error("[gateway] failed to parse telemetry", error);
         queueNodeLog(peripheralInfo, {
           level: "error",
@@ -1385,14 +1387,18 @@ async function registerPeripheral(peripheral) {
             peripheralId: peripheral.id,
             advertisedName: advertisedName || null,
             error: error instanceof Error ? error.message : String(error),
+            snippet: candidate,
           },
         });
-      }
+      },
+    });
+    const telemetryHandler = (buffer) => {
+      telemetryDecoder.push(buffer);
     };
 
-    const statusHandler = (buffer) => {
-      try {
-        const payload = JSON.parse(buffer.toString("utf8"));
+    const statusDecoder = createJsonObjectDecoder({
+      label: `status:${advertisedName || peripheral.id}`,
+      onObject: (payload) => {
         const deviceId = payload.deviceId;
 
         if (!deviceId) {
@@ -1410,7 +1416,8 @@ async function registerPeripheral(peripheral) {
         }
 
         handleStatusMessage(context, payload);
-      } catch (error) {
+      },
+      onParseError: (error, candidate) => {
         console.error("[gateway] failed to parse device status", error);
         queueNodeLog(peripheralInfo, {
           level: "error",
@@ -1420,9 +1427,13 @@ async function registerPeripheral(peripheral) {
             peripheralId: peripheral.id,
             advertisedName: advertisedName || null,
             error: error instanceof Error ? error.message : String(error),
+            snippet: candidate,
           },
         });
-      }
+      },
+    });
+    const statusHandler = (buffer) => {
+      statusDecoder.push(buffer);
     };
 
     debug(`enabling status delivery for ${advertisedName || peripheral.id}`);
