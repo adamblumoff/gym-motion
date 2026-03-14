@@ -1,4 +1,3 @@
-import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -23,6 +22,11 @@ import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
+import {
+  resolveGatewayScriptPath,
+  resolveWindowsSidecarPath,
+  usesWindowsNativeGateway,
+} from "./gateway-runtime-target";
 import {
   listDeviceActivity,
   listDeviceLogs,
@@ -87,20 +91,6 @@ function createEmptySetupState(): DesktopSetupState {
     approvedNodes: [],
     nodes: [],
   };
-}
-
-function resolveGatewayScriptPath() {
-  if (app.isPackaged) {
-    return path.join(
-      process.resourcesPath,
-      "app.asar.unpacked",
-      "legacy",
-      "scripts",
-      "ble-gateway.mjs",
-    );
-  }
-
-  return path.join(process.cwd(), "legacy", "scripts", "ble-gateway.mjs");
 }
 
 function normalizeGatewayHealth(payload: unknown) {
@@ -261,10 +251,20 @@ export function createManagedGatewayRuntime(
   }
 
   async function refreshAdapters() {
-    const adapters = await listBleAdapters();
+    const adapterPayload =
+      usesWindowsNativeGateway(process.platform) && child
+        ? await fetchJson<{ adapters: BleAdapterSummary[]; error?: string }>(
+            `http://127.0.0.1:${runtimePort}/adapters`,
+          )
+        : {
+            adapters: await listBleAdapters(),
+            error: undefined,
+          };
+    const adapters = adapterPayload.adapters;
     const nextSelectedAdapterId = applyAutoAdapterSelection(adapters);
     const selectedAdapterId = nextSelectedAdapterId ?? readSelectedAdapterId();
-    const adapterIssue = adapters[0]?.id === "adapter-error"
+    const adapterIssue = adapterPayload.error ??
+      (adapters[0]?.id === "adapter-error"
       ? adapters[0].issue
       : selectedAdapterId && !adapters.some((adapter) => adapter.id === selectedAdapterId)
         ? "The selected BLE adapter is not currently available."
@@ -272,7 +272,7 @@ export function createManagedGatewayRuntime(
           ? "No compatible BLE adapters were detected."
           : selectedAdapterId
             ? null
-            : "Select a BLE adapter in Setup before the gateway can connect.";
+            : "Select a BLE adapter in Setup before the gateway can connect.");
 
     setupState = {
       ...setupState,
@@ -454,9 +454,12 @@ export function createManagedGatewayRuntime(
         }>(`${baseUrl}/devices`),
       ]);
 
+      const nextRuntimeState =
+        healthPayload.ok && devicesPayload.ok ? "running" : "degraded";
+
       updateGatewayStatus(
         normalizeGatewayHealth(healthPayload),
-        "running",
+        nextRuntimeState,
         healthPayload.error ?? devicesPayload.error ?? setupState.adapterIssue,
       );
 
@@ -465,6 +468,10 @@ export function createManagedGatewayRuntime(
         ...snapshot,
         devices: devicesPayload.devices,
       };
+
+      if (usesWindowsNativeGateway(process.platform)) {
+        await refreshAdapters();
+      }
 
       await refreshSetupNodes();
 
@@ -513,6 +520,10 @@ export function createManagedGatewayRuntime(
   }
 
   function runtimeStartIssue() {
+    if (usesWindowsNativeGateway(process.platform)) {
+      return null;
+    }
+
     if (setupState.adapterIssue) {
       return setupState.adapterIssue;
     }
@@ -533,29 +544,53 @@ export function createManagedGatewayRuntime(
   async function startChild() {
     const adapter = selectedAdapter();
 
-    if (!adapter || adapter.runtimeDeviceId === null) {
+    if (
+      !usesWindowsNativeGateway(process.platform) &&
+      (!adapter || adapter.runtimeDeviceId === null)
+    ) {
       throw new Error("No BLE adapter is selected.");
     }
 
     runtimePort = 4010 + Math.floor(Math.random() * 2000);
-    const env = {
+    const env: Record<string, string | undefined> = {
       ...process.env,
       API_URL: apiServer.apiBaseUrl,
       GATEWAY_RUNTIME_HOST: "127.0.0.1",
       GATEWAY_RUNTIME_PORT: String(runtimePort),
-      NOBLE_HCI_DEVICE_ID: String(adapter.runtimeDeviceId),
       GATEWAY_APPROVED_NODE_RULES: JSON.stringify(readApprovedNodes()),
     };
 
-    child = spawn(process.execPath, [resolveGatewayScriptPath()], {
+    if (usesWindowsNativeGateway(process.platform)) {
+      env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
+      env.GATEWAY_SIDECAR_PATH = resolveWindowsSidecarPath({
+        isPackaged: app.isPackaged,
+        cwd: process.cwd(),
+        resourcesPath: process.resourcesPath,
+      });
+    } else {
+      env.NOBLE_HCI_DEVICE_ID = String(adapter?.runtimeDeviceId);
+    }
+
+    child = spawn(
+      process.execPath,
+      [
+        resolveGatewayScriptPath({
+          platform: process.platform,
+          isPackaged: app.isPackaged,
+          cwd: process.cwd(),
+          resourcesPath: process.resourcesPath,
+        }),
+      ],
+      {
       cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
       env,
       stdio: ["ignore", "pipe", "pipe"],
-    });
+      },
+    );
 
     setupState = {
       ...setupState,
-      runningAdapterId: adapter.id,
+      runningAdapterId: adapter?.id ?? null,
     };
     emitSetup();
 
@@ -666,7 +701,9 @@ export function createManagedGatewayRuntime(
 
   async function startRuntime() {
     snapshot = createEmptySnapshot();
-    await refreshAdapters();
+    if (!usesWindowsNativeGateway(process.platform)) {
+      await refreshAdapters();
+    }
     emit({ type: "snapshot", snapshot });
     mergeSetupNodes([]);
 
@@ -685,6 +722,7 @@ export function createManagedGatewayRuntime(
     try {
       await apiServer.start();
       await startChild();
+      await refreshAdapters();
       await refreshGatewayState();
       await refreshHistory();
       emit({ type: "snapshot", snapshot });
@@ -761,6 +799,11 @@ export function createManagedGatewayRuntime(
       return setupState;
     },
     async rescanAdapters() {
+      if (usesWindowsNativeGateway(process.platform)) {
+        await restartRuntime();
+        return setupState;
+      }
+
       await refreshAdapters();
       return setupState;
     },

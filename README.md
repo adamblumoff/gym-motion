@@ -16,6 +16,7 @@ Firmware, bench scripts, and repo docs stay at the top level because they still 
 - Electron main process for tray, lifecycle, and native integration
 - React renderer app for operator workflows
 - shared TypeScript core for domain models and service contracts
+- Rust WinRT BLE sidecar on Windows for built-in Bluetooth support
 - Windows-first packaging via `electron-builder`
 
 ## Commands
@@ -54,8 +55,10 @@ Windows-side testing guide:
 
 ## Notes
 
-- The desktop app now boots the real embedded gateway runtime. It reads env config from `.env` and `.env.local` before starting the local API bridge and BLE child process.
+- The desktop app now boots the real embedded gateway runtime. It reads env config from `.env` and `.env.local` before starting the local API bridge and BLE transport.
 - BLE adapter selection and node approval now live in the `Setup` tab. Adapter changes and node approval changes restart the gateway runtime, while the global restart action stays in the header.
+- On Windows, the desktop app uses the native Rust WinRT BLE sidecar so it can see built-in Bluetooth adapters. The legacy noble gateway stays in place for non-Windows hosts.
 - Real BLE validation should happen from a Windows-side clone at `C:\Users\adamb\Code\gym-motion`, with `.env.local` copied into that repo after cloning.
+- Windows-side local development now requires the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build the native BLE sidecar before launching or packaging.
 - The plan still assumes remote Postgres remains the source of truth for v1.
 - Auto-updates are deferred on purpose, but the packaging path is set up so we can add them later.

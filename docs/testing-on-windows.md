@@ -27,6 +27,13 @@ bun install
 
 Make sure Bun is installed on Windows before running the desktop app.
 
+Then install the Rust MSVC toolchain on Windows, because the app now builds a native BLE sidecar for built-in Windows Bluetooth support:
+
+```powershell
+winget install Rustlang.Rustup
+rustup default stable-aarch64-pc-windows-msvc
+```
+
 ## Dev Run
 
 From **PowerShell**:
@@ -36,7 +43,7 @@ cd C:\Users\adamb\Code\gym-motion
 bun run dev
 ```
 
-Use this path for the first real validation because the BLE adapter and `@abandonware/noble` behavior need to be exercised from Windows itself.
+Use this path for the first real validation because the Windows-native BLE sidecar and built-in Bluetooth behavior need to be exercised from Windows itself.
 
 ## What To Check
 
@@ -68,5 +75,7 @@ Validate the same Setup and reconnect flow in the packaged app.
 
 - `.env.local` is required for meaningful desktop testing because the app reads database and storage config at startup.
 - The desktop runtime is real, not mock-backed.
+- Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
 - BLE adapter selection and node approval both live in the `Setup` tab.
 - Adapter changes and node approval changes restart the gateway runtime.
+- The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.

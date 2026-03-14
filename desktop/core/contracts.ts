@@ -150,7 +150,7 @@ export type GatewayStatusSummary = {
 export type BleAdapterSummary = {
   id: string;
   label: string;
-  transport: "usb" | "hci" | "unknown";
+  transport: "usb" | "hci" | "winrt" | "unknown";
   runtimeDeviceId: number | null;
   isAvailable: boolean;
   issue: string | null;

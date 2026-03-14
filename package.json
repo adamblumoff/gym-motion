@@ -5,9 +5,9 @@
   "description": "Windows-first Gym Motion desktop gateway and operator console.",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build && electron-builder --dir",
-    "build:win": "electron-vite build && electron-builder --win nsis portable",
+    "dev": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
+    "build": "electron-vite build && electron-builder --config electron-builder.config.mjs --dir",
+    "build:win": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
     "preview": "electron-vite preview",
     "lint": "eslint desktop --ext .ts,.tsx",
     "test": "bun test desktop",
@@ -38,42 +38,5 @@
     "globals": "^16.3.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0"
-  },
-  "build": {
-    "appId": "com.gymmotion.desktop",
-    "productName": "Gym Motion",
-    "asar": true,
-    "asarUnpack": [
-      "legacy/scripts/**"
-    ],
-    "files": [
-      "dist/**",
-      "out/**",
-      "legacy/scripts/**",
-      "package.json"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "arm64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
   }
 }

@@ -16,14 +16,17 @@ Windows validation:
 1. Commit and push the repo state you want to test.
 2. On Windows, clone the repo into `C:\Users\adamb\Code\gym-motion`.
 3. Copy `.env.local` into that Windows repo.
-4. On Windows, run `bun install` and `bun run dev`.
-5. Use the `Setup` tab to validate adapter selection and approved-node reconnect behavior.
-6. Build the Windows package on the Windows side with `bun run build:win`.
-7. From WSL, run `bun run test:windows-desktop` if you want a helper to launch an already-built `.exe`.
+4. On Windows, install the Rust MSVC toolchain if it is not already present.
+5. On Windows, run `bun install` and `bun run dev`.
+6. Use the `Setup` tab to validate adapter selection and approved-node reconnect behavior.
+7. Build the Windows package on the Windows side with `bun run build:win`.
+8. From WSL, run `bun run test:windows-desktop` if you want a helper to launch an already-built `.exe`.
 
 ## Why
 
 This keeps the edit/build loop comfortable in WSL while still making it easy to sanity-check the actual Windows desktop binary.
+
+The Windows-side repo now builds a Rust WinRT BLE sidecar before `bun run dev` and `bun run build:win`, so Windows is the source of truth for native BLE validation.
 
 ## Current Limitation
 

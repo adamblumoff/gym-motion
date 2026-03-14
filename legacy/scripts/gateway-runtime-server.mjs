@@ -74,8 +74,10 @@ export function createGatewayRuntimeServer({
   const deviceIdByPeripheralId = new Map();
   const discoveriesById = new Map();
   const streamClients = new Set();
+  let availableAdapters = [];
   let metadataLoadedAt = 0;
   let knownNodesWriteTimer = null;
+  let runtimeIssue = null;
   let server = null;
 
   const gatewayState = {
@@ -129,8 +131,9 @@ export function createGatewayRuntimeServer({
   function broadcastGatewayStatus() {
     touchGatewayState();
     broadcast("gateway-status", {
-      ok: gatewayState.adapterState === "poweredOn",
+      ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
       gateway: gatewayState,
+      error: runtimeIssue ?? undefined,
     });
   }
 
@@ -447,8 +450,9 @@ export function createGatewayRuntimeServer({
     ]);
 
     return {
-      ok: gatewayState.adapterState === "poweredOn",
+      ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
       gateway: gatewayState,
+      error: runtimeIssue ?? undefined,
       devices: sortDevices(Array.from(deviceIds, mergeDevice)),
     };
   }
@@ -459,8 +463,9 @@ export function createGatewayRuntimeServer({
     if (request.method === "GET" && url.pathname === "/health") {
       touchGatewayState();
       jsonResponse(response, 200, {
-        ok: gatewayState.adapterState === "poweredOn",
+        ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
         gateway: gatewayState,
+        error: runtimeIssue ?? undefined,
       });
       return;
     }
@@ -481,6 +486,14 @@ export function createGatewayRuntimeServer({
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/adapters") {
+      jsonResponse(response, 200, {
+        adapters: availableAdapters,
+        error: runtimeIssue ?? undefined,
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/stream") {
       response.writeHead(200, {
         "Cache-Control": "no-cache, no-transform",
@@ -497,8 +510,9 @@ export function createGatewayRuntimeServer({
       response.write(formatSseEvent("connected", { ok: true }));
       response.write(
         formatSseEvent("gateway-status", {
-          ok: gatewayState.adapterState === "poweredOn",
+          ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
           gateway: gatewayState,
+          error: runtimeIssue ?? undefined,
         }),
       );
 
@@ -584,6 +598,17 @@ export function createGatewayRuntimeServer({
         }
       }
 
+      broadcastGatewayStatus();
+    },
+
+    setGatewayIssue(issue) {
+      runtimeIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
+      broadcastGatewayStatus();
+    },
+
+    setAvailableAdapters(adapters) {
+      availableAdapters = Array.isArray(adapters) ? adapters : [];
+      broadcast("gateway-adapters", { adapters: availableAdapters });
       broadcastGatewayStatus();
     },
 
