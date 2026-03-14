@@ -44,13 +44,17 @@ pub struct DiscoveredNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TelemetryPayload {
+    #[serde(alias = "deviceId")]
     pub device_id: String,
     pub state: String,
     pub timestamp: i64,
     pub delta: Option<i64>,
     pub sequence: Option<u64>,
+    #[serde(alias = "bootId")]
     pub boot_id: Option<String>,
+    #[serde(alias = "firmwareVersion")]
     pub firmware_version: Option<String>,
+    #[serde(alias = "hardwareId")]
     pub hardware_id: Option<String>,
 }
 
@@ -192,5 +196,27 @@ mod tests {
         assert_eq!(value["type"], "telemetry");
         assert_eq!(value["payload"]["state"], "moving");
         assert_eq!(value["node"]["known_device_id"], "device-1");
+    }
+
+    #[test]
+    fn deserializes_camel_case_telemetry_payload() {
+        let raw = r#"{
+          "deviceId": "device-1",
+          "state": "moving",
+          "timestamp": 1234,
+          "delta": 41,
+          "sequence": 7,
+          "bootId": "boot-1",
+          "firmwareVersion": "1.0.0",
+          "hardwareId": "hw-1"
+        }"#;
+
+        let payload: TelemetryPayload =
+            serde_json::from_str(raw).expect("camelCase telemetry should deserialize");
+
+        assert_eq!(payload.device_id, "device-1");
+        assert_eq!(payload.boot_id.as_deref(), Some("boot-1"));
+        assert_eq!(payload.firmware_version.as_deref(), Some("1.0.0"));
+        assert_eq!(payload.hardware_id.as_deref(), Some("hw-1"));
     }
 }
