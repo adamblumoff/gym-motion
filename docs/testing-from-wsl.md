@@ -9,13 +9,17 @@ Use WSL as the command environment, but test the real packaged Windows app whene
 Fast iteration:
 
 - `bun run dev` runs the Electron app directly in the current environment
-- use mock BLE/runtime data for most UI and IPC work
+- use WSL for editing and quick desktop iteration when helpful
 
 Windows validation:
 
-1. Build the Windows package on the Windows side or from a compatible packaging environment.
-2. From WSL, run `bun run test:windows-desktop`.
-3. The helper looks for a packaged `.exe` under `release/` and launches it through `powershell.exe`.
+1. Commit and push the repo state you want to test.
+2. On Windows, clone the repo into `C:\Users\adamb\Code\gym-motion`.
+3. Copy `.env.local` into that Windows repo.
+4. On Windows, run `bun install` and `bun run dev`.
+5. Use the `Setup` tab to validate adapter selection and approved-node reconnect behavior.
+6. Build the Windows package on the Windows side with `bun run build:win`.
+7. From WSL, run `bun run test:windows-desktop` if you want a helper to launch an already-built `.exe`.
 
 ## Why
 

@@ -1,11 +1,13 @@
-import { defineConfig } from "electron-vite";
+import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 export default defineConfig({
   main: {
+    plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
+        "@": path.resolve(__dirname, "legacy/src"),
         "@core": path.resolve(__dirname, "desktop/core"),
         "@main": path.resolve(__dirname, "desktop/main"),
       },
@@ -18,6 +20,7 @@ export default defineConfig({
     },
   },
   preload: {
+    plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
         "@core": path.resolve(__dirname, "desktop/core"),

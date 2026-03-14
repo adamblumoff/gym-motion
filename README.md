@@ -40,6 +40,10 @@ WSL launch helper for a built Windows `.exe`:
 bun run test:windows-desktop
 ```
 
+Windows-side testing guide:
+
+- [docs/testing-on-windows.md](/home/adamblumoff/gym-motion/docs/testing-on-windows.md)
+
 ## Repo Layout
 
 - `desktop/main`: Electron main process and runtime wiring
@@ -50,6 +54,8 @@ bun run test:windows-desktop
 
 ## Notes
 
-- The current desktop runtime is mock-backed so we can iterate on the shell, IPC, and WSL workflow before the real BLE/data adapters land.
+- The desktop app now boots the real embedded gateway runtime. It reads env config from `.env` and `.env.local` before starting the local API bridge and BLE child process.
+- BLE adapter selection and node approval now live in the `Setup` tab. Adapter changes and node approval changes restart the gateway runtime, while the global restart action stays in the header.
+- Real BLE validation should happen from a Windows-side clone at `C:\Users\adamb\Code\gym-motion`, with `.env.local` copied into that repo after cloning.
 - The plan still assumes remote Postgres remains the source of truth for v1.
 - Auto-updates are deferred on purpose, but the packaging path is set up so we can add them later.

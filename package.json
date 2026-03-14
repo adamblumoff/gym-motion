@@ -16,6 +16,10 @@
     "test:windows-desktop": "./scripts/test-windows-desktop.sh"
   },
   "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
+    "@aws-sdk/client-s3": "^3.1003.0",
+    "@aws-sdk/s3-request-presigner": "^3.1003.0",
+    "dotenv": "^16.6.1",
     "pg": "^8.16.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -39,9 +43,13 @@
     "appId": "com.gymmotion.desktop",
     "productName": "Gym Motion",
     "asar": true,
+    "asarUnpack": [
+      "legacy/scripts/**"
+    ],
     "files": [
       "dist/**",
       "out/**",
+      "legacy/scripts/**",
       "package.json"
     ],
     "directories": {

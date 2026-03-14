@@ -72,6 +72,7 @@ export function createGatewayRuntimeServer({
   const runtimeByDeviceId = new Map();
   const knownNodesByDeviceId = new Map();
   const deviceIdByPeripheralId = new Map();
+  const discoveriesById = new Map();
   const streamClients = new Set();
   let metadataLoadedAt = 0;
   let knownNodesWriteTimer = null;
@@ -398,6 +399,44 @@ export function createGatewayRuntimeServer({
     touchGatewayState();
   }
 
+  function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }) {
+    if (knownDeviceId) {
+      return `known:${knownDeviceId}`;
+    }
+
+    if (peripheralId) {
+      return `peripheral:${peripheralId}`;
+    }
+
+    if (address) {
+      return `address:${address}`;
+    }
+
+    if (localName) {
+      return `name:${localName}`;
+    }
+
+    return "unknown";
+  }
+
+  function upsertDiscovery({ peripheralId, address, localName, rssi, knownDeviceId = null }) {
+    const id = discoveryIdFor({ peripheralId, address, localName, knownDeviceId });
+    const previous = discoveriesById.get(id) ?? {};
+    const next = {
+      ...previous,
+      id,
+      peripheralId: peripheralId ?? previous.peripheralId ?? null,
+      address: address ?? previous.address ?? null,
+      localName: localName ?? previous.localName ?? null,
+      knownDeviceId,
+      lastSeenAt: nowIso(),
+      lastRssi: rssi ?? previous.lastRssi ?? null,
+    };
+
+    discoveriesById.set(id, next);
+    return next;
+  }
+
   async function getDevicesPayload() {
     await refreshMetadata();
 
@@ -428,6 +467,17 @@ export function createGatewayRuntimeServer({
 
     if (request.method === "GET" && url.pathname === "/devices") {
       jsonResponse(response, 200, await getDevicesPayload());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/discoveries") {
+      jsonResponse(response, 200, {
+        discoveries: Array.from(discoveriesById.values()).toSorted(
+          (left, right) =>
+            new Date(right.lastSeenAt ?? 0).getTime() -
+            new Date(left.lastSeenAt ?? 0).getTime(),
+        ),
+      });
       return;
     }
 
@@ -550,6 +600,13 @@ export function createGatewayRuntimeServer({
         localName,
         address,
       });
+      upsertDiscovery({
+        peripheralId,
+        address,
+        localName,
+        rssi,
+        knownDeviceId,
+      });
 
       if (!knownDeviceId) {
         broadcastGatewayStatus();
@@ -580,6 +637,13 @@ export function createGatewayRuntimeServer({
         localName,
         address,
       });
+      upsertDiscovery({
+        peripheralId,
+        address,
+        localName,
+        rssi,
+        knownDeviceId,
+      });
 
       if (!knownDeviceId) {
         return;
@@ -606,6 +670,13 @@ export function createGatewayRuntimeServer({
         peripheralId,
         localName,
         address,
+      });
+      upsertDiscovery({
+        peripheralId,
+        address,
+        localName,
+        rssi,
+        knownDeviceId,
       });
 
       if (!knownDeviceId) {
@@ -668,6 +739,13 @@ export function createGatewayRuntimeServer({
         machineLabel: metadataByDeviceId.get(payload.deviceId)?.machineLabel ?? null,
         siteId: metadataByDeviceId.get(payload.deviceId)?.siteId ?? null,
         firmwareVersion: payload.firmwareVersion ?? "unknown",
+      });
+      upsertDiscovery({
+        peripheralId: peripheralInfo.peripheralId ?? null,
+        address: peripheralInfo.address ?? null,
+        localName: peripheralInfo.localName ?? null,
+        rssi: peripheralInfo.rssi ?? null,
+        knownDeviceId: payload.deviceId,
       });
 
       if (peripheralInfo.peripheralId) {

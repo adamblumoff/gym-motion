@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { DesktopEnvironment } from "@core/contracts";
+import type { ApprovedNodeRule, BleAdapterSummary, ThemePreference } from "@core/contracts";
 import {
+  DESKTOP_THEME_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
   type DesktopApi,
 } from "@core/services";
@@ -10,13 +11,22 @@ const desktopApi: DesktopApi = {
   async getSnapshot() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getSnapshot);
   },
-  async triggerDemoBurst() {
-    await ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.triggerDemoBurst);
+  async getSetupState() {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getSetupState);
   },
-  async setEnvironment(environment: DesktopEnvironment) {
-    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setEnvironment, environment);
+  async restartGatewayRuntime() {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
   },
-  subscribe(listener) {
+  async rescanAdapters() {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
+  },
+  async setSelectedAdapter(adapterId: BleAdapterSummary["id"]) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter, adapterId);
+  },
+  async setAllowedNodes(nodes: ApprovedNodeRule[]) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);
+  },
+  subscribeRuntime(listener) {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       listener(payload as Parameters<typeof listener>[0]);
     };
@@ -25,6 +35,23 @@ const desktopApi: DesktopApi = {
 
     return () => {
       ipcRenderer.removeListener(DESKTOP_RUNTIME_CHANNELS.updated, wrappedListener);
+    };
+  },
+  async getThemeState() {
+    return ipcRenderer.invoke(DESKTOP_THEME_CHANNELS.getState);
+  },
+  async setThemePreference(preference: ThemePreference) {
+    return ipcRenderer.invoke(DESKTOP_THEME_CHANNELS.setPreference, preference);
+  },
+  subscribeTheme(listener) {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      listener(payload as Parameters<typeof listener>[0]);
+    };
+
+    ipcRenderer.on(DESKTOP_THEME_CHANNELS.updated, wrappedListener);
+
+    return () => {
+      ipcRenderer.removeListener(DESKTOP_THEME_CHANNELS.updated, wrappedListener);
     };
   },
 };

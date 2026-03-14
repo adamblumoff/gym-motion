@@ -24,6 +24,7 @@
 
 - Future environment strategy options and trade-offs are documented in `/home/adamblumoff/gym-motion/docs/development-environments.md`.
 - Read this before changing how local dev, staging, production DBs, or production devices interact.
+- Preferred Windows desktop validation flow: commit and push the repo state to test, clone into `C:\Users\adamb\Code\gym-motion`, then copy `.env.local` into that Windows repo before running `bun install` / `bun run dev` / `bun run build:win`.
 - Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`
 - Quick connect command from the main dev machine: `ssh adam-blumoff@192.168.1.174`
 - This host is likely on DHCP, so verify the IP before relying on it long-term.

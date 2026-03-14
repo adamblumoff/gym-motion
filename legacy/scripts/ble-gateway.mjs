@@ -33,6 +33,9 @@ const config = {
   runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
   runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
 };
+const approvedNodeRules = parseApprovedNodeRules(
+  process.env.GATEWAY_APPROVED_NODE_RULES,
+);
 
 const peripherals = new Map();
 const deviceContexts = new Map();
@@ -52,6 +55,19 @@ const CONTROL_COMMAND_CHUNK_SIZE = Number(
 
 function normalizeUuid(value) {
   return value.replaceAll("-", "").toLowerCase();
+}
+
+function parseApprovedNodeRules(raw) {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function log(message, details) {
@@ -257,6 +273,21 @@ function describePeripheral(peripheral, advertisedName) {
     localName: advertisedName || null,
     rssi: peripheral.rssi,
   };
+}
+
+function isApprovedDiscovery(peripheralInfo) {
+  const knownDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
+
+  if (knownDeviceId && approvedNodeRules.length === 0) {
+    return true;
+  }
+
+  return approvedNodeRules.some((rule) => (
+    (rule.knownDeviceId && knownDeviceId === rule.knownDeviceId) ||
+    (rule.peripheralId && peripheralInfo.peripheralId === rule.peripheralId) ||
+    (rule.address && peripheralInfo.address === rule.address) ||
+    (rule.localName && peripheralInfo.localName === rule.localName)
+  ));
 }
 
 async function ensureScanning(reason) {
@@ -1267,6 +1298,11 @@ async function registerPeripheral(peripheral) {
       rssi: peripheral.rssi,
     },
   });
+
+  if (!isApprovedDiscovery(peripheralInfo)) {
+    debug(`visible but not approved; skipping connect to ${advertisedName || peripheral.id}`);
+    return;
+  }
 
   peripheral.on("disconnect", () => {
     for (const stopPolling of peripheralContext.stopPolling) {

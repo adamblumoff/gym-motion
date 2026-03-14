@@ -37,6 +37,8 @@ export const otaRuntimeStatusSchema = z.enum([
   "failed",
   "rolled_back",
 ]);
+export const themePreferenceSchema = z.enum(["dark", "light", "system"]);
+export const resolvedThemeSchema = z.enum(["dark", "light"]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
@@ -105,6 +107,8 @@ export type HealthStatus = z.infer<typeof healthStatusSchema>;
 export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
 export type GatewayConnectionState = z.infer<typeof gatewayConnectionStateSchema>;
 export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
+export type ThemePreference = z.infer<typeof themePreferenceSchema>;
+export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>;
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
 export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 
@@ -141,6 +145,49 @@ export type GatewayStatusSummary = {
   startedAt: string;
   updatedAt: string;
   lastAdvertisementAt: string | null;
+};
+
+export type BleAdapterSummary = {
+  id: string;
+  label: string;
+  transport: "usb" | "hci" | "unknown";
+  runtimeDeviceId: number | null;
+  isAvailable: boolean;
+  issue: string | null;
+  details: string[];
+};
+
+export type ApprovedNodeRule = {
+  id: string;
+  label: string;
+  peripheralId: string | null;
+  address: string | null;
+  localName: string | null;
+  knownDeviceId: string | null;
+};
+
+export type DiscoveredNodeSummary = {
+  id: string;
+  label: string;
+  peripheralId: string | null;
+  address: string | null;
+  localName: string | null;
+  knownDeviceId: string | null;
+  machineLabel: string | null;
+  siteId: string | null;
+  lastRssi: number | null;
+  lastSeenAt: string | null;
+  gatewayConnectionState: GatewayConnectionState | "visible";
+  isApproved: boolean;
+};
+
+export type DesktopSetupState = {
+  adapters: BleAdapterSummary[];
+  selectedAdapterId: string | null;
+  runningAdapterId: string | null;
+  adapterIssue: string | null;
+  approvedNodes: ApprovedNodeRule[];
+  nodes: DiscoveredNodeSummary[];
 };
 
 export type GatewayRuntimeDeviceSummary = DeviceSummary & {
@@ -210,18 +257,35 @@ export type DeviceActivitySummary = {
   metadata: Record<string, string | number | boolean | null> | null;
 };
 
-export type DesktopEnvironment = "local" | "production-data";
-
 export type DesktopSnapshot = {
-  environment: DesktopEnvironment;
   liveStatus: string;
   trayHint: string;
+  runtimeState: "starting" | "running" | "degraded";
+  gatewayIssue: string | null;
   gateway: GatewayStatusSummary;
   devices: GatewayRuntimeDeviceSummary[];
   events: MotionEventSummary[];
   logs: DeviceLogSummary[];
   activities: DeviceActivitySummary[];
 };
+
+export function normalizeThemePreference(
+  value: string | null | undefined,
+): ThemePreference {
+  const result = themePreferenceSchema.safeParse(value);
+  return result.success ? result.data : "dark";
+}
+
+export function resolveTheme(
+  preference: ThemePreference,
+  systemWantsDark: boolean,
+): ResolvedTheme {
+  if (preference === "system") {
+    return systemWantsDark ? "dark" : "light";
+  }
+
+  return preference;
+}
 
 export function mergeGatewayDeviceUpdate(
   devices: GatewayRuntimeDeviceSummary[],

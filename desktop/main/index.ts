@@ -7,15 +7,21 @@ import {
   Menu,
   Tray,
   nativeImage,
+  ipcMain,
   shell,
 } from "electron";
 
+import { DESKTOP_THEME_CHANNELS } from "@core/services";
 import { registerRuntimeBridge } from "./runtime";
+import { createPreferencesStore } from "./preferences-store";
+import { createThemeController } from "./theme";
+import { loadDesktopEnv } from "./load-env";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
+let themeBridgeDisposer: (() => void) | null = null;
 
 function createTrayImage() {
   const svg = `
@@ -121,6 +127,20 @@ function createTray() {
 
 const singleInstance = app.requestSingleInstanceLock();
 
+try {
+  const envResult = loadDesktopEnv();
+
+  if (envResult.loadedFiles.length > 0) {
+    console.info(
+      `[env] loaded ${envResult.loadedFiles.length} env file${envResult.loadedFiles.length === 1 ? "" : "s"}`,
+    );
+  } else {
+    console.warn("[env] no .env or .env.local file found for desktop runtime");
+  }
+} catch (error) {
+  console.error("[env] failed to load desktop env files", error);
+}
+
 if (!singleInstance) {
   app.quit();
 } else {
@@ -130,9 +150,32 @@ if (!singleInstance) {
 
   void app.whenReady().then(() => {
     app.setAppUserModelId("com.gymmotion.desktop");
+    const preferences = createPreferencesStore();
+    const themeController = createThemeController(preferences);
+    const broadcastThemeState = (themeState: ReturnType<typeof themeController.getState>) => {
+      const backgroundColor = themeState.resolvedTheme === "dark" ? "#050506" : "#f4f4f0";
+
+      mainWindow?.setBackgroundColor(backgroundColor);
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(DESKTOP_THEME_CHANNELS.updated, themeState);
+      }
+    };
+
+    ipcMain.handle(DESKTOP_THEME_CHANNELS.getState, () => themeController.getState());
+    ipcMain.handle(DESKTOP_THEME_CHANNELS.setPreference, (_event, preference) => {
+      const themeState = themeController.setPreference(preference);
+      broadcastThemeState(themeState);
+      return themeState;
+    });
+    themeBridgeDisposer = themeController.subscribe((themeState) => {
+      broadcastThemeState(themeState);
+    });
+    themeController.getState();
+
     mainWindow = createWindow();
     tray = createTray();
-    runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []));
+    runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []), preferences);
 
     app.on("activate", () => {
       showMainWindow();
@@ -146,5 +189,8 @@ app.on("before-quit", () => {
 
 app.on("quit", () => {
   runtimeBridge?.dispose();
+  themeBridgeDisposer?.();
+  ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
+  ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.setPreference);
   tray?.destroy();
 });

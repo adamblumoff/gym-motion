@@ -1,41 +1,55 @@
 import { BrowserWindow, ipcMain } from "electron";
 
-import { createMockRuntime } from "@core/mock-runtime";
-import type { DesktopSnapshot } from "@core/contracts";
-import { DESKTOP_RUNTIME_CHANNELS } from "@core/services";
+import {
+  DESKTOP_RUNTIME_CHANNELS,
+  type DesktopRuntimeEvent,
+} from "@core/services";
+import { createManagedGatewayRuntime } from "./managed-gateway-runtime";
+import type { PreferencesStore } from "./preferences-store";
 
-export function registerRuntimeBridge(getWindows: () => BrowserWindow[]) {
-  const runtime = createMockRuntime();
+export function registerRuntimeBridge(
+  getWindows: () => BrowserWindow[],
+  preferences: PreferencesStore,
+) {
+  const runtime = createManagedGatewayRuntime(preferences);
 
-  function broadcast(snapshot: DesktopSnapshot) {
+  function broadcast(event: DesktopRuntimeEvent) {
     for (const window of getWindows()) {
       if (!window.isDestroyed()) {
-        window.webContents.send(DESKTOP_RUNTIME_CHANNELS.updated, { snapshot });
+        window.webContents.send(DESKTOP_RUNTIME_CHANNELS.updated, event);
       }
     }
   }
 
-  const unsubscribe = runtime.onUpdated((snapshot) => {
-    broadcast(snapshot);
+  const unsubscribe = runtime.onEvent((event) => {
+    broadcast(event);
   });
 
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSnapshot, () => runtime.getSnapshot());
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.triggerDemoBurst, () => {
-    runtime.triggerDemoBurst();
-  });
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setEnvironment, (_event, environment) =>
-    runtime.setEnvironment(environment),
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSetupState, () => runtime.getSetupState());
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime, () => runtime.restart());
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.rescanAdapters, () => runtime.rescanAdapters());
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter, (_event, adapterId) =>
+    runtime.setSelectedAdapter(adapterId),
+  );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, (_event, nodes) =>
+    runtime.setAllowedNodes(nodes),
   );
 
-  runtime.start();
+  void runtime.start().catch((error) => {
+    console.error("[runtime] failed to start managed gateway runtime", error);
+  });
 
   return {
     dispose() {
       unsubscribe();
-      runtime.stop();
+      void runtime.stop();
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSnapshot);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.triggerDemoBurst);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setEnvironment);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSetupState);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
     },
   };
 }
