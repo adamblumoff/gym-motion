@@ -29,9 +29,6 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSetupState, () => runtime.getSetupState());
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime, () => runtime.restart());
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.rescanAdapters, () => runtime.rescanAdapters());
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter, (_event, adapterId) =>
-    runtime.setSelectedAdapter(adapterId),
-  );
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, (_event, nodes) =>
     runtime.setAllowedNodes(nodes),
   );
@@ -48,7 +45,6 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSetupState);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
     },
   };

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import type {
   ApprovedNodeRule,
-  BleAdapterSummary,
   DesktopSetupState,
   DeviceActivitySummary,
   DeviceLogSummary,
@@ -209,13 +208,13 @@ function GatewayStatePanel({
           <strong>{snapshot.liveStatus}</strong>
           <p>
             {snapshot.gatewayIssue ??
-              "Use Setup to choose an adapter and approve one or more nodes. The gateway will reconnect to approved nodes automatically."}
+              "Use Setup to connect a node for the first time. After that, approved nodes reconnect automatically."}
           </p>
         </div>
       </div>
 
       <div className="metric-grid">
-        <Metric label="Adapter" value={snapshot.gateway.adapterState} />
+        <Metric label="Bluetooth" value={snapshot.gateway.adapterState} />
         <Metric label="Scan state" value={snapshot.gateway.scanState} />
         <Metric label="Known nodes" value={snapshot.gateway.knownNodeCount} />
         <Metric
@@ -227,7 +226,7 @@ function GatewayStatePanel({
       <div className="device-list compact">
         {snapshot.devices.length === 0 ? (
           <div className="empty-state">
-            No approved nodes are connected yet. Open Setup to pick the adapter and choose which visible nodes the gateway should connect to.
+            No approved nodes are connected yet. Open Setup to connect a visible node for the first time.
           </div>
         ) : (
           snapshot.devices.map((device) => (
@@ -239,21 +238,9 @@ function GatewayStatePanel({
   );
 }
 
-function adapterStatusCopy(adapter: BleAdapterSummary, selectedAdapterId: string | null) {
-  if (!adapter.isAvailable) {
-    return "Unavailable";
-  }
-
-  if (selectedAdapterId === adapter.id) {
-    return "Selected";
-  }
-
-  return "Available";
-}
-
 function buildApprovedNodeRules(
   nodes: DiscoveredNodeSummary[],
-  selectedIds: Set<string>,
+  selectedIds: Iterable<string>,
   existingRules: ApprovedNodeRule[],
 ) {
   const existingById = new Map(existingRules.map((rule) => [rule.id, rule]));
@@ -287,31 +274,14 @@ function buildApprovedNodeRules(
 function SetupPanel({
   setup,
   now,
-  onRescanAdapters,
-  onSelectAdapter,
-  onApplyNodes,
+  onRescanNodes,
+  onSetNodes,
 }: {
   setup: DesktopSetupState;
   now: number;
-  onRescanAdapters: () => void;
-  onSelectAdapter: (adapterId: string) => void;
-  onApplyNodes: (nodes: ApprovedNodeRule[]) => void;
+  onRescanNodes: () => void;
+  onSetNodes: (nodes: ApprovedNodeRule[]) => void;
 }) {
-  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
-  const approvedSignature = useMemo(
-    () => setup.approvedNodes.map((node) => node.id).sort().join("|"),
-    [setup.approvedNodes],
-  );
-
-  useEffect(() => {
-    setSelectedNodeIds(new Set(setup.approvedNodes.map((node) => node.id)));
-  }, [approvedSignature, setup.approvedNodes]);
-
-  const selectedCount = selectedNodeIds.size;
-  const hasPendingNodeChanges =
-    selectedCount !== setup.approvedNodes.length ||
-    setup.approvedNodes.some((node) => !selectedNodeIds.has(node.id));
-
   const visibleNodes = useMemo(
     () =>
       setup.nodes.length > 0
@@ -333,130 +303,65 @@ function SetupPanel({
     [setup.approvedNodes, setup.nodes],
   );
 
+  function connectNode(node: DiscoveredNodeSummary) {
+    const nextIds = new Set(setup.approvedNodes.map((approvedNode) => approvedNode.id));
+    nextIds.add(node.id);
+    onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
+  }
+
+  function removeNode(nodeId: string) {
+    const nextIds = new Set(
+      setup.approvedNodes
+        .map((approvedNode) => approvedNode.id)
+        .filter((approvedNodeId) => approvedNodeId !== nodeId),
+    );
+    onSetNodes(buildApprovedNodeRules(visibleNodes, nextIds, setup.approvedNodes));
+  }
+
   return (
     <section className="panel stack-panel">
       <div className="setup-header">
         <div className="section-heading">
           <div>
             <span className="section-label">Setup</span>
-            <h2>Adapter and node control</h2>
+            <h2>Node connection control</h2>
           </div>
         </div>
         <div className="setup-actions">
-          <button className="secondary-button" onClick={onRescanAdapters} type="button">
-            Rescan adapters
+          <button className="secondary-button" onClick={onRescanNodes} type="button">
+            Rescan nodes
           </button>
         </div>
       </div>
 
+      {setup.adapterIssue ? (
+        <div className="inline-issue">{setup.adapterIssue}</div>
+      ) : null}
+
       <div className="setup-grid">
         <section className="setup-block">
           <div className="setup-block-heading">
-            <span className="section-label">Adapters</span>
-            <strong>
-              {setup.selectedAdapterId
-                ? "Choose the BLE radio the gateway should own."
-                : "Pick an adapter before scanning can connect to nodes."}
-            </strong>
-          </div>
-
-          {setup.adapterIssue ? (
-            <div className="inline-issue">{setup.adapterIssue}</div>
-          ) : null}
-
-          <div className="adapter-list">
-            {setup.adapters.length === 0 ? (
-              <div className="empty-state">
-                No BLE adapters are visible yet. On Windows, the desktop app now uses the native Bluetooth stack, so the built-in radio should appear once the gateway runtime finishes binding to it.
-              </div>
-            ) : (
-              setup.adapters.map((adapter) => (
-                <article
-                  className="adapter-card"
-                  data-selected={setup.selectedAdapterId === adapter.id}
-                  key={adapter.id}
-                >
-                  <div className="adapter-main">
-                    <div className="adapter-copy">
-                      <span className="adapter-title">{adapter.label}</span>
-                      <span className="adapter-meta">
-                        {adapterStatusCopy(adapter, setup.selectedAdapterId)}
-                        {setup.runningAdapterId === adapter.id ? " · running now" : ""}
-                      </span>
-                    </div>
-                    <button
-                      className="secondary-button"
-                      disabled={!adapter.isAvailable}
-                      onClick={() => onSelectAdapter(adapter.id)}
-                      type="button"
-                    >
-                      {setup.selectedAdapterId === adapter.id ? "Selected" : "Use adapter"}
-                    </button>
-                  </div>
-                  <div className="adapter-detail-row">
-                    {adapter.details.map((detail) => (
-                      <span className="detail-pill" key={detail}>
-                        {detail}
-                      </span>
-                    ))}
-                  </div>
-                  {adapter.issue ? <div className="inline-issue">{adapter.issue}</div> : null}
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="setup-block">
-          <div className="setup-block-heading">
             <span className="section-label">Visible nodes</span>
-            <strong>Select one or more nodes for the gateway to connect to.</strong>
+            <strong>Connect a node once, then let the gateway keep it online.</strong>
           </div>
 
           <div className="setup-summary-row">
-            <Metric label="Approved" value={setup.approvedNodes.length} />
+            <Metric label="Managed" value={setup.approvedNodes.length} />
             <Metric label="Visible" value={visibleNodes.length} />
-            <Metric
-              label="Selected adapter"
-              value={
-                setup.selectedAdapterId
-                  ? setup.adapters.find((adapter) => adapter.id === setup.selectedAdapterId)
-                      ?.label ?? "Selected"
-                  : "None"
-              }
-            />
+            <Metric label="Bluetooth" value={setup.adapterIssue ? "issue" : "ready"} />
           </div>
 
           <div className="node-list">
             {visibleNodes.length === 0 ? (
               <div className="empty-state">
-                No BLE nodes are visible yet. Keep the node powered, make sure the selected adapter is healthy, and rescan if you just changed hardware.
+                No BLE nodes are visible yet. Keep the node powered nearby and rescan if it just came online.
               </div>
             ) : (
               visibleNodes.map((node) => {
-                const isChecked = selectedNodeIds.has(node.id);
+                const isManaged = setup.approvedNodes.some((approvedNode) => approvedNode.id === node.id);
 
                 return (
-                  <label className="node-card" data-approved={isChecked} key={node.id}>
-                    <div className="node-check">
-                      <input
-                        checked={isChecked}
-                        onChange={() => {
-                          setSelectedNodeIds((current) => {
-                            const next = new Set(current);
-
-                            if (next.has(node.id)) {
-                              next.delete(node.id);
-                            } else {
-                              next.add(node.id);
-                            }
-
-                            return next;
-                          });
-                        }}
-                        type="checkbox"
-                      />
-                    </div>
+                  <article className="node-card" data-approved={isManaged} key={node.id}>
                     <div className="node-main">
                       <div className="node-copy">
                         <span className="node-title">
@@ -474,6 +379,15 @@ function SetupPanel({
                         {node.lastRssi !== null ? (
                           <span className="detail-pill">RSSI {node.lastRssi}</span>
                         ) : null}
+                        <button
+                          className="secondary-button"
+                          onClick={() =>
+                            isManaged ? removeNode(node.id) : connectNode(node)
+                          }
+                          type="button"
+                        >
+                          {isManaged ? "Remove" : "Connect"}
+                        </button>
                       </div>
                     </div>
                     <div className="node-detail-row">
@@ -487,33 +401,14 @@ function SetupPanel({
                         <span className="detail-pill">{node.knownDeviceId}</span>
                       ) : null}
                     </div>
-                  </label>
+                  </article>
                 );
               })
             )}
           </div>
-
-          <div className="setup-footer">
-            <p className="setup-hint">
-              Applying node changes restarts the gateway so the BLE runtime comes back on the selected adapter with the new approval list.
-            </p>
-            <button
-              className="primary-button"
-              disabled={!hasPendingNodeChanges}
-              onClick={() =>
-                onApplyNodes(
-                  buildApprovedNodeRules(
-                    visibleNodes,
-                    selectedNodeIds,
-                    setup.approvedNodes,
-                  ),
-                )
-              }
-              type="button"
-            >
-              Apply node selection
-            </button>
-          </div>
+          <p className="setup-hint">
+            The first connection is manual. Once a node is managed here, the gateway reconnects it automatically later.
+          </p>
         </section>
       </div>
     </section>
@@ -528,7 +423,6 @@ export function App() {
     setThemePreference,
     restartGatewayRuntime,
     rescanAdapters,
-    setSelectedAdapter,
     setAllowedNodes,
   } = useDesktopApp();
   const [screen, setScreen] = useState<Screen>("live");
@@ -583,7 +477,7 @@ export function App() {
         <div className="header-actions">
           <div className="status-cluster">
             <span className="status-pill">{snapshot.liveStatus}</span>
-            <span className="status-pill subtle">{snapshot.gateway.adapterState}</span>
+            <span className="status-pill subtle">{snapshot.gateway.scanState}</span>
           </div>
           <SegmentedControl
             formatLabel={formatThemePreference}
@@ -606,13 +500,7 @@ export function App() {
         <Metric emphasis label="Connected" value={snapshot.gateway.connectedNodeCount} />
         <Metric label="Reconnecting" value={snapshot.gateway.reconnectingNodeCount} />
         <Metric label="Known nodes" value={snapshot.gateway.knownNodeCount} />
-        <Metric
-          label="Adapter"
-          value={
-            setup.adapters.find((adapter) => adapter.id === setup.runningAdapterId)?.label ??
-            "None"
-          }
-        />
+        <Metric label="Bluetooth" value={snapshot.gateway.adapterState} />
         {strongestDevice ? (
           <Metric
             emphasis
@@ -663,8 +551,9 @@ export function App() {
               <Metric label="Mode" value={snapshot.gateway.mode} />
               <Metric label="Host" value={snapshot.gateway.hostname} />
               <Metric label="Session" value={snapshot.gateway.sessionId.slice(0, 8)} />
+              <Metric label="Bluetooth" value={snapshot.gateway.adapterState} />
               <Metric label="Scan state" value={snapshot.gateway.scanState} />
-              <Metric label="Selected adapter" value={setup.selectedAdapterId ?? "none"} />
+              <Metric label="Known nodes" value={snapshot.gateway.knownNodeCount} />
             </div>
             {snapshot.gatewayIssue ? (
               <div className="inline-issue">{snapshot.gatewayIssue}</div>
@@ -701,9 +590,8 @@ export function App() {
         <section className="dashboard-grid single-column">
           <SetupPanel
             now={now}
-            onApplyNodes={(nodes) => void setAllowedNodes(nodes)}
-            onRescanAdapters={() => void rescanAdapters()}
-            onSelectAdapter={(adapterId) => void setSelectedAdapter(adapterId)}
+            onRescanNodes={() => void rescanAdapters()}
+            onSetNodes={(nodes) => void setAllowedNodes(nodes)}
             setup={setup}
           />
         </section>

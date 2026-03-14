@@ -25,7 +25,7 @@ const config = {
 };
 
 const approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
-const selectedAdapterId =
+let selectedAdapterId =
   typeof process.env.GATEWAY_SELECTED_ADAPTER_ID === "string" &&
     process.env.GATEWAY_SELECTED_ADAPTER_ID.length > 0
     ? process.env.GATEWAY_SELECTED_ADAPTER_ID
@@ -43,6 +43,7 @@ const pendingNodeLogs = new Map();
 let sidecar = null;
 let shuttingDown = false;
 let latestGatewayIssue = null;
+let sidecarSessionStarted = false;
 
 function log(message, details) {
   if (details !== undefined) {
@@ -90,25 +91,29 @@ function setRuntimeIssue(issue) {
 
 function refreshSelectionIssue(adapters) {
   if (!selectedAdapterId) {
-    setRuntimeIssue("Select a BLE adapter in Setup before the gateway can connect.");
+    setRuntimeIssue("Bluetooth is unavailable on this machine.");
     return;
   }
 
   const selectedAdapter = adapters.find((adapter) => adapter.id === selectedAdapterId);
 
   if (!selectedAdapter) {
-    setRuntimeIssue("The selected BLE adapter is not currently available.");
+    setRuntimeIssue("Bluetooth is unavailable on this machine.");
     return;
   }
 
   if (!selectedAdapter.isAvailable) {
-    setRuntimeIssue(selectedAdapter.issue ?? "The selected BLE adapter cannot be used.");
+    setRuntimeIssue(selectedAdapter.issue ?? "Bluetooth is unavailable on this machine.");
     return;
   }
 
-  if (latestGatewayIssue?.startsWith("Select a BLE adapter in Setup")) {
+  if (latestGatewayIssue?.startsWith("Bluetooth is unavailable")) {
     setRuntimeIssue(null);
   }
+}
+
+function selectPreferredAdapter(adapters) {
+  return adapters.find((adapter) => adapter.isAvailable)?.id ?? adapters[0]?.id ?? null;
 }
 
 function createDeviceContext(deviceId) {
@@ -361,8 +366,21 @@ function handleSidecarEvent(event) {
           `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
           adapters,
         );
+        if (!selectedAdapterId) {
+          selectedAdapterId = selectPreferredAdapter(adapters);
+
+          if (selectedAdapterId) {
+            sendCommand("select_adapter", { adapter_id: selectedAdapterId });
+          }
+        }
+
         runtimeServer.setAvailableAdapters(adapters);
         refreshSelectionIssue(adapters);
+
+        if (!sidecarSessionStarted && selectedAdapterId) {
+          sidecarSessionStarted = true;
+          sendCommand("start");
+        }
       }
       break;
     case "gateway_state":
@@ -445,6 +463,7 @@ function attachJsonLineReader(stream, onEvent) {
 }
 
 async function startSidecar() {
+  sidecarSessionStarted = false;
   sidecar = spawn(config.sidecarPath, [], {
     cwd: process.cwd(),
     env: {
@@ -482,7 +501,10 @@ async function startSidecar() {
     })),
   });
   sendCommand("list_adapters");
-  sendCommand("start");
+  if (selectedAdapterId) {
+    sidecarSessionStarted = true;
+    sendCommand("start");
+  }
 }
 
 async function shutdown() {

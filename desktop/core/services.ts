@@ -1,6 +1,5 @@
 import type {
   ApprovedNodeRule,
-  BleAdapterSummary,
   DesktopSnapshot,
   DesktopSetupState,
   DeviceActivitySummary,
@@ -18,7 +17,6 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   restartGatewayRuntime: "runtime:restart-gateway-runtime",
   rescanAdapters: "runtime:rescan-adapters",
   setAllowedNodes: "runtime:set-allowed-nodes",
-  setSelectedAdapter: "runtime:set-selected-adapter",
   updated: "runtime:updated",
 } as const;
 
@@ -71,7 +69,6 @@ export type DesktopApi = {
   getSetupState: () => Promise<DesktopSetupState>;
   restartGatewayRuntime: () => Promise<DesktopSnapshot>;
   rescanAdapters: () => Promise<DesktopSetupState>;
-  setSelectedAdapter: (adapterId: BleAdapterSummary["id"]) => Promise<DesktopSetupState>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;

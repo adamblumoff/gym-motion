@@ -56,7 +56,7 @@ Windows-side testing guide:
 ## Notes
 
 - The desktop app now boots the real embedded gateway runtime. It reads env config from `.env` and `.env.local` before starting the local API bridge and BLE transport.
-- BLE adapter selection and node approval now live in the `Setup` tab. Adapter changes and node approval changes restart the gateway runtime, while the global restart action stays in the header.
+- On Windows, Bluetooth binds automatically to the native adapter. The `Setup` tab is only for connecting a node the first time and managing which nodes should auto-reconnect later.
 - On Windows, the desktop app uses the native Rust WinRT BLE sidecar so it can see built-in Bluetooth adapters. The legacy noble gateway stays in place for non-Windows hosts.
 - Real BLE validation should happen from a Windows-side clone at `C:\Users\adamb\Code\gym-motion`, with `.env.local` copied into that repo after cloning.
 - Windows-side local development now requires the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build the native BLE sidecar before launching or packaging.

@@ -46,12 +46,10 @@ type ManagedGatewayRuntime = {
   getSnapshot: () => Promise<DesktopSnapshot>;
   getSetupState: () => Promise<DesktopSetupState>;
   rescanAdapters: () => Promise<DesktopSetupState>;
-  setSelectedAdapter: (adapterId: string) => Promise<DesktopSetupState>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
 
-const SELECTED_ADAPTER_KEY = "gym-motion.desktop.ble-adapter";
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
 const EMPTY_GATEWAY: GatewayStatusSummary = {
@@ -84,9 +82,6 @@ function createEmptySnapshot(): DesktopSnapshot {
 
 function createEmptySetupState(): DesktopSetupState {
   return {
-    adapters: [],
-    selectedAdapterId: null,
-    runningAdapterId: null,
     adapterIssue: null,
     approvedNodes: [],
     nodes: [],
@@ -146,6 +141,8 @@ export function createManagedGatewayRuntime(
   let startingPromise: Promise<void> | null = null;
   let stopped = false;
   let windowsAdapterRetryTimer: NodeJS.Timeout | null = null;
+  let discoveredAdapters: BleAdapterSummary[] = [];
+  let autoSelectedAdapterId: string | null = null;
 
   function emit(event: DesktopRuntimeEvent) {
     for (const listener of listeners) {
@@ -218,25 +215,21 @@ export function createManagedGatewayRuntime(
     });
   }
 
-  function readSelectedAdapterId() {
-    return store.getString(SELECTED_ADAPTER_KEY) ?? null;
-  }
-
   function readApprovedNodes() {
     return normalizeApprovedNodes(store);
   }
 
   function selectedAdapter() {
-    return (
-      setupState.adapters.find((adapter) => adapter.id === setupState.selectedAdapterId) ?? null
-    );
+    return discoveredAdapters.find((adapter) => adapter.id === autoSelectedAdapterId) ?? null;
   }
 
   function applyAutoAdapterSelection(adapters: BleAdapterSummary[]) {
-    const currentSelection = readSelectedAdapterId();
-
-    if (currentSelection) {
-      return currentSelection;
+    if (usesWindowsNativeGateway(process.platform)) {
+      return (
+        adapters.find((adapter) => adapter.isAvailable)?.id ??
+        adapters[0]?.id ??
+        null
+      );
     }
 
     const usableAdapters = adapters.filter(
@@ -244,7 +237,6 @@ export function createManagedGatewayRuntime(
     );
 
     if (usableAdapters.length === 1) {
-      store.setString(SELECTED_ADAPTER_KEY, usableAdapters[0].id);
       return usableAdapters[0].id;
     }
 
@@ -262,23 +254,27 @@ export function createManagedGatewayRuntime(
             error: undefined,
           };
     const adapters = adapterPayload.adapters;
-    const nextSelectedAdapterId = applyAutoAdapterSelection(adapters);
-    const selectedAdapterId = nextSelectedAdapterId ?? readSelectedAdapterId();
+    const selectedAdapterId = applyAutoAdapterSelection(adapters);
     const adapterIssue = adapterPayload.error ??
       (adapters[0]?.id === "adapter-error"
       ? adapters[0].issue
       : selectedAdapterId && !adapters.some((adapter) => adapter.id === selectedAdapterId)
-        ? "The selected BLE adapter is not currently available."
+        ? "Bluetooth is unavailable on this machine."
         : adapters.length === 0
-          ? "No compatible BLE adapters were detected."
-          : selectedAdapterId
+          ? usesWindowsNativeGateway(process.platform)
+            ? "Bluetooth is unavailable on this machine."
+            : "No compatible BLE adapters were detected."
+          : usesWindowsNativeGateway(process.platform)
             ? null
-            : "Select a BLE adapter in Setup before the gateway can connect.");
+            : selectedAdapterId
+              ? null
+              : "No compatible BLE adapters were detected.");
+
+    discoveredAdapters = adapters;
+    autoSelectedAdapterId = selectedAdapterId;
 
     setupState = {
       ...setupState,
-      adapters,
-      selectedAdapterId,
       adapterIssue,
       approvedNodes: readApprovedNodes(),
     };
@@ -542,7 +538,7 @@ export function createManagedGatewayRuntime(
 
   function runtimeStartIssue() {
     if (usesWindowsNativeGateway(process.platform)) {
-      return null;
+      return setupState.adapterIssue;
     }
 
     if (setupState.adapterIssue) {
@@ -552,11 +548,11 @@ export function createManagedGatewayRuntime(
     const adapter = selectedAdapter();
 
     if (!adapter) {
-      return "Select a BLE adapter in Setup before starting the gateway.";
+      return "No compatible BLE adapters were detected.";
     }
 
     if (!adapter.isAvailable || adapter.runtimeDeviceId === null) {
-      return adapter.issue ?? "The selected BLE adapter cannot be used.";
+      return adapter.issue ?? "The detected BLE adapter cannot be used.";
     }
 
     return null;
@@ -609,12 +605,6 @@ export function createManagedGatewayRuntime(
       },
     );
 
-    setupState = {
-      ...setupState,
-      runningAdapterId: adapter?.id ?? null,
-    };
-    emitSetup();
-
     child.stdout?.on("data", (chunk) => {
       process.stdout.write(`[gateway] ${chunk}`);
     });
@@ -623,11 +613,6 @@ export function createManagedGatewayRuntime(
     });
     child.once("exit", (code, signal) => {
       child = null;
-      setupState = {
-        ...setupState,
-        runningAdapterId: null,
-      };
-      emitSetup();
       if (stopped) {
         return;
       }
@@ -771,10 +756,6 @@ export function createManagedGatewayRuntime(
     }
 
     stopChild();
-    setupState = {
-      ...setupState,
-      runningAdapterId: null,
-    };
     snapshot = createEmptySnapshot();
     await startRuntime();
     return snapshot;
@@ -801,10 +782,6 @@ export function createManagedGatewayRuntime(
       }
 
       stopChild();
-      setupState = {
-        ...setupState,
-        runningAdapterId: null,
-      };
       emitSetup();
       await apiServer.stop();
     },
@@ -826,12 +803,6 @@ export function createManagedGatewayRuntime(
       }
 
       await refreshAdapters();
-      return setupState;
-    },
-    async setSelectedAdapter(adapterId) {
-      store.setString(SELECTED_ADAPTER_KEY, adapterId);
-      await refreshAdapters();
-      await restartRuntime();
       return setupState;
     },
     async setAllowedNodes(nodes) {

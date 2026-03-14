@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { ApprovedNodeRule, BleAdapterSummary, ThemePreference } from "@core/contracts";
+import type { ApprovedNodeRule, ThemePreference } from "@core/contracts";
 import {
   DESKTOP_THEME_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
@@ -19,9 +19,6 @@ const desktopApi: DesktopApi = {
   },
   async rescanAdapters() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
-  },
-  async setSelectedAdapter(adapterId: BleAdapterSummary["id"]) {
-    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setSelectedAdapter, adapterId);
   },
   async setAllowedNodes(nodes: ApprovedNodeRule[]) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);

@@ -177,13 +177,6 @@ export function useDesktopApp() {
         setup,
       }));
     },
-    async setSelectedAdapter(adapterId: string) {
-      const setup = await window.gymMotionDesktop.setSelectedAdapter(adapterId);
-      setState((current) => ({
-        ...current,
-        setup,
-      }));
-    },
     async setAllowedNodes(nodes: ApprovedNodeRule[]) {
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => ({

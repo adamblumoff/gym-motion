@@ -50,13 +50,12 @@ Use this path for the first real validation because the Windows-native BLE sidec
 In the app:
 
 1. Open the `Setup` tab.
-2. Confirm the adapter list appears.
-3. Select the adapter the gateway should use.
-4. Confirm the gateway restarts after adapter selection.
-5. Power the BLE node and confirm it appears in the visible node list.
-6. Approve one or more nodes.
-7. Confirm the gateway restarts and only approved nodes reconnect.
-8. Confirm the restart control only exists in the header.
+2. Confirm Bluetooth comes up automatically without any adapter picker.
+3. Power the BLE node and confirm it appears in the visible node list.
+4. Click `Connect` on a visible node.
+5. Confirm the gateway manages that node and reconnects it automatically later.
+6. Click `Remove` and confirm the node stops being managed.
+7. Confirm the restart control only exists in the header.
 
 ## Packaged Build
 
@@ -76,6 +75,6 @@ Validate the same Setup and reconnect flow in the packaged app.
 - `.env.local` is required for meaningful desktop testing because the app reads database and storage config at startup.
 - The desktop runtime is real, not mock-backed.
 - Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
-- BLE adapter selection and node approval both live in the `Setup` tab.
-- Adapter changes and node approval changes restart the gateway runtime.
+- Windows Bluetooth adapter selection is automatic and stays out of the UI.
+- The `Setup` tab is node-only: connect a node once there, then let the gateway auto-reconnect it later.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.

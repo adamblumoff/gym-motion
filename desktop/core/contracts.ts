@@ -182,9 +182,6 @@ export type DiscoveredNodeSummary = {
 };
 
 export type DesktopSetupState = {
-  adapters: BleAdapterSummary[];
-  selectedAdapterId: string | null;
-  runningAdapterId: string | null;
   adapterIssue: string | null;
   approvedNodes: ApprovedNodeRule[];
   nodes: DiscoveredNodeSummary[];
