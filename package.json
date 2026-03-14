@@ -1,55 +1,71 @@
 {
-  "name": "gym-motion",
+  "name": "gym-motion-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Gateway-first motion dashboard for BLE sensor nodes with an ESP32 reference node implementation.",
+  "description": "Windows-first Gym Motion desktop gateway and operator console.",
+  "main": "out/main/index.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "test": "bun test",
-    "db:setup": "bun run scripts/setup-db.ts",
-    "db:migrate:timestamps": "bun run scripts/migrate-timestamps.ts",
-    "seed": "bun run scripts/send-test-event.ts",
-    "gateway": "node scripts/ble-gateway.mjs",
-    "firmware:build": "./scripts/build-firmware.sh",
-    "firmware:sync:windows": "./scripts/sync-windows-firmware.sh",
-    "firmware:upload": "./scripts/upload-firmware.sh",
-    "firmware:publish": "bun run scripts/publish-firmware.ts",
-    "reference-node:build": "./scripts/build-firmware.sh",
-    "reference-node:upload": "./scripts/upload-firmware.sh",
-    "reference-node:publish": "bun run scripts/publish-firmware.ts",
-    "device:purge": "bun run scripts/purge-device.ts"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && electron-builder --dir",
+    "build:win": "electron-vite build && electron-builder --win nsis portable",
+    "preview": "electron-vite preview",
+    "lint": "eslint desktop --ext .ts,.tsx",
+    "test": "bun test desktop",
+    "typecheck": "tsc --noEmit",
+    "legacy:dev": "cd legacy && bun dev",
+    "test:windows-desktop": "./scripts/test-windows-desktop.sh"
   },
   "dependencies": {
-    "@abandonware/noble": "^1.9.2-26",
-    "@aws-sdk/client-s3": "^3.1003.0",
-    "@aws-sdk/s3-request-presigner": "^3.1003.0",
-    "next": "16.1.6",
-    "pg": "^8.20.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
+    "pg": "^8.16.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^25.3.5",
-    "@types/pg": "^8.18.0",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "playwright": "^1.58.2",
-    "typescript": "^5"
+    "@eslint/js": "^9.23.0",
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^36.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "eslint": "^9.35.0",
+    "globals": "^16.3.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.43.0"
   },
-  "ignoreScripts": [
-    "sharp",
-    "unrs-resolver"
-  ],
-  "trustedDependencies": [
-    "@abandonware/bluetooth-hci-socket",
-    "@abandonware/noble",
-    "sharp",
-    "unrs-resolver"
-  ]
+  "build": {
+    "appId": "com.gymmotion.desktop",
+    "productName": "Gym Motion",
+    "asar": true,
+    "files": [
+      "dist/**",
+      "out/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
 }
