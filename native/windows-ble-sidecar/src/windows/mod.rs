@@ -171,10 +171,30 @@ async fn sync_scan_state(
 ) -> Result<()> {
     let now = Instant::now();
     let should_scan_now = should_scan(allowed, connected_nodes, manual_scan_deadline, now);
+    let approved_pending = approved_nodes_pending_connection(allowed, connected_nodes);
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
         *scanning = true;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: if approved_pending {
+                    format!(
+                        "Starting approved-node reconnect scan; {} approved node(s) are still missing.",
+                        allowed.len().saturating_sub(connected_nodes.len())
+                    )
+                } else {
+                    "Starting manual BLE scan window.".to_string()
+                },
+                details: Some(json!({
+                    "approvedPending": approved_pending,
+                    "approvedCount": allowed.len(),
+                    "connectedApprovedCount": connected_nodes.len(),
+                    "manualScanActive": manual_scan_deadline.is_some(),
+                })),
+            })
+            .await?;
         emit_gateway_state(
             writer,
             adapter,
@@ -189,6 +209,18 @@ async fn sync_scan_state(
     if !should_scan_now && *scanning {
         let _ = adapter.stop_scan().await;
         *scanning = false;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Stopping BLE scan window.".to_string(),
+                details: Some(json!({
+                    "approvedPending": approved_pending,
+                    "approvedCount": allowed.len(),
+                    "connectedApprovedCount": connected_nodes.len(),
+                    "manualScanActive": manual_scan_deadline.is_some(),
+                })),
+            })
+            .await?;
         emit_gateway_state(
             writer,
             adapter,
@@ -543,6 +575,20 @@ async fn run_session(
                     SessionCommand::ConnectionEnded { node, reason } => {
                         let key = node_key(&node);
                         connected_nodes.remove(&key);
+                        manual_scan_deadline =
+                            Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                        writer.send(&Event::Log {
+                            level: "info".to_string(),
+                            message: format!(
+                                "Approved-node disconnect for {}; forcing reconnect scan window.",
+                                node.label
+                            ),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "reason": reason,
+                            })),
+                        }).await?;
                         writer.send(&Event::NodeConnectionState {
                             node,
                             gateway_connection_state: "disconnected".to_string(),
@@ -623,6 +669,18 @@ async fn run_session(
                             }).await?;
 
                             if is_approved(&node, &allowed) {
+                                writer.send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: format!(
+                                        "Approved node rediscovered; starting reconnect attempt for {}.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                    })),
+                                }).await?;
                                 let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
                                 let mut active = active_connections.lock().await;
                                 if !active.contains(&key) {
