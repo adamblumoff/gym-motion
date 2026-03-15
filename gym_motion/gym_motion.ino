@@ -39,6 +39,7 @@ const int MOTION_THRESHOLD = 70;
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
+const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 8000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
@@ -81,6 +82,7 @@ bool runtimeAppSessionConnected = false;
 bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
+unsigned long runtimeBleConnectedAt = 0;
 unsigned long lastAppSessionLeaseAt = 0;
 unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
@@ -707,11 +709,37 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
 }
 
 void enforceRuntimeAppSessionLease() {
-  if (!runtimeBleConnected || !runtimeAppSessionConnected || lastAppSessionLeaseAt == 0) {
+  if (!runtimeBleConnected) {
     return;
   }
 
   const unsigned long now = millis();
+
+  if (!runtimeAppSessionConnected || lastAppSessionLeaseAt == 0) {
+    if (
+      runtimeBleConnectedAt > 0 &&
+      now - runtimeBleConnectedAt >= APP_SESSION_BOOTSTRAP_TIMEOUT_MS
+    ) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.missing",
+        "BLE client connected without an app session lease; dropping stale client.",
+        now
+      );
+      resetRuntimeAppSessionState();
+
+      if (bleServer != nullptr && runtimeBleConnIdKnown) {
+        bleServer->disconnect(runtimeBleConnId);
+        return;
+      }
+
+      if (bleServer != nullptr) {
+        bleServer->getAdvertising()->start();
+      }
+    }
+
+    return;
+  }
   if (now - lastAppSessionLeaseAt < appSessionLeaseTimeoutMs) {
     return;
   }
@@ -962,6 +990,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     provisioningBleConnected = true;
     runtimeBleConnected = true;
+    runtimeBleConnectedAt = millis();
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
     resetRuntimeAppSessionState();
@@ -977,6 +1006,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     (void)param;
     provisioningBleConnected = false;
     runtimeBleConnected = false;
+    runtimeBleConnectedAt = 0;
     noteRuntimeTransportDisconnected(millis());
     server->getAdvertising()->start();
   }
