@@ -390,6 +390,7 @@ describe("gateway runtime server", () => {
     expect(device?.id).toBe("stack-001");
     expect(payload.devices.map((item: { id: string }) => item.id)).toEqual(["stack-001"]);
     expect(device?.gatewayConnectionState).toBe("disconnected");
+    expect(device?.address).toBe("aa:bb:cc:dd");
   });
 
   it("reports manual scan reason separately from silent reconnect search", async () => {

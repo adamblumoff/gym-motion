@@ -60,6 +60,7 @@ describe("managed gateway runtime snapshot merge", () => {
           gatewayConnectionState: "connected",
           telemetryFreshness: "stale",
           peripheralId: "peripheral-1",
+          address: "AA:BB:CC:DD",
           gatewayLastAdvertisementAt: null,
           gatewayLastConnectedAt: staleTimestamp,
           gatewayLastDisconnectedAt: null,
@@ -101,5 +102,6 @@ describe("managed gateway runtime snapshot merge", () => {
 
     expect(device.telemetryFreshness).toBe("fresh");
     expect(device.gatewayLastTelemetryAt).toBe(freshTimestamp);
+    expect(device.address).toBe("AA:BB:CC:DD");
   });
 });

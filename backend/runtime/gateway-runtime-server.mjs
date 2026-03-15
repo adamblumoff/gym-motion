@@ -345,6 +345,7 @@ export function createGatewayRuntimeServer({
       gatewayConnectionState: connectionState,
       telemetryFreshness,
       peripheralId: runtime?.peripheralId ?? known?.peripheralId ?? null,
+      address: runtime?.address ?? known?.lastKnownAddress ?? null,
       gatewayLastAdvertisementAt:
         runtime?.gatewayLastAdvertisementAt ?? known?.lastSeenAt ?? null,
       gatewayLastConnectedAt:

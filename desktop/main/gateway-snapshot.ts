@@ -46,6 +46,7 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
       ? "fresh"
       : existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),
     peripheralId: existing?.peripheralId ?? null,
+    address: existing?.address ?? null,
     gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,
     gatewayLastConnectedAt: existing?.gatewayLastConnectedAt ?? null,
     gatewayLastDisconnectedAt: existing?.gatewayLastDisconnectedAt ?? null,
