@@ -41,9 +41,9 @@ export function registerRuntimeBridge(
   });
 
   return {
-    dispose() {
+    async dispose() {
       unsubscribe();
-      void runtime.stop();
+      await runtime.stop();
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSnapshot);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSetupState);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);

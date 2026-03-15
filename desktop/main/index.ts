@@ -20,6 +20,7 @@ import { loadDesktopEnv } from "./load-env";
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let isDisposingRuntime = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
 let themeBridgeDisposer: (() => void) | null = null;
 
@@ -189,14 +190,29 @@ if (!singleInstance) {
   });
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (isDisposingRuntime) {
+    return;
+  }
+
+  event.preventDefault();
   isQuitting = true;
+  isDisposingRuntime = true;
+
+  void (async () => {
+    await runtimeBridge?.dispose();
+    runtimeBridge = null;
+    themeBridgeDisposer?.();
+    themeBridgeDisposer = null;
+    ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
+    ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.setPreference);
+    tray?.destroy();
+    tray = null;
+    mainWindow = null;
+    app.quit();
+  })();
 });
 
 app.on("quit", () => {
-  runtimeBridge?.dispose();
-  themeBridgeDisposer?.();
-  ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
-  ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.setPreference);
-  tray?.destroy();
+  isDisposingRuntime = true;
 });
