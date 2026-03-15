@@ -25,6 +25,14 @@ function addressIdentityMatch(
   return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 }
 
+function forgetFieldMatches(
+  ruleValue: string | null | undefined,
+  identityValue: string | null | undefined,
+  matcher: (left: string | null | undefined, right: string | null | undefined) => boolean,
+) {
+  return Boolean(ruleValue && identityValue && matcher(ruleValue, identityValue));
+}
+
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
     ? setup.nodes
@@ -93,11 +101,21 @@ export function forgetApprovedNodeRules(
 
   return approvedNodes.filter(
     (rule) =>
-      rule.id !== forgetIdentity.id &&
-      rule.knownDeviceId !== forgetIdentity.knownDeviceId &&
-      rule.peripheralId !== forgetIdentity.peripheralId &&
-      rule.address !== forgetIdentity.address &&
-      rule.localName !== forgetIdentity.localName,
+      !(
+        forgetFieldMatches(rule.id, forgetIdentity.id, exactIdentityMatch) ||
+        forgetFieldMatches(
+          rule.knownDeviceId,
+          forgetIdentity.knownDeviceId,
+          exactIdentityMatch,
+        ) ||
+        forgetFieldMatches(
+          rule.peripheralId,
+          forgetIdentity.peripheralId,
+          exactIdentityMatch,
+        ) ||
+        forgetFieldMatches(rule.address, forgetIdentity.address, addressIdentityMatch) ||
+        forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch)
+      ),
   );
 }
 

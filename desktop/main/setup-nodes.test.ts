@@ -71,4 +71,38 @@ describe("setup nodes helpers", () => {
     expect(matchingApprovedSetupNodeId(nodesById, approvedNode)).toBe("peripheral:new-peripheral");
     expect(hasApprovedSetupNode(nodesById, approvedNode)).toBe(true);
   });
+
+  it("matches approved setup nodes by address case-insensitively", () => {
+    const nodesById = new Map<string, DiscoveredNodeSummary>([
+      [
+        "peripheral:new-peripheral",
+        {
+          id: "peripheral:new-peripheral",
+          label: "GymMotion",
+          peripheralId: null,
+          address: "AA:BB",
+          localName: null,
+          knownDeviceId: null,
+          machineLabel: null,
+          siteId: null,
+          lastRssi: -55,
+          lastSeenAt: new Date().toISOString(),
+          gatewayConnectionState: "reconnecting",
+          isApproved: true,
+        },
+      ],
+    ]);
+
+    const approvedNode: ApprovedNodeRule = {
+      id: "address:aa:bb",
+      label: "Leg Press",
+      peripheralId: null,
+      address: "aa:bb",
+      localName: null,
+      knownDeviceId: null,
+    };
+
+    expect(matchingApprovedSetupNodeId(nodesById, approvedNode)).toBe("peripheral:new-peripheral");
+    expect(hasApprovedSetupNode(nodesById, approvedNode)).toBe(true);
+  });
 });

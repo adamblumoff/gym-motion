@@ -97,6 +97,37 @@ describe("setup-rules", () => {
     ).toEqual([]);
   });
 
+  it("does not forget unrelated approved nodes that only share null identity fields", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "known:stack-001",
+        label: "Stack 001",
+        peripheralId: "peripheral-1",
+        address: null,
+        localName: null,
+        knownDeviceId: "stack-001",
+      },
+      {
+        id: "known:stack-002",
+        label: "Stack 002",
+        peripheralId: "peripheral-2",
+        address: null,
+        localName: null,
+        knownDeviceId: "stack-002",
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral-1",
+        address: null,
+        localName: null,
+      }),
+    ).toEqual([approvedNodes[1]!]);
+  });
+
   it("matches approved nodes by identity fields, not only exact ids", () => {
     const [rule] = createSetupState().approvedNodes;
 

@@ -1252,36 +1252,7 @@ async fn run_session(
                         )
                         .await
                         {
-                            let reconnect =
-                                reconnect_status_for_rule(
-                                    approved_rule_id_for_node(&node, &allowed).as_deref(),
-                                    &reconnect_states,
-                                );
-                            mark_node_connected(
-                                &mut connected_nodes,
-                                &mut reconnect_states,
-                                &node,
-                                &allowed,
-                            );
-                            sync_scan_state(
-                                &adapter,
-                                &writer,
-                                &selected_adapter_id,
-                                &allowed,
-                                &connected_nodes,
-                                &reconnect_states,
-                                &mut scanning,
-                                &mut current_scan_reason,
-                                manual_scan_deadline,
-                                &last_advertisement_at,
-                            )
-                            .await?;
-                            writer.send(&Event::NodeConnectionState {
-                                node,
-                                gateway_connection_state: "connected".to_string(),
-                                reason: None,
-                                reconnect,
-                            }).await?;
+                            let _ = node;
                         }
                     }
                     CentralEvent::DeviceDisconnected(id) => {
