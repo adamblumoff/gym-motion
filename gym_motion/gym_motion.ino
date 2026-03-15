@@ -41,6 +41,7 @@ const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
 const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 8000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
+const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
@@ -84,6 +85,7 @@ bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
 unsigned long runtimeBleConnectedAt = 0;
 unsigned long lastAppSessionLeaseAt = 0;
+unsigned long lastDisconnectedAdvertisingLogAt = 0;
 unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
 unsigned long ackedHistorySequence = 0;
@@ -640,6 +642,29 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
+void logRuntimeTransportEvent(const String& message) {
+  Serial.print("[runtime] ");
+  Serial.println(message);
+}
+
+void startRuntimeAdvertising(const String& reason) {
+  if (bleServer == nullptr) {
+    return;
+  }
+
+  BLEAdvertising* advertising = bleServer->getAdvertising();
+
+  if (advertising == nullptr) {
+    return;
+  }
+
+  advertising->start();
+  lastDisconnectedAdvertisingLogAt = millis();
+  logRuntimeTransportEvent(
+    "Advertising for Windows app reconnect (" + reason + ")."
+  );
+}
+
 void resetRuntimeAppSessionState() {
   runtimeAppSessionConnected = false;
   runtimeAppSessionId = "";
@@ -666,6 +691,10 @@ void markRuntimeAppSessionOnline(
     return;
   }
 
+  logRuntimeTransportEvent(
+    "Windows app session lease is active for session " + sessionId + "."
+  );
+
   journalNodeLog(
     "info",
     "runtime.app_session.online",
@@ -682,6 +711,10 @@ void noteRuntimeAppSessionExpired(unsigned long timestamp) {
     return;
   }
 
+  logRuntimeTransportEvent(
+    "Windows app session lease expired; dropping BLE client and resuming advertising."
+  );
+
   journalNodeLog(
     "warn",
     "runtime.app_session.expired",
@@ -695,6 +728,10 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
   resetRuntimeAppSessionState();
   runtimeBleConnIdKnown = false;
   runtimeBleConnId = 0;
+
+  logRuntimeTransportEvent(
+    "BLE runtime transport disconnected from the Windows app."
+  );
 
   if (!hadSession) {
     return;
@@ -726,6 +763,9 @@ void enforceRuntimeAppSessionLease() {
         "BLE client connected without an app session lease; dropping stale client.",
         now
       );
+      logRuntimeTransportEvent(
+        "BLE client never leased the Windows app session; dropping stale client."
+      );
       resetRuntimeAppSessionState();
 
       if (bleServer != nullptr && runtimeBleConnIdKnown) {
@@ -733,9 +773,7 @@ void enforceRuntimeAppSessionLease() {
         return;
       }
 
-      if (bleServer != nullptr) {
-        bleServer->getAdvertising()->start();
-      }
+      startRuntimeAdvertising("missing app-session lease");
     }
 
     return;
@@ -751,9 +789,7 @@ void enforceRuntimeAppSessionLease() {
     return;
   }
 
-  if (bleServer != nullptr) {
-    bleServer->getAdvertising()->start();
-  }
+  startRuntimeAdvertising("expired app-session lease");
 }
 
 void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {
@@ -991,8 +1027,12 @@ class GymServerCallbacks : public BLEServerCallbacks {
     provisioningBleConnected = true;
     runtimeBleConnected = true;
     runtimeBleConnectedAt = millis();
+    lastDisconnectedAdvertisingLogAt = 0;
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
+    logRuntimeTransportEvent(
+      "BLE client connected; waiting for Windows app session lease."
+    );
     resetRuntimeAppSessionState();
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
@@ -1008,7 +1048,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     runtimeBleConnected = false;
     runtimeBleConnectedAt = 0;
     noteRuntimeTransportDisconnected(millis());
-    server->getAdvertising()->start();
+    startRuntimeAdvertising("BLE client disconnected");
   }
 };
 
@@ -1113,6 +1153,26 @@ void updateMotionState() {
   lastZ = z;
 }
 
+void logDisconnectedAdvertisingHeartbeat() {
+  if (runtimeBleConnected || bleServer == nullptr) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (
+    lastDisconnectedAdvertisingLogAt > 0 &&
+    now - lastDisconnectedAdvertisingLogAt < DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastDisconnectedAdvertisingLogAt = now;
+  logRuntimeTransportEvent(
+    "Still waiting for the Windows app; BLE advertising is active."
+  );
+}
+
 void setupBle() {
   BLEDevice::init(createBleDeviceName().c_str());
   bleServer = BLEDevice::createServer();
@@ -1160,6 +1220,8 @@ void setupBle() {
   advertising->addServiceUUID(PROVISIONING_SERVICE_UUID);
   advertising->addServiceUUID(RUNTIME_SERVICE_UUID);
   advertising->start();
+  lastDisconnectedAdvertisingLogAt = millis();
+  logRuntimeTransportEvent("BLE advertising started.");
 }
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
@@ -1225,6 +1287,7 @@ void setup() {
 void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
+  logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
   delay(LOOP_DELAY_MS);
 }
