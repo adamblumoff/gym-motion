@@ -511,16 +511,6 @@ function attachControlReader() {
       console.error("[gateway-winrt] failed to parse control command", error);
     }
   });
-
-  controlReader.on("close", () => {
-    if (shuttingDown) {
-      return;
-    }
-
-    void shutdown().finally(() => {
-      process.exit(0);
-    });
-  });
 }
 
 function handleSidecarEvent(event) {
