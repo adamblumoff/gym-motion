@@ -16,14 +16,12 @@ export default {
   asar: true,
   asarUnpack: [
     "backend/runtime/**",
-    "legacy/scripts/**",
     "desktop/scripts/**",
   ],
   files: [
     "backend/runtime/**",
     "dist/**",
     "out/**",
-    "legacy/scripts/**",
     "desktop/scripts/**",
     "package.json",
   ],

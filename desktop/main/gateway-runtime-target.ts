@@ -28,13 +28,13 @@ export function resolveGatewayScriptPath(options: {
     return path.join(
       options.resourcesPath,
       "app.asar.unpacked",
-      "legacy",
-      "scripts",
+      "backend",
+      "runtime",
       "ble-gateway.mjs",
     );
   }
 
-  return path.join(options.cwd, "legacy", "scripts", "ble-gateway.mjs");
+  return path.join(options.cwd, "backend", "runtime", "ble-gateway.mjs");
 }
 
 export function resolveWindowsSidecarPath(options: {

@@ -10,7 +10,8 @@
     "build:win": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
     "preview": "electron-vite preview",
     "lint": "eslint desktop --ext .ts,.tsx",
-    "test": "bun test ./desktop/main ./desktop/core ./desktop/ui ./desktop/scripts",
+    "test:boundaries": "node ./scripts/check-no-legacy-imports.mjs",
+    "test": "bun run test:boundaries && bun test ./desktop/main ./desktop/core ./desktop/ui ./desktop/scripts",
     "typecheck": "tsc --noEmit",
     "legacy:dev": "cd legacy && bun dev",
     "test:windows-desktop": "./scripts/test-windows-desktop.sh"

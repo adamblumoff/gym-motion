@@ -25,4 +25,5 @@ The desktop app is split into three layers:
 - Windows is the first-class target.
 - Tray-running behavior is part of the product, not an optional dev mode.
 - Remote Postgres remains the v1 system of record.
-- The legacy Next.js app is archived under `legacy/` and should not receive feature work; any runtime code still used by the desktop app should be migrated into `backend/`.
+- The legacy Next.js app is archived under `legacy/` and should not receive feature work; active desktop runtime and data-access code now belongs under `backend/`.
+- `desktop/` and `backend/` must not import from `legacy/` or from the legacy `@/lib/*` alias. The repo enforces this with `scripts/check-no-legacy-imports.mjs`.
