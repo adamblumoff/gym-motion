@@ -41,6 +41,7 @@ const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
 const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 8000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
+const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
@@ -86,6 +87,8 @@ unsigned long pendingRebootAt = 0;
 unsigned long runtimeBleConnectedAt = 0;
 unsigned long lastAppSessionLeaseAt = 0;
 unsigned long lastDisconnectedAdvertisingLogAt = 0;
+unsigned long lastConnectedRuntimeDebugAt = 0;
+unsigned long lastRuntimeControlAt = 0;
 unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
 unsigned long ackedHistorySequence = 0;
@@ -665,10 +668,39 @@ void startRuntimeAdvertising(const String& reason) {
   );
 }
 
+void logRuntimeLeaseState(const char* reason, unsigned long now) {
+  Serial.print("[runtime] ");
+  Serial.print(reason);
+  Serial.print(" connected=");
+  Serial.print(runtimeBleConnected ? 1 : 0);
+  Serial.print(" leased=");
+  Serial.print(runtimeAppSessionConnected ? 1 : 0);
+  Serial.print(" connKnown=");
+  Serial.print(runtimeBleConnIdKnown ? 1 : 0);
+  Serial.print(" connId=");
+  Serial.print(runtimeBleConnIdKnown ? runtimeBleConnId : 0);
+  Serial.print(" msSinceConnect=");
+  Serial.print(runtimeBleConnectedAt > 0 ? now - runtimeBleConnectedAt : 0);
+  Serial.print(" msSinceLease=");
+  Serial.print(lastAppSessionLeaseAt > 0 ? now - lastAppSessionLeaseAt : 0);
+  Serial.print(" msSinceControl=");
+  Serial.print(lastRuntimeControlAt > 0 ? now - lastRuntimeControlAt : 0);
+  Serial.print(" leaseTimeoutMs=");
+  Serial.print(appSessionLeaseTimeoutMs);
+  Serial.print(" sessionId=");
+  if (runtimeAppSessionId.length() > 0) {
+    Serial.println(runtimeAppSessionId);
+    return;
+  }
+
+  Serial.println("(none)");
+}
+
 void resetRuntimeAppSessionState() {
   runtimeAppSessionConnected = false;
   runtimeAppSessionId = "";
   lastAppSessionLeaseAt = 0;
+  lastRuntimeControlAt = 0;
   appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 }
 
@@ -685,9 +717,11 @@ void markRuntimeAppSessionOnline(
   runtimeAppSessionConnected = true;
   runtimeAppSessionId = sessionId;
   lastAppSessionLeaseAt = timestamp;
+  lastRuntimeControlAt = timestamp;
   appSessionLeaseTimeoutMs = nextTimeout;
 
   if (!sessionChanged) {
+    logRuntimeLeaseState("Lease refreshed.", timestamp);
     return;
   }
 
@@ -757,6 +791,7 @@ void enforceRuntimeAppSessionLease() {
       runtimeBleConnectedAt > 0 &&
       now - runtimeBleConnectedAt >= APP_SESSION_BOOTSTRAP_TIMEOUT_MS
     ) {
+      logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
       journalNodeLog(
         "warn",
         "runtime.app_session.missing",
@@ -782,6 +817,7 @@ void enforceRuntimeAppSessionLease() {
     return;
   }
 
+  logRuntimeLeaseState("Lease expiry timeout fired.", now);
   noteRuntimeAppSessionExpired(now);
 
   if (bleServer != nullptr && runtimeBleConnIdKnown) {
@@ -961,6 +997,7 @@ void handleProvisioningCommand(const String& payload) {
 
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
+  lastRuntimeControlAt = millis();
 
   if (type == "app-session-lease") {
     const String sessionId = extractJsonString(payload, "sessionId");
@@ -1028,6 +1065,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     runtimeBleConnected = true;
     runtimeBleConnectedAt = millis();
     lastDisconnectedAdvertisingLogAt = 0;
+    lastConnectedRuntimeDebugAt = 0;
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
     logRuntimeTransportEvent(
@@ -1047,6 +1085,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     provisioningBleConnected = false;
     runtimeBleConnected = false;
     runtimeBleConnectedAt = 0;
+    lastConnectedRuntimeDebugAt = 0;
     noteRuntimeTransportDisconnected(millis());
     startRuntimeAdvertising("BLE client disconnected");
   }
@@ -1151,6 +1190,24 @@ void updateMotionState() {
   lastX = x;
   lastY = y;
   lastZ = z;
+}
+
+void logConnectedRuntimeHeartbeat() {
+  if (!runtimeBleConnected) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (
+    lastConnectedRuntimeDebugAt > 0 &&
+    now - lastConnectedRuntimeDebugAt < CONNECTED_RUNTIME_DEBUG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastConnectedRuntimeDebugAt = now;
+  logRuntimeLeaseState("Connected heartbeat.", now);
 }
 
 void logDisconnectedAdvertisingHeartbeat() {
@@ -1287,6 +1344,7 @@ void setup() {
 void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
+  logConnectedRuntimeHeartbeat();
   logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
   delay(LOOP_DELAY_MS);
