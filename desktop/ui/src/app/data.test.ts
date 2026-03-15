@@ -45,6 +45,7 @@ describe("buildBluetoothNodes", () => {
           lastEventReceivedAt: null,
           healthStatus: "stale",
           gatewayConnectionState: "reconnecting",
+          telemetryFreshness: "fresh",
           peripheralId: "peripheral-1",
           gatewayLastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
           gatewayLastConnectedAt: new Date("2026-03-14T20:04:00.000Z").toISOString(),

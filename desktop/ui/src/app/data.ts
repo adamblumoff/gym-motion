@@ -8,6 +8,7 @@ import type {
   GatewayRuntimeDeviceSummary,
   HealthStatus,
   MotionEventSummary,
+  TelemetryFreshness,
 } from "@core/contracts";
 
 export type NodeLog = {
@@ -24,6 +25,7 @@ export type BluetoothNodeData = {
   isConnected: boolean;
   connectionState: GatewayConnectionState;
   healthStatus: HealthStatus;
+  telemetryFreshness: TelemetryFreshness;
   isMoving: boolean;
   signalStrength: number | null;
   batteryLevel: number | null;
@@ -92,11 +94,9 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     isConnected: device.gatewayConnectionState === "connected",
     connectionState: device.gatewayConnectionState,
     healthStatus: device.healthStatus,
+    telemetryFreshness: device.telemetryFreshness,
     isMoving:
-      device.lastState === "moving" &&
-      (device.gatewayConnectionState === "connected" ||
-        device.gatewayConnectionState === "connecting" ||
-        device.gatewayConnectionState === "reconnecting"),
+      device.lastState === "moving" && device.telemetryFreshness === "fresh",
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
     logs: buildNodeLogs(device, snapshot.activities),

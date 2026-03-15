@@ -6,9 +6,15 @@ interface DashboardHeaderProps {
   totalNodes: number;
   activeNodes: number;
   movingNodes: number;
+  runtimeStatus: string;
 }
 
-export function DashboardHeader({ totalNodes, activeNodes, movingNodes }: DashboardHeaderProps) {
+export function DashboardHeader({
+  totalNodes,
+  activeNodes,
+  movingNodes,
+  runtimeStatus,
+}: DashboardHeaderProps) {
   return (
     <div className="bg-zinc-900 border-b border-zinc-800 px-6 py-5">
       <div className="flex items-center justify-between">
@@ -36,6 +42,11 @@ export function DashboardHeader({ totalNodes, activeNodes, movingNodes }: Dashbo
           <div className="text-right">
             <div className="text-2xl font-semibold text-cyan-400">{movingNodes}</div>
             <div className="text-xs text-zinc-500 uppercase tracking-wider">Active Motion</div>
+          </div>
+          <div className="w-px h-12 bg-zinc-800" />
+          <div className="text-right min-w-32">
+            <div className="text-sm font-medium text-zinc-100">{runtimeStatus}</div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wider">Gateway</div>
           </div>
           <div className="w-px h-12 bg-zinc-800" />
           <Link to="/analytics">

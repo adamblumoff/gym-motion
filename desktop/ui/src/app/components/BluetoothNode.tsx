@@ -48,10 +48,31 @@ function connectionBadge(node: BluetoothNodeData) {
   }
 }
 
+function freshnessBadge(node: BluetoothNodeData) {
+  switch (node.telemetryFreshness) {
+    case 'fresh':
+      return {
+        label: 'Telemetry live',
+        className: 'text-emerald-400',
+      };
+    case 'stale':
+      return {
+        label: 'Telemetry stale',
+        className: 'text-amber-400',
+      };
+    default:
+      return {
+        label: 'No telemetry',
+        className: 'text-zinc-500',
+      };
+  }
+}
+
 export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
   const [confirmForget, setConfirmForget] = useState(false);
   const statusBadge = connectionBadge(node);
+  const freshness = freshnessBadge(node);
 
   useEffect(() => {
     if (node.isMoving) {
@@ -103,13 +124,16 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
               <div className="text-xs text-zinc-500 font-mono">{node.macAddress ?? 'Unknown address'}</div>
             </div>
           </div>
-          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-col items-end gap-2">
             <Badge
               variant={node.isConnected ? 'default' : 'secondary'}
               className={`text-xs ${statusBadge.className}`}
             >
               {statusBadge.label}
             </Badge>
+            <div className={`text-[11px] font-medium ${freshness.className}`}>
+              {freshness.label}
+            </div>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
                 <div className="flex gap-0.5">

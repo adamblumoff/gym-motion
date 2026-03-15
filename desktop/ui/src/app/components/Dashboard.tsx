@@ -67,7 +67,12 @@ export function Dashboard() {
       />
       <NodeDetailModal node={selectedNode} open={modalOpen} onOpenChange={setModalOpen} />
 
-      <DashboardHeader totalNodes={nodes.length} activeNodes={activeNodes} movingNodes={movingNodes} />
+      <DashboardHeader
+        totalNodes={nodes.length}
+        activeNodes={activeNodes}
+        movingNodes={movingNodes}
+        runtimeStatus={snapshot?.liveStatus ?? 'Starting gateway runtime…'}
+      />
 
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-[1800px] mx-auto mb-4 flex items-center justify-between">
@@ -83,6 +88,12 @@ export function Dashboard() {
             to search
           </div>
         </div>
+
+        {snapshot?.runtimeState === 'restarting' && (
+          <div className="max-w-[1800px] mx-auto mb-4 rounded-xl border border-blue-500/20 bg-blue-500/8 px-4 py-3 text-sm text-blue-300">
+            Restarting gateway runtime. Keeping the last known device state on screen until the bridge reconnects.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 max-w-[1800px] mx-auto">
           {nodes.map((node) => (

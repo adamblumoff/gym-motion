@@ -31,7 +31,7 @@ import {
   listDeviceActivity,
   listDeviceLogs,
   listRecentEvents,
-} from "./legacy-server-deps";
+} from "../../backend/data";
 import type { PreferencesStore } from "./preferences-store";
 import {
   createApprovedNodeRule,
@@ -77,6 +77,54 @@ function createEmptySnapshot(): DesktopSnapshot {
     events: [],
     logs: [],
     activities: [],
+  };
+}
+
+function mergeRepositoryDeviceIntoGatewaySnapshot(
+  currentDevices: GatewayRuntimeDeviceSummary[],
+  partialDevice: {
+    id: string;
+    lastState: GatewayRuntimeDeviceSummary["lastState"];
+    lastSeenAt: number;
+    lastDelta: number | null;
+    updatedAt: string;
+    hardwareId: string | null;
+    bootId: string | null;
+    firmwareVersion: string;
+    machineLabel: string | null;
+    siteId: string | null;
+    provisioningState: GatewayRuntimeDeviceSummary["provisioningState"];
+    updateStatus: GatewayRuntimeDeviceSummary["updateStatus"];
+    updateTargetVersion: string | null;
+    updateDetail: string | null;
+    updateUpdatedAt: string | null;
+    lastHeartbeatAt: string | null;
+    lastEventReceivedAt: string | null;
+    healthStatus: GatewayRuntimeDeviceSummary["healthStatus"];
+  },
+): GatewayRuntimeDeviceSummary {
+  const existing = currentDevices.find((device) => device.id === partialDevice.id) ?? null;
+
+  return {
+    gatewayConnectionState: existing?.gatewayConnectionState ?? "unreachable",
+    telemetryFreshness: existing?.telemetryFreshness ?? "missing",
+    peripheralId: existing?.peripheralId ?? null,
+    gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,
+    gatewayLastConnectedAt: existing?.gatewayLastConnectedAt ?? null,
+    gatewayLastDisconnectedAt: existing?.gatewayLastDisconnectedAt ?? null,
+    gatewayLastTelemetryAt: existing?.gatewayLastTelemetryAt ?? null,
+    gatewayDisconnectReason: existing?.gatewayDisconnectReason ?? null,
+    advertisedName: existing?.advertisedName ?? null,
+    lastRssi: existing?.lastRssi ?? null,
+    otaStatus: existing?.otaStatus ?? "idle",
+    otaTargetVersion: existing?.otaTargetVersion ?? null,
+    otaProgressBytesSent: existing?.otaProgressBytesSent ?? null,
+    otaTotalBytes: existing?.otaTotalBytes ?? null,
+    otaLastPhase: existing?.otaLastPhase ?? null,
+    otaFailureDetail: existing?.otaFailureDetail ?? null,
+    otaLastStatusMessage: existing?.otaLastStatusMessage ?? null,
+    otaUpdatedAt: existing?.otaUpdatedAt ?? null,
+    ...partialDevice,
   };
 }
 
@@ -170,6 +218,10 @@ export function createManagedGatewayRuntime(
   function liveStatusFor(snapshotState: DesktopSnapshot) {
     if (snapshotState.runtimeState === "starting") {
       return "Starting gateway runtime…";
+    }
+
+    if (snapshotState.runtimeState === "restarting") {
+      return "Restarting gateway runtime…";
     }
 
     if (snapshotState.runtimeState === "degraded") {
@@ -664,16 +716,18 @@ export function createManagedGatewayRuntime(
   function applyDataEvent(event: DesktopDataEvent) {
     switch (event.type) {
       case "motion-update":
+        {
+          const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+            snapshot.devices,
+            event.payload.device,
+          );
         snapshot = {
           ...snapshot,
-          devices: mergeGatewayDeviceUpdate(
-            snapshot.devices,
-            event.payload.device as GatewayRuntimeDeviceSummary,
-          ),
+          devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
         };
         emit({
           type: "device-upserted",
-          device: event.payload.device as GatewayRuntimeDeviceSummary,
+          device,
         });
         if (event.payload.event) {
           snapshot = {
@@ -710,6 +764,7 @@ export function createManagedGatewayRuntime(
         }
         void refreshSetupNodes();
         break;
+        }
       case "device-log":
         snapshot = {
           ...snapshot,
@@ -730,19 +785,37 @@ export function createManagedGatewayRuntime(
     }
   }
 
-  async function startRuntime() {
-    snapshot = createEmptySnapshot();
+  async function startRuntime(options?: { preserveSnapshot?: boolean }) {
+    const preserveSnapshot = options?.preserveSnapshot ?? false;
+
+    if (!preserveSnapshot) {
+      snapshot = createEmptySnapshot();
+      emit({ type: "snapshot", snapshot });
+      mergeSetupNodes([]);
+    } else {
+      snapshot = {
+        ...snapshot,
+        runtimeState: "restarting",
+        liveStatus: liveStatusFor({
+          ...snapshot,
+          runtimeState: "restarting",
+        }),
+        gatewayIssue: null,
+      };
+      emit({ type: "snapshot", snapshot });
+    }
+
     if (!usesWindowsNativeGateway(process.platform)) {
       await refreshAdapters();
     }
-    emit({ type: "snapshot", snapshot });
-    mergeSetupNodes([]);
 
     const startIssue = runtimeStartIssue();
 
     if (startIssue) {
       updateGatewayStatus(
-        { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
+        preserveSnapshot
+          ? { ...snapshot.gateway, updatedAt: new Date().toISOString() }
+          : { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
         "degraded",
         startIssue,
       );
@@ -762,7 +835,9 @@ export function createManagedGatewayRuntime(
     } catch (error) {
       windowsScanRequested = false;
       updateGatewayStatus(
-        { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
+        preserveSnapshot
+          ? { ...snapshot.gateway, updatedAt: new Date().toISOString() }
+          : { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
         "degraded",
         error instanceof Error ? error.message : "Gateway runtime failed to start.",
       );
@@ -783,8 +858,17 @@ export function createManagedGatewayRuntime(
     }
 
     stopChild();
-    snapshot = createEmptySnapshot();
-    await startRuntime();
+    snapshot = {
+      ...snapshot,
+      runtimeState: "restarting",
+      gatewayIssue: null,
+      liveStatus: liveStatusFor({
+        ...snapshot,
+        runtimeState: "restarting",
+      }),
+    };
+    emit({ type: "snapshot", snapshot });
+    await startRuntime({ preserveSnapshot: true });
     return snapshot;
   }
 
