@@ -87,6 +87,16 @@ function offlineGatewaySnapshot() {
   };
 }
 
+function degradedEmptySnapshot(issue: string): DesktopSnapshot {
+  return {
+    ...createEmptySnapshot(),
+    liveStatus: "Gateway degraded",
+    runtimeState: "degraded",
+    gatewayIssue: issue,
+    gateway: offlineGatewaySnapshot(),
+  };
+}
+
 function mergeRepositoryDeviceIntoGatewaySnapshot(
   currentDevices: GatewayRuntimeDeviceSummary[],
   partialDevice: {
@@ -840,11 +850,7 @@ export function createManagedGatewayRuntime(
     const startIssue = runtimeStartIssue();
 
     if (startIssue) {
-      updateGatewayStatus(
-        offlineGatewaySnapshot(),
-        "degraded",
-        startIssue,
-      );
+      snapshot = degradedEmptySnapshot(startIssue);
       emit({ type: "snapshot", snapshot });
       return;
     }
@@ -860,9 +866,7 @@ export function createManagedGatewayRuntime(
       windowsScanRequested = false;
     } catch (error) {
       windowsScanRequested = false;
-      updateGatewayStatus(
-        offlineGatewaySnapshot(),
-        "degraded",
+      snapshot = degradedEmptySnapshot(
         error instanceof Error ? error.message : "Gateway runtime failed to start.",
       );
       throw error;

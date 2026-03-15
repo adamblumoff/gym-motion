@@ -10,6 +10,7 @@ import type {
   MotionEventSummary,
   TelemetryFreshness,
 } from "@core/contracts";
+import { matchesApprovedNodeIdentity } from "../lib/setup-rules";
 
 export type NodeLog = {
   id: string;
@@ -130,7 +131,14 @@ export function buildSetupVisibleDevices(
     name: displayDiscoveryName(node),
     macAddress: displayDiscoveryAddress(node),
     signalStrength: rssiToPercent(node.lastRssi),
-    isPaired: approvedNodes.some((approvedNode) => approvedNode.id === node.id),
+    isPaired: approvedNodes.some((approvedNode) =>
+      matchesApprovedNodeIdentity(approvedNode, {
+        peripheralId: node.peripheralId ?? null,
+        address: node.address ?? null,
+        localName: node.localName ?? null,
+        knownDeviceId: node.knownDeviceId ?? null,
+      }),
+    ),
   }));
 }
 
@@ -168,7 +176,7 @@ export function buildSignalHistory(
   };
   type SignalKey = "sensorA" | "sensorB" | "sensorC" | "sensorD" | "sensorE";
 
-  return sortedEvents.map((event, index) => {
+  return sortedEvents.map((event) => {
     const bucket: SignalBucket = {
       time: new Date(event.eventTimestamp).toLocaleTimeString("en-US", {
         hour12: false,
@@ -185,8 +193,16 @@ export function buildSignalHistory(
     activeNodes.forEach((activeNode, nodeIndex) => {
       const fallbackSignal = activeNode.signalStrength ?? 0;
       const activeEvents = eventsByDeviceId.get(activeNode.id) ?? [];
-      const eventForNode =
-        activeEvents[Math.min(index, Math.max(0, activeEvents.length - 1))] ?? null;
+      let eventForNode: MotionEventSummary | null = null;
+
+      for (const candidate of activeEvents) {
+        if (candidate.eventTimestamp > event.eventTimestamp) {
+          break;
+        }
+
+        eventForNode = candidate;
+      }
+
       const level = eventForNode
         ? Math.max(8, Math.min(100, (eventForNode.delta ?? fallbackSignal) + 25))
         : fallbackSignal;

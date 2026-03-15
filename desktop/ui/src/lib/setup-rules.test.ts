@@ -5,6 +5,7 @@ import type { DesktopSetupState } from "@core/contracts";
 import {
   buildApprovedNodeRules,
   forgetApprovedNodeRules,
+  matchesApprovedNodeIdentity,
   resolveVisibleNodes,
 } from "./setup-rules";
 
@@ -71,5 +72,18 @@ describe("setup-rules", () => {
     const setup = createSetupState();
 
     expect(forgetApprovedNodeRules(setup.approvedNodes, "stack-001")).toEqual([]);
+  });
+
+  it("matches approved nodes by identity fields, not only exact ids", () => {
+    const [rule] = createSetupState().approvedNodes;
+
+    expect(
+      matchesApprovedNodeIdentity(rule, {
+        peripheralId: null,
+        address: "AA:BB",
+        localName: null,
+        knownDeviceId: null,
+      }),
+    ).toBe(true);
   });
 });

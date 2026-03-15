@@ -4,6 +4,7 @@ import type { DesktopSnapshot } from "@core/contracts";
 
 import {
   buildBluetoothNodes,
+  buildSetupVisibleDevices,
   buildMovementData,
   buildSignalHistory,
   calculateAverageSignal,
@@ -213,5 +214,128 @@ describe("buildSignalHistory", () => {
 
     expect(history[0]?.sensorA).toBe(35);
     expect(history[1]?.sensorA).toBe(65);
+  });
+
+  it("does not project a later node sample backward into earlier buckets", () => {
+    const history = buildSignalHistory(
+      [
+        {
+          id: 1,
+          deviceId: "node-a",
+          sequence: 1,
+          state: "moving",
+          delta: 20,
+          eventTimestamp: Date.parse("2026-03-14T10:00:00.000Z"),
+          receivedAt: new Date("2026-03-14T10:00:01.000Z").toISOString(),
+          bootId: "boot-a",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-a",
+        },
+        {
+          id: 2,
+          deviceId: "node-a",
+          sequence: 2,
+          state: "moving",
+          delta: 30,
+          eventTimestamp: Date.parse("2026-03-14T10:01:00.000Z"),
+          receivedAt: new Date("2026-03-14T10:01:01.000Z").toISOString(),
+          bootId: "boot-a",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-a",
+        },
+        {
+          id: 3,
+          deviceId: "node-b",
+          sequence: 1,
+          state: "moving",
+          delta: 50,
+          eventTimestamp: Date.parse("2026-03-14T10:02:00.000Z"),
+          receivedAt: new Date("2026-03-14T10:02:01.000Z").toISOString(),
+          bootId: "boot-b",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-b",
+        },
+      ],
+      [
+        {
+          id: "node-a",
+          name: "Node A",
+          macAddress: "peripheral-a",
+          isConnected: true,
+          connectionState: "connected",
+          healthStatus: "online",
+          telemetryFreshness: "fresh",
+          isMoving: true,
+          signalStrength: 70,
+          batteryLevel: null,
+          logs: [],
+        },
+        {
+          id: "node-b",
+          name: "Node B",
+          macAddress: "peripheral-b",
+          isConnected: true,
+          connectionState: "connected",
+          healthStatus: "online",
+          telemetryFreshness: "fresh",
+          isMoving: true,
+          signalStrength: 65,
+          batteryLevel: null,
+          logs: [],
+        },
+      ],
+    );
+
+    expect(history[0]?.sensorB).toBe(65);
+    expect(history[1]?.sensorB).toBe(65);
+    expect(history[2]?.sensorB).toBe(75);
+  });
+});
+
+describe("buildSetupVisibleDevices", () => {
+  it("marks rediscovered nodes as paired when identity matches an approved rule", () => {
+    const devices = buildSetupVisibleDevices(
+      {
+        adapterIssue: null,
+        approvedNodes: [
+          {
+            id: "address:AA:BB",
+            label: "Leg Press",
+            peripheralId: null,
+            address: "AA:BB",
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: null,
+          },
+        ],
+        nodes: [
+          {
+            id: "known:stack-001",
+            label: "Leg Press",
+            peripheralId: "peripheral-1",
+            address: "AA:BB",
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: "stack-001",
+            machineLabel: null,
+            siteId: null,
+            lastRssi: -55,
+            lastSeenAt: new Date().toISOString(),
+            gatewayConnectionState: "connected",
+            isApproved: true,
+          },
+        ],
+      },
+      [
+        {
+          id: "address:AA:BB",
+          label: "Leg Press",
+          peripheralId: null,
+          address: "AA:BB",
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: null,
+        },
+      ],
+    );
+
+    expect(devices[0]?.isPaired).toBe(true);
   });
 });

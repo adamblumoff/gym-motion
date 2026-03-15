@@ -1,5 +1,12 @@
 import type { ApprovedNodeRule, DesktopSetupState } from "@core/contracts";
 
+type DiscoveryIdentity = {
+  peripheralId: string | null;
+  address: string | null;
+  localName: string | null;
+  knownDeviceId: string | null;
+};
+
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
     ? setup.nodes
@@ -60,5 +67,17 @@ export function forgetApprovedNodeRules(
       rule.id !== runtimeDeviceId &&
       rule.knownDeviceId !== runtimeDeviceId &&
       rule.peripheralId !== runtimeDeviceId,
+  );
+}
+
+export function matchesApprovedNodeIdentity(
+  rule: ApprovedNodeRule,
+  identity: DiscoveryIdentity,
+) {
+  return Boolean(
+    (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
+      (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
+      (rule.address && identity.address === rule.address) ||
+      (rule.localName && identity.localName === rule.localName),
   );
 }
