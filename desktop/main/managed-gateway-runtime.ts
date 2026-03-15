@@ -23,6 +23,7 @@ import type { DesktopRuntimeEvent } from "@core/services";
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
 import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
+import { hasApprovedSetupNode } from "./setup-nodes";
 import {
   resolveGatewayScriptPath,
   resolveWindowsSidecarPath,
@@ -350,9 +351,7 @@ export function createManagedGatewayRuntime(
         }),
       );
 
-      const alreadyPresent = [...byId.values()].some((node) =>
-        matchesApprovedNodeRule(approvedNode, node),
-      );
+      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode);
 
       if (!alreadyPresent) {
         byId.set(approvedNode.id, {

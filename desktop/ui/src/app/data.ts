@@ -156,7 +156,9 @@ export function buildSignalHistory(
   events: MotionEventSummary[],
   nodes: BluetoothNodeData[],
 ) {
-  const activeNodes = nodes.slice(0, 5);
+  const activeNodes = [...nodes]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .slice(0, 5);
   const sortedEvents = [...events].sort((left, right) => left.eventTimestamp - right.eventTimestamp);
   const eventsByDeviceId = new Map<string, MotionEventSummary[]>();
 
