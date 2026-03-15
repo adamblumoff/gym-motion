@@ -7,7 +7,7 @@ export {
   parseFirmwareReport,
   parseHeartbeatPayload,
   parseIngestPayload,
-} from "../../legacy/src/lib/motion";
+} from "./motion";
 
 export {
   checkForFirmwareUpdate,
