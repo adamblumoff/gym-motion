@@ -804,12 +804,14 @@ export function createGatewayRuntimeServer({
         gatewayState.scanState === "scanning" &&
         (existingRuntime?.gatewayConnectionState === "disconnected" ||
           existingRuntime?.gatewayConnectionState === "unreachable");
+      const nextConnectionState = shouldMarkReconnecting
+        ? "reconnecting"
+        : existingRuntime?.gatewayConnectionState ??
+          (gatewayState.adapterState === "poweredOn" ? "discovered" : "unreachable");
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
-        gatewayConnectionState: shouldMarkReconnecting
-          ? "reconnecting"
-          : existingRuntime?.gatewayConnectionState,
+        gatewayConnectionState: nextConnectionState,
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,

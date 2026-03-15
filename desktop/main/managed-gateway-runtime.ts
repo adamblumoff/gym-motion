@@ -22,6 +22,7 @@ import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
+import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
 import {
   resolveGatewayScriptPath,
   resolveWindowsSidecarPath,
@@ -94,54 +95,6 @@ function degradedEmptySnapshot(issue: string): DesktopSnapshot {
     runtimeState: "degraded",
     gatewayIssue: issue,
     gateway: offlineGatewaySnapshot(),
-  };
-}
-
-function mergeRepositoryDeviceIntoGatewaySnapshot(
-  currentDevices: GatewayRuntimeDeviceSummary[],
-  partialDevice: {
-    id: string;
-    lastState: GatewayRuntimeDeviceSummary["lastState"];
-    lastSeenAt: number;
-    lastDelta: number | null;
-    updatedAt: string;
-    hardwareId: string | null;
-    bootId: string | null;
-    firmwareVersion: string;
-    machineLabel: string | null;
-    siteId: string | null;
-    provisioningState: GatewayRuntimeDeviceSummary["provisioningState"];
-    updateStatus: GatewayRuntimeDeviceSummary["updateStatus"];
-    updateTargetVersion: string | null;
-    updateDetail: string | null;
-    updateUpdatedAt: string | null;
-    lastHeartbeatAt: string | null;
-    lastEventReceivedAt: string | null;
-    healthStatus: GatewayRuntimeDeviceSummary["healthStatus"];
-  },
-): GatewayRuntimeDeviceSummary {
-  const existing = currentDevices.find((device) => device.id === partialDevice.id) ?? null;
-
-  return {
-    gatewayConnectionState: existing?.gatewayConnectionState ?? "unreachable",
-    telemetryFreshness: existing?.telemetryFreshness ?? "missing",
-    peripheralId: existing?.peripheralId ?? null,
-    gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,
-    gatewayLastConnectedAt: existing?.gatewayLastConnectedAt ?? null,
-    gatewayLastDisconnectedAt: existing?.gatewayLastDisconnectedAt ?? null,
-    gatewayLastTelemetryAt: existing?.gatewayLastTelemetryAt ?? null,
-    gatewayDisconnectReason: existing?.gatewayDisconnectReason ?? null,
-    advertisedName: existing?.advertisedName ?? null,
-    lastRssi: existing?.lastRssi ?? null,
-    otaStatus: existing?.otaStatus ?? "idle",
-    otaTargetVersion: existing?.otaTargetVersion ?? null,
-    otaProgressBytesSent: existing?.otaProgressBytesSent ?? null,
-    otaTotalBytes: existing?.otaTotalBytes ?? null,
-    otaLastPhase: existing?.otaLastPhase ?? null,
-    otaFailureDetail: existing?.otaFailureDetail ?? null,
-    otaLastStatusMessage: existing?.otaLastStatusMessage ?? null,
-    otaUpdatedAt: existing?.otaUpdatedAt ?? null,
-    ...partialDevice,
   };
 }
 
