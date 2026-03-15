@@ -77,4 +77,5 @@ Validate the same Setup and reconnect flow in the packaged app.
 - Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
 - The `Setup` tab is node-only, and Bluetooth discovery is manual-only. Scan when you want to find or reconnect nodes.
+- After the gateway reconnects to a managed node, it now sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for fresh motion.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.

@@ -787,6 +787,11 @@ void handleProvisioningCommand(const String& payload) {
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
 
+  if (type == "sync-now") {
+    sendTelemetry(lastReportedDelta, millis(), true);
+    return;
+  }
+
   if (type == "ota-begin") {
     beginOtaTransfer(payload);
     return;

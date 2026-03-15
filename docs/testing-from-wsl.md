@@ -28,6 +28,8 @@ This keeps the edit/build loop comfortable in WSL while still making it easy to 
 
 The Windows-side repo now builds a Rust WinRT BLE sidecar before `bun run dev` and `bun run build:win`, so Windows is the source of truth for native BLE validation.
 
+Managed-node reconnect on Windows now sends a runtime `sync-now` control command after BLE reconnect so the node republishes its current telemetry without waiting for a new motion event.
+
 ## Current Limitation
 
 The repo does not yet automate a full packaged Windows build from WSL on ARM64. The helper script is for launch-and-smoke workflows once a Windows build exists.

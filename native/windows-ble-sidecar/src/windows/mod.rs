@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use btleplug::{
-    api::{Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter},
+    api::{Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter, WriteType},
     platform::{Adapter, Manager, Peripheral},
 };
 use futures::StreamExt;
@@ -32,13 +32,16 @@ use crate::{
 const PROTOCOL_VERSION: u32 = 1;
 const SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001";
 const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
+const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
+const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
 struct Config {
     service_uuid: Uuid,
     telemetry_uuid: Uuid,
+    control_uuid: Uuid,
     device_name_prefix: String,
 }
 
@@ -47,6 +50,7 @@ impl Config {
         Ok(Self {
             service_uuid: parse_uuid("BLE_RUNTIME_SERVICE_UUID", SERVICE_UUID_FALLBACK)?,
             telemetry_uuid: parse_uuid("BLE_TELEMETRY_UUID", TELEMETRY_UUID_FALLBACK)?,
+            control_uuid: parse_uuid("BLE_CONTROL_UUID", CONTROL_UUID_FALLBACK)?,
             device_name_prefix: env::var("BLE_DEVICE_NAME_PREFIX")
                 .unwrap_or_else(|_| DEVICE_PREFIX_FALLBACK.to_string()),
         })
@@ -635,9 +639,16 @@ async fn connect_and_stream(
         .into_iter()
         .find(|candidate| candidate.uuid == config.telemetry_uuid)
         .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
+    let control_characteristic = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|candidate| candidate.uuid == config.control_uuid)
+        .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
 
     let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&characteristic).await?;
+    write_chunked_json_command(&peripheral, &control_characteristic, r#"{"type":"sync-now"}"#)
+        .await?;
     writer
         .send(&Event::NodeConnectionState {
             node: node.clone(),
@@ -684,6 +695,32 @@ async fn connect_and_stream(
 
     sleep(Duration::from_millis(100)).await;
     Ok(())
+}
+
+async fn write_chunked_json_command(
+    peripheral: &Peripheral,
+    characteristic: &btleplug::api::Characteristic,
+    payload: &str,
+) -> Result<()> {
+    for chunk in control_command_frames(payload) {
+        peripheral
+            .write(characteristic, &chunk, WriteType::WithResponse)
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {
+    let mut frames = Vec::with_capacity((payload.len() / CONTROL_CHUNK_SIZE) + 2);
+    frames.push(format!("BEGIN:{}", payload.len()).into_bytes());
+
+    for chunk in payload.as_bytes().chunks(CONTROL_CHUNK_SIZE) {
+        frames.push(chunk.to_vec());
+    }
+
+    frames.push(b"END".to_vec());
+    frames
 }
 
 async fn discovered_node_from_peripheral(
@@ -790,4 +827,18 @@ fn chrono_like_seconds(seconds: u64) -> String {
         .trim_end_matches('Z')
         .trim_end_matches(".000")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::control_command_frames;
+
+    #[test]
+    fn frames_runtime_control_commands_for_firmware_parser() {
+        let frames = control_command_frames(r#"{"type":"sync-now"}"#);
+
+        assert_eq!(frames.first().map(Vec::as_slice), Some(&b"BEGIN:19"[..]));
+        assert_eq!(frames.get(1).map(Vec::as_slice), Some(&br#"{"type":"sync-now"}"#[..]));
+        assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
 }
