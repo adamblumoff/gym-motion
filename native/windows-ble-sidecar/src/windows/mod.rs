@@ -820,6 +820,7 @@ async fn connect_and_stream(
         })
         .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
+    let mut connected_identity_confirmed = node.known_device_id.is_some();
 
     loop {
         tokio::select! {
@@ -843,6 +844,16 @@ async fn connect_and_stream(
                             }
                             let mut enriched = node.clone();
                             enriched.known_device_id = Some(payload.device_id.clone());
+                            if !connected_identity_confirmed {
+                                connected_identity_confirmed = true;
+                                writer
+                                    .send(&Event::NodeConnectionState {
+                                        node: enriched.clone(),
+                                        gateway_connection_state: "connected".to_string(),
+                                        reason: None,
+                                    })
+                                    .await?;
+                            }
                             writer
                                 .send(&Event::Telemetry {
                                     node: enriched,
