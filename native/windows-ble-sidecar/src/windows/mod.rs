@@ -107,6 +107,10 @@ struct SessionHandle {
 enum SessionCommand {
     StartScan,
     RefreshScanPolicy,
+    ConnectionEnded {
+        node: DiscoveredNode,
+        reason: String,
+    },
 }
 
 fn approved_nodes_pending_connection(
@@ -373,6 +377,7 @@ impl Sidecar {
         let adapter = resolve_adapter(&self.manager, &selected_adapter_id).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let command_tx_clone = command_tx.clone();
         let writer = self.writer.clone();
         let config = self.config.clone();
         let allowed_nodes = self.allowed_nodes.clone();
@@ -384,6 +389,7 @@ impl Sidecar {
                 config,
                 allowed_nodes,
                 shutdown_rx,
+                command_tx_clone,
                 command_rx,
             )
             .await
@@ -472,6 +478,7 @@ async fn run_session(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     mut shutdown: watch::Receiver<bool>,
+    command_sender: mpsc::UnboundedSender<SessionCommand>,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
 ) -> Result<()> {
     let app_session_id = Uuid::new_v4().to_string();
@@ -533,6 +540,15 @@ async fn run_session(
                         manual_scan_deadline = Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
                     }
                     SessionCommand::RefreshScanPolicy => {}
+                    SessionCommand::ConnectionEnded { node, reason } => {
+                        let key = node_key(&node);
+                        connected_nodes.remove(&key);
+                        writer.send(&Event::NodeConnectionState {
+                            node,
+                            gateway_connection_state: "disconnected".to_string(),
+                            reason: Some(reason),
+                        }).await?;
+                    }
                 }
 
                 let allowed = allowed_nodes.read().await.clone();
@@ -617,6 +633,7 @@ async fn run_session(
                                     let allowed_nodes_clone = allowed_nodes.clone();
                                     let active_connections_clone = active_connections.clone();
                                     let known_device_ids_clone = known_device_ids.clone();
+                                    let command_tx_clone = command_sender.clone();
                                     let app_session_id_clone = app_session_id.clone();
                                     tokio::spawn(async move {
                                         let result = connect_and_stream(
@@ -642,11 +659,10 @@ async fn run_session(
                                                         })),
                                                     })
                                                     .await;
-                                                let _ = writer_clone.send(&Event::NodeConnectionState {
+                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
                                                     node,
-                                                    gateway_connection_state: "disconnected".to_string(),
-                                                    reason: Some(reason),
-                                                }).await;
+                                                    reason,
+                                                });
                                             }
                                             Ok(None) => {}
                                             Err(error) => {
@@ -661,11 +677,10 @@ async fn run_session(
                                                         })),
                                                     })
                                                     .await;
-                                            let _ = writer_clone.send(&Event::NodeConnectionState {
-                                                node,
-                                                gateway_connection_state: "disconnected".to_string(),
-                                                reason: Some(error.to_string()),
-                                            }).await;
+                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                                                    node,
+                                                    reason: error.to_string(),
+                                                });
                                             }
                                         }
                                         active_connections_clone.lock().await.remove(&key);
