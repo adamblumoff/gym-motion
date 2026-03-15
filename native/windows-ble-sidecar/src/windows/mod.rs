@@ -826,14 +826,10 @@ async fn run_session(
                                 retry_exhausted: state.retry_exhausted,
                             }
                         });
-                        if reconnect.as_ref().map(|state| !state.retry_exhausted).unwrap_or(true) {
-                            manual_scan_deadline =
-                                Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
-                        }
                         writer.send(&Event::Log {
                             level: "info".to_string(),
                             message: format!(
-                                "Approved-node disconnect for {}; forcing reconnect scan window.",
+                                "Approved-node disconnect for {}; resuming silent reconnect scan.",
                                 node.label
                             ),
                             details: Some(json!({
@@ -1694,7 +1690,7 @@ fn chrono_like_seconds(seconds: u64) -> String {
 mod tests {
     use super::{
         approved_nodes_pending_connection, classify_discovery_candidate, control_command_frames,
-        should_scan, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
+        scan_reason, should_scan, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::Instant};
@@ -1825,6 +1821,23 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn approved_reconnect_scan_reason_stays_silent_without_manual_scan_window() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(&rules, &HashMap::new(), &HashMap::new(), None, Instant::now()),
+            Some("approved-reconnect")
+        );
     }
 
     #[test]

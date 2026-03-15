@@ -81,6 +81,7 @@ unsigned long lastTelemetryAt = 0;
 bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
 bool runtimeAppSessionConnected = false;
+bool runtimeLeaseRequired = false;
 bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
@@ -721,6 +722,7 @@ void logRuntimeLeaseState(const char* reason, unsigned long now) {
 
 void resetRuntimeAppSessionState() {
   runtimeAppSessionConnected = false;
+  runtimeLeaseRequired = false;
   runtimeAppSessionId = "";
   lastAppSessionLeaseAt = 0;
   lastRuntimeControlAt = 0;
@@ -804,6 +806,10 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
 
 void enforceRuntimeAppSessionLease() {
   if (!runtimeBleConnected) {
+    return;
+  }
+
+  if (!runtimeLeaseRequired) {
     return;
   }
 
@@ -1020,6 +1026,7 @@ void handleProvisioningCommand(const String& payload) {
 
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
+  runtimeLeaseRequired = true;
   lastRuntimeControlAt = millis();
 
   if (type == "app-session-lease") {
@@ -1092,7 +1099,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
     logRuntimeTransportEvent(
-      "BLE client connected; waiting for Windows app session lease."
+      "BLE client connected; runtime lease will arm after runtime control traffic."
     );
     resetRuntimeAppSessionState();
     sendProvisioningReady();
