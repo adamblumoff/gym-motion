@@ -1028,6 +1028,11 @@ void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
   lastRuntimeControlAt = millis();
 
+  if (type == "app-session-bootstrap") {
+    runtimeLeaseRequired = true;
+    return;
+  }
+
   if (type == "app-session-lease") {
     runtimeLeaseRequired = true;
     const String sessionId = extractJsonString(payload, "sessionId");

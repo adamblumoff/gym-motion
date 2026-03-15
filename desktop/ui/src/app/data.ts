@@ -160,7 +160,7 @@ export function buildPairedDevices(
     const runtimeDevice = snapshot?.devices.find((device) =>
       matchesApprovedNodeIdentity(node, {
         peripheralId: device.peripheralId,
-        address: null,
+        address: device.address ?? null,
         localName: device.advertisedName,
         knownDeviceId: device.id,
       }),

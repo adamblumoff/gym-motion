@@ -111,6 +111,9 @@ struct SessionHandle {
 enum SessionCommand {
     StartScan,
     RefreshScanPolicy,
+    ConnectionHealthy {
+        node: DiscoveredNode,
+    },
     ConnectionEnded {
         node: DiscoveredNode,
         reason: String,
@@ -833,6 +836,26 @@ async fn run_session(
                         manual_scan_deadline = Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
                     }
                     SessionCommand::RefreshScanPolicy => {}
+                    SessionCommand::ConnectionHealthy { node } => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        if let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) {
+                            reconnect_states.insert(rule_id, ApprovedReconnectState::default());
+                        }
+                        sync_scan_state(
+                            &adapter,
+                            &writer,
+                            &selected_adapter_id,
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            &mut scanning,
+                            &mut current_scan_reason,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                        )
+                        .await?;
+                        continue;
+                    }
                     SessionCommand::ConnectionEnded { node, reason } => {
                         let key = node_key(&node);
                         connected_nodes.remove(&key);
@@ -1120,6 +1143,7 @@ async fn run_session(
                                                 attempt_limit: RECONNECT_ATTEMPT_LIMIT,
                                                 retry_exhausted: false,
                                             }),
+                                            command_tx_clone.clone(),
                                         )
                                         .await;
                                         match result {
@@ -1186,9 +1210,6 @@ async fn run_session(
                         )
                         .await
                         {
-                            if let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) {
-                                reconnect_states.insert(rule_id, ApprovedReconnectState::default());
-                            }
                             let reconnect =
                                 reconnect_status_for_rule(
                                     approved_rule_id_for_node(&node, &allowed).as_deref(),
@@ -1394,6 +1415,7 @@ async fn connect_and_stream(
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     app_session_id: String,
     reconnect: Option<ReconnectStatus>,
+    command_sender: mpsc::UnboundedSender<SessionCommand>,
 ) -> Result<Option<String>> {
     if !is_approved(&node, &allowed_nodes.read().await) {
         return Ok(None);
@@ -1426,6 +1448,7 @@ async fn connect_and_stream(
 
     let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&characteristic).await?;
+    send_app_session_bootstrap(&peripheral, &control_characteristic).await?;
     write_chunked_json_command(
         &peripheral,
         &control_characteristic,
@@ -1433,6 +1456,9 @@ async fn connect_and_stream(
     )
     .await?;
     send_app_session_lease(&peripheral, &control_characteristic, &app_session_id).await?;
+    let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+        node: node.clone(),
+    });
     writer
         .send(&Event::NodeConnectionState {
             node: node.clone(),
@@ -1568,6 +1594,18 @@ async fn send_app_session_lease(
     })
     .to_string();
     write_chunked_json_command(peripheral, characteristic, &payload).await
+}
+
+async fn send_app_session_bootstrap(
+    peripheral: &Peripheral,
+    characteristic: &btleplug::api::Characteristic,
+) -> Result<()> {
+    write_chunked_json_command(
+        peripheral,
+        characteristic,
+        r#"{"type":"app-session-bootstrap"}"#,
+    )
+    .await
 }
 
 async fn write_chunked_json_command(
@@ -1732,6 +1770,18 @@ mod tests {
         assert_eq!(
             frames.get(1).map(Vec::as_slice),
             Some(&br#"{"type":"sync-now"}"#[..])
+        );
+        assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn frames_app_session_bootstrap_commands_for_firmware_parser() {
+        let frames = control_command_frames(r#"{"type":"app-session-bootstrap"}"#);
+
+        assert_eq!(frames.first().map(Vec::as_slice), Some(&b"BEGIN:32"[..]));
+        assert_eq!(
+            frames.get(1).map(Vec::as_slice),
+            Some(&br#"{"type":"app-session-bootstrap"}"#[..])
         );
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
     }
