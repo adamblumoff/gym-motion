@@ -300,8 +300,12 @@ fn scan_reason(
     None
 }
 
-fn allow_approved_identity_fallback(scan_reason: Option<&str>) -> bool {
-    scan_reason == Some("approved-reconnect")
+fn allow_approved_identity_fallback(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+) -> bool {
+    approved_nodes_pending_connection(rules, connected_nodes, reconnect_states)
 }
 
 async fn emit_gateway_state(
@@ -1114,7 +1118,11 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            allow_approved_identity_fallback(discovery_scan_reason),
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                            ),
                         )
                         .await
                         {
@@ -1246,13 +1254,6 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
-                        let lifecycle_scan_reason = scan_reason(
-                            &allowed,
-                            &connected_nodes,
-                            &reconnect_states,
-                            manual_scan_deadline,
-                            Instant::now(),
-                        );
                         if let Some(node) = discovered_node_for_event(
                             &peripheral,
                             &writer,
@@ -1260,7 +1261,11 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            allow_approved_identity_fallback(lifecycle_scan_reason),
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                            ),
                         )
                         .await
                         {
@@ -1279,13 +1284,6 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
-                        let lifecycle_scan_reason = scan_reason(
-                            &allowed,
-                            &connected_nodes,
-                            &reconnect_states,
-                            manual_scan_deadline,
-                            Instant::now(),
-                        );
                         if let Some(node) = discovered_node_for_event(
                             &peripheral,
                             &writer,
@@ -1293,7 +1291,11 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            allow_approved_identity_fallback(lifecycle_scan_reason),
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                            ),
                         )
                         .await
                         {
@@ -2063,10 +2065,75 @@ mod tests {
     }
 
     #[test]
-    fn approved_identity_fallback_only_applies_to_silent_reconnect_scans() {
-        assert!(allow_approved_identity_fallback(Some("approved-reconnect")));
-        assert!(!allow_approved_identity_fallback(Some("manual")));
-        assert!(!allow_approved_identity_fallback(None));
+    fn approved_identity_fallback_applies_while_any_approved_node_is_still_missing() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new()
+        ));
+
+        let mut connected_nodes = HashMap::new();
+        connected_nodes.insert(
+            "node-1".to_string(),
+            DiscoveredNode {
+                id: "stack-node-1".to_string(),
+                label: "Bench".to_string(),
+                address: None,
+                local_name: Some("GymMotion-bench".to_string()),
+                rssi: None,
+                last_seen_at: None,
+                status: None,
+                peripheral_id: Some("peripheral-1".to_string()),
+                known_device_id: None,
+                reconnect_attempt: 0,
+                reconnect_attempt_limit: APPROVED_RECONNECT_ATTEMPT_LIMIT,
+                reconnect_retry_exhausted: false,
+            },
+        );
+
+        assert!(!allow_approved_identity_fallback(
+            &rules,
+            &connected_nodes,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn manual_scan_reason_does_not_disable_approved_identity_fallback_for_missing_nodes() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(
+                &rules,
+                &HashMap::new(),
+                &HashMap::new(),
+                Some(Instant::now() + Duration::from_secs(5)),
+                Instant::now(),
+            ),
+            Some("manual")
+        );
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new()
+        ));
     }
 
     #[test]
