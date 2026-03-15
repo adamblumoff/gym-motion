@@ -18,7 +18,7 @@ import {
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
-import { isOperatorVisibleScan } from "@core/gateway-scan";
+import { liveStatusLabelForScan } from "@core/gateway-scan";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
@@ -209,18 +209,13 @@ export function createManagedGatewayRuntime(
       return "Gateway live";
     }
 
-    if (isOperatorVisibleScan(
+    const scanStatusLabel = liveStatusLabelForScan(
       snapshotState.gateway.scanState,
       snapshotState.gateway.scanReason,
-    )) {
-      return "Scanning for BLE nodes";
-    }
-
-    if (
-      snapshotState.gateway.scanState === "scanning" &&
-      snapshotState.gateway.reconnectingNodeCount > 0
-    ) {
-      return "Reconnecting approved nodes";
+      snapshotState.gateway.reconnectingNodeCount,
+    );
+    if (scanStatusLabel) {
+      return scanStatusLabel;
     }
 
     if (snapshotState.gateway.adapterState !== "poweredOn") {

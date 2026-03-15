@@ -170,9 +170,10 @@ export function buildPairedDevices(
       id: node.id,
       name: runtimeDevice ? displayNodeName(runtimeDevice) : node.label,
       macAddress:
-        runtimeDevice?.peripheralId ??
         node.address ??
+        runtimeDevice?.address ??
         node.peripheralId ??
+        runtimeDevice?.peripheralId ??
         node.knownDeviceId ??
         node.id,
       signalStrength: runtimeDevice ? rssiToPercent(runtimeDevice.lastRssi) : null,
