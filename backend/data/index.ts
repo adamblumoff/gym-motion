@@ -24,4 +24,4 @@ export {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "../../legacy/src/lib/repository";
+} from "./repository";

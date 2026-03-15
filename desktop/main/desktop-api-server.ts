@@ -28,7 +28,7 @@ import {
   createPresignedReadUrl,
   hasBucketConfig,
   isExternalAssetUrl,
-} from "@/lib/storage-bucket";
+} from "../../backend/storage-bucket";
 
 export type DesktopDataEvent =
   | {
