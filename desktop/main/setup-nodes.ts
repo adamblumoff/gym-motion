@@ -10,10 +10,26 @@ function addressIdentityMatch(
 export function matchingApprovedSetupNodeId(
   nodesById: Map<string, DiscoveredNodeSummary>,
   approvedNode: ApprovedNodeRule,
+  approvedNodes: ApprovedNodeRule[] = [approvedNode],
 ) {
   if (nodesById.has(approvedNode.id)) {
     return approvedNode.id;
   }
+
+  const localNameMatches =
+    !approvedNode.knownDeviceId &&
+    !approvedNode.peripheralId &&
+    !approvedNode.address &&
+    approvedNode.localName
+      ? [...nodesById.values()].filter((node) => node.localName === approvedNode.localName)
+      : [];
+  const localNameRuleMatches =
+    !approvedNode.knownDeviceId &&
+    !approvedNode.peripheralId &&
+    !approvedNode.address &&
+    approvedNode.localName
+      ? approvedNodes.filter((node) => node.localName === approvedNode.localName)
+      : [];
 
   for (const node of nodesById.values()) {
     if (
@@ -24,6 +40,8 @@ export function matchingApprovedSetupNodeId(
         !approvedNode.peripheralId &&
         !approvedNode.address &&
         approvedNode.localName &&
+        localNameRuleMatches.length === 1 &&
+        localNameMatches.length === 1 &&
         node.localName === approvedNode.localName)
     ) {
       return node.id;
@@ -36,6 +54,7 @@ export function matchingApprovedSetupNodeId(
 export function hasApprovedSetupNode(
   nodesById: Map<string, DiscoveredNodeSummary>,
   approvedNode: ApprovedNodeRule,
+  approvedNodes: ApprovedNodeRule[] = [approvedNode],
 ) {
-  return matchingApprovedSetupNodeId(nodesById, approvedNode) !== null;
+  return matchingApprovedSetupNodeId(nodesById, approvedNode, approvedNodes) !== null;
 }

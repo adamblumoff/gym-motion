@@ -99,7 +99,12 @@ export function findMatchingGatewayDeviceForApprovedNode(
     return byAddress[0];
   }
 
-  const byAdvertisedName = approvedNode.localName
+  const canUseLocalNameFallback =
+    !approvedNode.knownDeviceId &&
+    !approvedNode.peripheralId &&
+    !approvedNode.address &&
+    Boolean(approvedNode.localName);
+  const byAdvertisedName = canUseLocalNameFallback
     ? devices.filter((device) => device.advertisedName === approvedNode.localName)
     : [];
 
@@ -113,8 +118,29 @@ export function findMatchingGatewayDeviceForApprovedNode(
 export function reconcileApprovedNodeRule(
   approvedNode: ApprovedNodeRule,
   devices: GatewayRuntimeDeviceSummary[],
+  approvedNodes: ApprovedNodeRule[] = [approvedNode],
 ): ApprovedNodeRule {
+  const localNameRuleMatches =
+    !approvedNode.knownDeviceId &&
+    !approvedNode.peripheralId &&
+    !approvedNode.address &&
+    approvedNode.localName
+      ? approvedNodes.filter((node) => node.localName === approvedNode.localName)
+      : [];
+  const canUseLocalNameFallback = localNameRuleMatches.length === 1;
+
   const matchingDevice = findMatchingGatewayDeviceForApprovedNode(approvedNode, devices);
+  if (
+    matchingDevice &&
+    approvedNode.localName &&
+    !approvedNode.knownDeviceId &&
+    !approvedNode.peripheralId &&
+    !approvedNode.address &&
+    !canUseLocalNameFallback &&
+    matchingDevice.advertisedName === approvedNode.localName
+  ) {
+    return approvedNode;
+  }
 
   if (!matchingDevice) {
     return approvedNode;

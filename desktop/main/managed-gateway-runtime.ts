@@ -259,7 +259,9 @@ export function createManagedGatewayRuntime(
   function reconcileApprovedNodesWithSnapshot() {
     const currentApprovedNodes = readApprovedNodes();
     const nextApprovedNodes = dedupeApprovedNodes(
-      currentApprovedNodes.map((node) => reconcileApprovedNodeRule(node, snapshot.devices)),
+      currentApprovedNodes.map((node) =>
+        reconcileApprovedNodeRule(node, snapshot.devices, currentApprovedNodes),
+      ),
     );
 
     if (JSON.stringify(nextApprovedNodes) === JSON.stringify(currentApprovedNodes)) {
@@ -375,7 +377,7 @@ export function createManagedGatewayRuntime(
         snapshot.devices,
       );
 
-      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode);
+      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode, approvedNodes);
 
       if (!alreadyPresent) {
         byId.set(approvedNode.id, {
@@ -404,7 +406,7 @@ export function createManagedGatewayRuntime(
         continue;
       }
 
-      const matchingNodeId = matchingApprovedSetupNodeId(byId, approvedNode);
+      const matchingNodeId = matchingApprovedSetupNodeId(byId, approvedNode, approvedNodes);
       const matchingNode = matchingNodeId ? byId.get(matchingNodeId) ?? null : null;
 
       if (!matchingNode || matchingNode.id === approvedNode.id) {
