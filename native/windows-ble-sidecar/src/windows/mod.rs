@@ -628,6 +628,7 @@ async fn connect_and_stream(
         .find(|candidate| candidate.uuid == config.telemetry_uuid)
         .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
 
+    let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&characteristic).await?;
     writer
         .send(&Event::NodeConnectionState {
@@ -636,8 +637,6 @@ async fn connect_and_stream(
             reason: None,
         })
         .await?;
-
-    let mut notifications = peripheral.notifications().await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
 
     while let Some(notification) = notifications.next().await {
