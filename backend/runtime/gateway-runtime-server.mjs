@@ -112,6 +112,7 @@ export function createGatewayRuntimeServer({
   let availableAdapters = [];
   let metadataLoadedAt = 0;
   let knownNodesWriteTimer = null;
+  let knownNodesPersistPromise = null;
   let runtimeIssue = null;
   let server = null;
 
@@ -172,14 +173,12 @@ export function createGatewayRuntimeServer({
     });
   }
 
-  function scheduleKnownNodesPersist() {
-    if (knownNodesWriteTimer) {
-      clearTimeout(knownNodesWriteTimer);
+  async function persistKnownNodes() {
+    if (knownNodesPersistPromise) {
+      return knownNodesPersistPromise;
     }
 
-    knownNodesWriteTimer = setTimeout(async () => {
-      knownNodesWriteTimer = null;
-
+    knownNodesPersistPromise = (async () => {
       try {
         await fs.mkdir(path.dirname(knownNodesPath), { recursive: true });
         await fs.writeFile(
@@ -196,7 +195,22 @@ export function createGatewayRuntimeServer({
         );
       } catch (error) {
         console.error("[gateway-runtime] failed to persist known-node cache", error);
+      } finally {
+        knownNodesPersistPromise = null;
       }
+    })();
+
+    return knownNodesPersistPromise;
+  }
+
+  function scheduleKnownNodesPersist() {
+    if (knownNodesWriteTimer) {
+      clearTimeout(knownNodesWriteTimer);
+    }
+
+    knownNodesWriteTimer = setTimeout(async () => {
+      knownNodesWriteTimer = null;
+      await persistKnownNodes();
     }, 150);
     knownNodesWriteTimer.unref?.();
   }
@@ -701,6 +715,7 @@ export function createGatewayRuntimeServer({
       if (knownNodesWriteTimer) {
         clearTimeout(knownNodesWriteTimer);
         knownNodesWriteTimer = null;
+        await persistKnownNodes();
       }
 
       for (const client of streamClients) {

@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 
 import { afterEach, describe, expect, it } from "bun:test";
 
@@ -6,6 +9,28 @@ import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtim
 
 const runtimeServers: Array<ReturnType<typeof createGatewayRuntimeServer>> = [];
 const metadataServers: http.Server[] = [];
+const runtimeTempDirs: string[] = [];
+
+async function createIsolatedRuntimeServer({
+  apiBaseUrl,
+  runtimeHost,
+  runtimePort,
+}: {
+  apiBaseUrl: string;
+  runtimeHost: string;
+  runtimePort: number;
+}) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+  runtimeTempDirs.push(tempDir);
+  const runtimeServer = createGatewayRuntimeServer({
+    apiBaseUrl,
+    runtimeHost,
+    runtimePort,
+    knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
+  });
+  runtimeServers.push(runtimeServer);
+  return runtimeServer;
+}
 
 afterEach(async () => {
   while (runtimeServers.length > 0) {
@@ -26,17 +51,23 @@ afterEach(async () => {
       });
     });
   }
+
+  while (runtimeTempDirs.length > 0) {
+    const tempDir = runtimeTempDirs.pop();
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
 });
 
 describe("gateway runtime server", () => {
   it("accepts explicit known device ids on transport events", async () => {
     const runtimePort = 46110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -66,12 +97,11 @@ describe("gateway runtime server", () => {
 
   it("keeps telemetry from changing transport connection state", async () => {
     const runtimePort = 46110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -157,12 +187,11 @@ describe("gateway runtime server", () => {
     });
 
     const runtimePort = 48110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: `http://127.0.0.1:${metadataPort}`,
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -186,12 +215,11 @@ describe("gateway runtime server", () => {
 
   it("marks devices unreachable when the adapter goes offline", async () => {
     const runtimePort = 49110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -215,12 +243,11 @@ describe("gateway runtime server", () => {
 
   it("marks rediscovered known nodes as reconnecting while scanning", async () => {
     const runtimePort = 50110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -258,12 +285,11 @@ describe("gateway runtime server", () => {
 
   it("emits discovered instead of unreachable on first discovery for a known node", async () => {
     const runtimePort = 51110 + Math.floor(Math.random() * 1000);
-    const runtimeServer = createGatewayRuntimeServer({
+    const runtimeServer = await createIsolatedRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
       runtimeHost: "127.0.0.1",
       runtimePort,
     });
-    runtimeServers.push(runtimeServer);
 
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
@@ -281,5 +307,41 @@ describe("gateway runtime server", () => {
     const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
 
     expect(device?.gatewayConnectionState).toBe("discovered");
+  });
+
+  it("flushes pending known-node cache writes on stop", async () => {
+    const runtimePort = 52110 + Math.floor(Math.random() * 1000);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+    runtimeTempDirs.push(tempDir);
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+      knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    await runtimeServer.stop();
+
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(tempDir, "gateway-known-nodes.json"), "utf8"),
+    );
+
+    expect(Array.isArray(persisted.nodes)).toBe(true);
+    expect(
+      persisted.nodes.some(
+        (node: { deviceId?: string; peripheralId?: string }) =>
+          node.deviceId === "stack-001" && node.peripheralId === "peripheral-1",
+      ),
+    ).toBe(true);
   });
 });
