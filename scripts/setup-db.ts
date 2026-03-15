@@ -1,4 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import dotenv from "dotenv";
@@ -6,7 +7,7 @@ import dotenv from "dotenv";
 import { getDb } from "../backend/data/db";
 
 const repoRoot = new URL("../", import.meta.url);
-const rootEnvPath = path.join(repoRoot.pathname, ".env.local");
+const rootEnvPath = path.join(fileURLToPath(repoRoot), ".env.local");
 
 dotenv.config({ path: rootEnvPath });
 

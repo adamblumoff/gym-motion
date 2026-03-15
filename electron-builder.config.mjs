@@ -1,6 +1,9 @@
 import path from "node:path";
 
-const isWindows = process.platform === "win32";
+const isWindowsTarget =
+  process.platform === "win32" ||
+  process.argv.includes("--win") ||
+  process.env.npm_lifecycle_event === "build:win";
 const sidecarPath = path.join(
   process.cwd(),
   "native",
@@ -25,7 +28,7 @@ export default {
     "desktop/scripts/**",
     "package.json",
   ],
-  extraResources: isWindows
+  extraResources: isWindowsTarget
     ? [
         {
           from: sidecarPath,
