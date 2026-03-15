@@ -18,6 +18,7 @@ import {
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
+import { isOperatorVisibleScan } from "@core/gateway-scan";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
@@ -208,8 +209,10 @@ export function createManagedGatewayRuntime(
       return "Gateway live";
     }
 
-    if (snapshotState.gateway.scanState === "scanning" &&
-      snapshotState.gateway.scanReason === "manual") {
+    if (isOperatorVisibleScan(
+      snapshotState.gateway.scanState,
+      snapshotState.gateway.scanReason,
+    )) {
       return "Scanning for BLE nodes";
     }
 

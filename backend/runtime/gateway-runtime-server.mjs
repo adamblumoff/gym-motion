@@ -925,7 +925,10 @@ export function createGatewayRuntimeServer({
         gatewayLastAdvertisementAt: nowIso(),
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
-        reconnectAttempt,
+        reconnectAttempt:
+          reconnectAttempt ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ??
+          0,
         reconnectAttemptLimit:
           reconnectAttemptLimit ??
           runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??

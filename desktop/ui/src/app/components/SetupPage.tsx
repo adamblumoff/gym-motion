@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { ArrowLeft, Bluetooth, Check, Plus, Search, Signal, RefreshCw } from 'lucide-react';
 
+import { isOperatorVisibleScan } from '@core/gateway-scan';
 import { buildApprovedNodeRules } from '../../lib/setup-rules';
 import { buildPairedDevices, buildSetupVisibleDevices } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
@@ -14,8 +15,9 @@ export function SetupPage() {
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
   const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
-  const isScanning =
-    snapshot?.gateway.scanState === 'scanning' && snapshot?.gateway.scanReason === 'manual';
+  const isScanning = snapshot
+    ? isOperatorVisibleScan(snapshot.gateway.scanState, snapshot.gateway.scanReason)
+    : false;
 
   function pairedBadge(device: (typeof pairedDevices)[number]) {
     switch (device.connectionState) {

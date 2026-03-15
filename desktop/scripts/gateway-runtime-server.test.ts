@@ -411,6 +411,33 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.scanReason).toBe("manual");
   });
 
+  it("defaults reconnectAttempt when connecting metadata omits it", async () => {
+    const runtimePort = 50460 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+    runtimeServer.noteConnecting({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("reconnecting");
+    expect(device?.reconnectAttempt).toBe(0);
+  });
+
   it("marks disconnects as disconnected immediately even while scanning", async () => {
     const runtimePort = 50610 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({

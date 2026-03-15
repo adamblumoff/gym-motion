@@ -65,6 +65,7 @@ BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
 BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeOtaDataCharacteristic = nullptr;
+BLE2902* runtimeTelemetryDescriptor = nullptr;
 String provisioningCommandBuffer;
 String runtimeCommandBuffer;
 
@@ -1240,6 +1241,32 @@ class RuntimeTelemetryCallbacks : public BLECharacteristicCallbacks {
 #endif
 };
 
+class RuntimeTelemetryDescriptorCallbacks : public BLEDescriptorCallbacks {
+  void onWrite(BLEDescriptor* descriptor) override {
+    if (descriptor == nullptr) {
+      return;
+    }
+
+    const uint8_t* value = descriptor->getValue();
+    const size_t length = descriptor->getLength();
+    const bool notificationsEnabled =
+      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
+
+    if (!notificationsEnabled) {
+      return;
+    }
+
+    if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    runtimeBootstrapLeasePending = true;
+    logRuntimeTransportEvent(
+      "Runtime telemetry notifications enabled; waiting for runtime control traffic."
+    );
+  }
+};
+
 class RuntimeOtaDataCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const String stringValue = characteristic->getValue();
@@ -1368,7 +1395,9 @@ void setupBle() {
     BLECharacteristic::PROPERTY_WRITE
   );
 
-  runtimeTelemetryCharacteristic->addDescriptor(new BLE2902());
+  runtimeTelemetryDescriptor = new BLE2902();
+  runtimeTelemetryDescriptor->setCallbacks(new RuntimeTelemetryDescriptorCallbacks());
+  runtimeTelemetryCharacteristic->addDescriptor(runtimeTelemetryDescriptor);
   runtimeStatusCharacteristic->addDescriptor(new BLE2902());
   runtimeTelemetryCharacteristic->setCallbacks(new RuntimeTelemetryCallbacks());
   runtimeControlCharacteristic->setCallbacks(new RuntimeControlCallbacks());
