@@ -1021,10 +1021,7 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
-        gatewayConnectionState:
-          gatewayState.adapterState === "poweredOn" && gatewayState.scanState === "scanning"
-            ? "reconnecting"
-            : "disconnected",
+        gatewayConnectionState: "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
       });

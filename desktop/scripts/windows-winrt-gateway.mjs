@@ -390,8 +390,12 @@ function handleNodeConnectionState(event) {
     return;
   }
 
+  if (transition.before?.gatewayConnectionState === "disconnected") {
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
-    level: connectionState === "reconnecting" ? "warn" : "info",
+    level: "warn",
     code: "node.disconnected",
     message: `Gateway lost ${label}.`,
     metadata: {

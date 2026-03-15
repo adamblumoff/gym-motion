@@ -283,6 +283,40 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.reconnectingNodeCount).toBe(1);
   });
 
+  it("marks disconnects as disconnected immediately even while scanning", async () => {
+    const runtimePort = 50610 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteDisconnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      reason: "link lost",
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("disconnected");
+    expect(device?.gatewayDisconnectReason).toBe("link lost");
+  });
+
   it("emits discovered instead of unreachable on first discovery for a known node", async () => {
     const runtimePort = 51110 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({

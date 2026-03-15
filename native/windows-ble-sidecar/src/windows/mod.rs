@@ -614,14 +614,53 @@ async fn run_session(
                                     let active_connections_clone = active_connections.clone();
                                     let known_device_ids_clone = known_device_ids.clone();
                                     tokio::spawn(async move {
-                                        let result = connect_and_stream(peripheral, node.clone(), writer_clone.clone(), config_clone, allowed_nodes_clone, known_device_ids_clone).await;
-                                        if let Err(error) = result {
-                                            writer_clone.error(format!("BLE connect failed: {error}"), None).await;
+                                        let result = connect_and_stream(
+                                            peripheral,
+                                            node.clone(),
+                                            writer_clone.clone(),
+                                            config_clone,
+                                            allowed_nodes_clone,
+                                            known_device_ids_clone,
+                                        )
+                                        .await;
+                                        match result {
+                                            Ok(Some(reason)) => {
+                                                let _ = writer_clone
+                                                    .send(&Event::Log {
+                                                        level: "warn".to_string(),
+                                                        message: reason.clone(),
+                                                        details: Some(json!({
+                                                            "peripheralId": node.peripheral_id,
+                                                            "knownDeviceId": node.known_device_id,
+                                                            "address": node.address,
+                                                        })),
+                                                    })
+                                                    .await;
+                                                let _ = writer_clone.send(&Event::NodeConnectionState {
+                                                    node,
+                                                    gateway_connection_state: "disconnected".to_string(),
+                                                    reason: Some(reason),
+                                                }).await;
+                                            }
+                                            Ok(None) => {}
+                                            Err(error) => {
+                                                let _ = writer_clone
+                                                    .send(&Event::Log {
+                                                        level: "warn".to_string(),
+                                                        message: format!("BLE connect failed: {error}"),
+                                                        details: Some(json!({
+                                                            "peripheralId": node.peripheral_id,
+                                                            "knownDeviceId": node.known_device_id,
+                                                            "address": node.address,
+                                                        })),
+                                                    })
+                                                    .await;
                                             let _ = writer_clone.send(&Event::NodeConnectionState {
                                                 node,
                                                 gateway_connection_state: "disconnected".to_string(),
                                                 reason: Some(error.to_string()),
                                             }).await;
+                                            }
                                         }
                                         active_connections_clone.lock().await.remove(&key);
                                     });
@@ -735,9 +774,9 @@ async fn connect_and_stream(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
-) -> Result<()> {
+) -> Result<Option<String>> {
     if !is_approved(&node, &allowed_nodes.read().await) {
-        return Ok(());
+        return Ok(None);
     }
 
     writer
@@ -821,7 +860,7 @@ async fn connect_and_stream(
     }
 
     sleep(Duration::from_millis(100)).await;
-    Err(anyhow!("Telemetry stream ended for {}.", node.label))
+    Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
 }
 
 async fn write_chunked_json_command(
