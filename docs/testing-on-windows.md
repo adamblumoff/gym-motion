@@ -82,4 +82,5 @@ Validate the same Setup and reconnect flow in the packaged app.
 - After the gateway reconnects to a managed node, it sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for fresh motion.
 - Managed firmware now tracks a Windows app-session lease. The sidecar refreshes that lease every 5 seconds, and the node expires it after 15 seconds so it can drop a stale BLE session, restart advertising, and recover from app restarts that do not produce a clean OS-level disconnect.
 - Approved rebooting nodes should stay under `Paired Sensors`; their badge there should match the dashboard state (`Reconnecting`, `Connected`, `Disconnected`) instead of falling back to a generic `Paired` label.
+- Once a managed node reconnects and the gateway resolves its runtime `deviceId`, the desktop app now upgrades the saved approved-node rule to that stable identity so later reboots keep folding back into the same paired node instead of looking like a fresh setup candidate.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.

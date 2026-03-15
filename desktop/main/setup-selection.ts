@@ -59,6 +59,71 @@ export function matchesApprovedNodeRule(
   );
 }
 
+function exactIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left === right);
+}
+
+export function findMatchingGatewayDeviceForApprovedNode(
+  approvedNode: ApprovedNodeRule,
+  devices: GatewayRuntimeDeviceSummary[],
+) {
+  const byKnownDeviceId = devices.find((device) =>
+    exactIdentityMatch(approvedNode.knownDeviceId, device.id),
+  );
+  if (byKnownDeviceId) {
+    return byKnownDeviceId;
+  }
+
+  const byPeripheralId = devices.find((device) =>
+    exactIdentityMatch(approvedNode.peripheralId, device.peripheralId),
+  );
+  if (byPeripheralId) {
+    return byPeripheralId;
+  }
+
+  const byAdvertisedName = approvedNode.localName
+    ? devices.filter((device) => device.advertisedName === approvedNode.localName)
+    : [];
+
+  if (byAdvertisedName.length === 1) {
+    return byAdvertisedName[0];
+  }
+
+  return null;
+}
+
+export function reconcileApprovedNodeRule(
+  approvedNode: ApprovedNodeRule,
+  devices: GatewayRuntimeDeviceSummary[],
+): ApprovedNodeRule {
+  const matchingDevice = findMatchingGatewayDeviceForApprovedNode(approvedNode, devices);
+
+  if (!matchingDevice) {
+    return approvedNode;
+  }
+
+  const nextKnownDeviceId = matchingDevice.id;
+  const nextPeripheralId = matchingDevice.peripheralId ?? approvedNode.peripheralId;
+  const nextLocalName = matchingDevice.advertisedName ?? approvedNode.localName;
+
+  return {
+    id: nodeRuleId({
+      knownDeviceId: nextKnownDeviceId,
+      peripheralId: nextPeripheralId,
+      address: approvedNode.address,
+      localName: nextLocalName,
+    }),
+    label: matchingDevice.machineLabel ?? approvedNode.label,
+    peripheralId: nextPeripheralId,
+    address: approvedNode.address,
+    localName: nextLocalName,
+    knownDeviceId: nextKnownDeviceId,
+  };
+}
+
 export function createNodeIdentity(
   node:
     | Pick<

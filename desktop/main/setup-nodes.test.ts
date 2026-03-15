@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { ApprovedNodeRule, DiscoveredNodeSummary } from "@core/contracts";
 
-import { hasApprovedSetupNode } from "./setup-nodes";
+import { hasApprovedSetupNode, matchingApprovedSetupNodeId } from "./setup-nodes";
 
 describe("setup nodes helpers", () => {
   it("does not collapse distinct approved nodes that share fuzzy identity fields", () => {
@@ -36,5 +36,39 @@ describe("setup nodes helpers", () => {
     };
 
     expect(hasApprovedSetupNode(nodesById, secondApprovedNode)).toBe(false);
+  });
+
+  it("folds rediscovered rebooted nodes back into the approved entry", () => {
+    const nodesById = new Map<string, DiscoveredNodeSummary>([
+      [
+        "peripheral:new-peripheral",
+        {
+          id: "peripheral:new-peripheral",
+          label: "GymMotion",
+          peripheralId: "new-peripheral",
+          address: null,
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: "stack-001",
+          machineLabel: "Leg Press",
+          siteId: null,
+          lastRssi: -55,
+          lastSeenAt: new Date().toISOString(),
+          gatewayConnectionState: "reconnecting",
+          isApproved: true,
+        },
+      ],
+    ]);
+
+    const approvedNode: ApprovedNodeRule = {
+      id: "known:stack-001",
+      label: "Leg Press",
+      peripheralId: "old-peripheral",
+      address: null,
+      localName: "GymMotion-f4e9d4",
+      knownDeviceId: "stack-001",
+    };
+
+    expect(matchingApprovedSetupNodeId(nodesById, approvedNode)).toBe("peripheral:new-peripheral");
+    expect(hasApprovedSetupNode(nodesById, approvedNode)).toBe(true);
   });
 });
