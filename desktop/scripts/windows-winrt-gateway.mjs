@@ -5,7 +5,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-import { createGatewayRuntimeServer } from "../../legacy/scripts/gateway-runtime-server.mjs";
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 
 const config = {
   apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -80,6 +80,8 @@ function parseApprovedNodeRules(raw) {
 
 function describeNode(node = {}) {
   return {
+    deviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+    knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
     peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
     address: node.address ?? null,
     localName: node.localName ?? node.local_name ?? null,
@@ -131,6 +133,7 @@ function createDeviceContext(deviceId) {
     address: null,
     advertisedName: null,
     rssi: null,
+    lastTelemetryConnectionState: null,
   };
 }
 
@@ -242,7 +245,35 @@ async function forwardTelemetry(payload, node = {}) {
 
   flushNodeLogs(payload.deviceId, describeNode(node), payload);
 
-  await runtimeServer.noteTelemetry(payload, describeNode(node));
+  const telemetryResult = await runtimeServer.noteTelemetry(payload, describeNode(node));
+  const connectionStateBeforeTelemetry = telemetryResult?.before?.gatewayConnectionState ?? null;
+
+  if (
+    connectionStateBeforeTelemetry &&
+    connectionStateBeforeTelemetry !== "connected" &&
+    context.lastTelemetryConnectionState !== connectionStateBeforeTelemetry
+  ) {
+    void writeDeviceLog({
+      deviceId: payload.deviceId,
+      level: "warn",
+      code: "node.telemetry_without_transport",
+      message: `Telemetry arrived while transport state was ${connectionStateBeforeTelemetry}.`,
+      bootId: payload.bootId ?? null,
+      firmwareVersion: payload.firmwareVersion ?? null,
+      hardwareId: payload.hardwareId ?? null,
+      metadata: {
+        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+        address: node.address ?? null,
+        transportStateBefore: connectionStateBeforeTelemetry,
+        transportStateAfter: telemetryResult?.after?.gatewayConnectionState ?? null,
+        telemetryFreshnessAfter: telemetryResult?.after?.telemetryFreshness ?? null,
+        lastTelemetryAt: telemetryResult?.after?.lastTelemetryAt ?? null,
+        lastConnectedAt: telemetryResult?.after?.lastConnectedAt ?? null,
+        lastDisconnectedAt: telemetryResult?.after?.lastDisconnectedAt ?? null,
+      },
+    });
+  }
+  context.lastTelemetryConnectionState = connectionStateBeforeTelemetry;
 
   const stateChanged = context.lastState !== payload.state;
 
@@ -301,40 +332,77 @@ function handleNodeConnectionState(event) {
     event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
   if (connectionState === "connecting") {
-    runtimeServer.noteConnecting(peripheralInfo);
+    const transition = runtimeServer.noteConnecting(peripheralInfo);
     queueNodeLog(peripheralInfo, {
       code: "node.connecting",
       message: `Gateway is connecting to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+        address: node.address ?? null,
+        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
+        transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
+        lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
+        lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
+        lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
       },
     });
     return;
   }
 
   if (connectionState === "connected") {
-    runtimeServer.noteConnected(peripheralInfo);
+    const transition = runtimeServer.noteConnected(peripheralInfo);
     queueNodeLog(peripheralInfo, {
       code: "node.connected",
       message: `Gateway connected to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+        address: node.address ?? null,
+        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
+        transportStateAfter: transition?.after?.gatewayConnectionState ?? "connected",
+        lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
+        lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
+        lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
       },
     });
     return;
   }
 
-  runtimeServer.noteDisconnected({
+  const transition = runtimeServer.noteDisconnected({
     ...peripheralInfo,
     reason: event.reason ?? "ble-disconnected",
   });
+  if (!transition?.applied) {
+    queueNodeLog(peripheralInfo, {
+      level: "warn",
+      code: "node.disconnect_ignored",
+      message: `Gateway ignored a transient disconnect signal for ${label}.`,
+      metadata: {
+        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+        address: node.address ?? null,
+        reason: event.reason ?? "ble-disconnected",
+        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
+        transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
+        lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
+        lastConnectedAt: transition?.before?.lastConnectedAt ?? null,
+        lastDisconnectedAt: transition?.before?.lastDisconnectedAt ?? null,
+      },
+    });
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
     level: connectionState === "reconnecting" ? "warn" : "info",
     code: "node.disconnected",
     message: `Gateway lost ${label}.`,
     metadata: {
       peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+      address: node.address ?? null,
       reason: event.reason ?? "ble-disconnected",
+      transportStateBefore: transition.before?.gatewayConnectionState ?? null,
+      transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
+      lastTelemetryAt: transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,
+      lastConnectedAt: transition.after?.lastConnectedAt ?? transition.before?.lastConnectedAt ?? null,
+      lastDisconnectedAt: transition.after?.lastDisconnectedAt ?? null,
     },
   });
 }

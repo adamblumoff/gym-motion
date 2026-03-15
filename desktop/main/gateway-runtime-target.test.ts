@@ -25,7 +25,7 @@ describe("gateway runtime target", () => {
     ).toBe(path.join("/repo", "desktop", "scripts", "windows-winrt-gateway.mjs"));
   });
 
-  it("resolves the legacy BLE gateway script path on Linux", () => {
+  it("resolves the backend BLE gateway script path on Linux", () => {
     expect(
       resolveGatewayScriptPath({
         platform: "linux",
@@ -33,7 +33,7 @@ describe("gateway runtime target", () => {
         cwd: "/repo",
         resourcesPath: "/resources",
       }),
-    ).toBe(path.join("/repo", "legacy", "scripts", "ble-gateway.mjs"));
+    ).toBe(path.join("/repo", "backend", "runtime", "ble-gateway.mjs"));
   });
 
   it("resolves the packaged sidecar path", () => {

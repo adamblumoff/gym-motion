@@ -1,0 +1,347 @@
+import fs from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "bun:test";
+
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
+
+const runtimeServers: Array<ReturnType<typeof createGatewayRuntimeServer>> = [];
+const metadataServers: http.Server[] = [];
+const runtimeTempDirs: string[] = [];
+
+async function createIsolatedRuntimeServer({
+  apiBaseUrl,
+  runtimeHost,
+  runtimePort,
+}: {
+  apiBaseUrl: string;
+  runtimeHost: string;
+  runtimePort: number;
+}) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+  runtimeTempDirs.push(tempDir);
+  const runtimeServer = createGatewayRuntimeServer({
+    apiBaseUrl,
+    runtimeHost,
+    runtimePort,
+    knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
+  });
+  runtimeServers.push(runtimeServer);
+  return runtimeServer;
+}
+
+afterEach(async () => {
+  while (runtimeServers.length > 0) {
+    const server = runtimeServers.pop();
+    await server?.stop();
+  }
+
+  while (metadataServers.length > 0) {
+    const server = metadataServers.pop();
+    await new Promise<void>((resolve, reject) => {
+      server?.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  while (runtimeTempDirs.length > 0) {
+    const tempDir = runtimeTempDirs.pop();
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+});
+
+describe("gateway runtime server", () => {
+  it("accepts explicit known device ids on transport events", async () => {
+    const runtimePort = 46110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("connected");
+  });
+
+  it("keeps telemetry from changing transport connection state", async () => {
+    const runtimePort = 46110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteDisconnected({
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      reason: "Initial state.",
+    });
+
+    const telemetryResult = await runtimeServer.noteTelemetry(
+      {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: Date.now(),
+        delta: 12,
+        sequence: 1,
+        bootId: "boot-1",
+        firmwareVersion: "0.5.1",
+        hardwareId: "hw-1",
+      },
+      {
+        peripheralId: "peripheral-1",
+        address: "AA:BB:CC:DD",
+        localName: "GymMotion-f4e9d4",
+        rssi: -58,
+      },
+    );
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(telemetryResult?.before?.gatewayConnectionState).toBe("unreachable");
+    expect(device?.gatewayConnectionState).toBe("discovered");
+    expect(device?.telemetryFreshness).toBe("fresh");
+  });
+
+  it("treats recent heartbeats as fresh when telemetry is idle", async () => {
+    const metadataPort = 47110 + Math.floor(Math.random() * 1000);
+    const metadataServer = http.createServer((_request, response) => {
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+      });
+      response.end(
+        JSON.stringify({
+          devices: [
+            {
+              id: "stack-001",
+              lastState: "still",
+              lastSeenAt: Date.now(),
+              lastDelta: null,
+              updatedAt: new Date().toISOString(),
+              hardwareId: "hw-1",
+              bootId: "boot-1",
+              firmwareVersion: "0.5.1",
+              machineLabel: "Leg Press",
+              siteId: "Dallas",
+              provisioningState: "provisioned",
+              updateStatus: "idle",
+              updateTargetVersion: null,
+              updateDetail: null,
+              updateUpdatedAt: null,
+              lastHeartbeatAt: new Date().toISOString(),
+              lastEventReceivedAt: new Date().toISOString(),
+              healthStatus: "online",
+            },
+          ],
+        }),
+      );
+    });
+    metadataServers.push(metadataServer);
+    await new Promise<void>((resolve, reject) => {
+      metadataServer.listen(metadataPort, "127.0.0.1", (error?: Error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    const runtimePort = 48110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: `http://127.0.0.1:${metadataPort}`,
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("connected");
+    expect(device?.telemetryFreshness).toBe("fresh");
+    expect(device?.healthStatus).toBe("online");
+  });
+
+  it("marks devices unreachable when the adapter goes offline", async () => {
+    const runtimePort = 49110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.setAdapterState("poweredOff");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("unreachable");
+    expect(device?.gatewayDisconnectReason).toBe("adapter-poweredOff");
+  });
+
+  it("marks rediscovered known nodes as reconnecting while scanning", async () => {
+    const runtimePort = 50110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteDisconnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      reason: "link lost",
+    });
+    runtimeServer.setScanState("scanning");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("reconnecting");
+    expect(payload.gateway?.reconnectingNodeCount).toBe(1);
+  });
+
+  it("emits discovered instead of unreachable on first discovery for a known node", async () => {
+    const runtimePort = 51110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("discovered");
+  });
+
+  it("flushes pending known-node cache writes on stop", async () => {
+    const runtimePort = 52110 + Math.floor(Math.random() * 1000);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+    runtimeTempDirs.push(tempDir);
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+      knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    await runtimeServer.stop();
+
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(tempDir, "gateway-known-nodes.json"), "utf8"),
+    );
+
+    expect(Array.isArray(persisted.nodes)).toBe(true);
+    expect(
+      persisted.nodes.some(
+        (node: { deviceId?: string; peripheralId?: string }) =>
+          node.deviceId === "stack-001" && node.peripheralId === "peripheral-1",
+      ),
+    ).toBe(true);
+  });
+});

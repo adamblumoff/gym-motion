@@ -22,6 +22,8 @@ import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
+import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
+import { hasApprovedSetupNode } from "./setup-nodes";
 import {
   resolveGatewayScriptPath,
   resolveWindowsSidecarPath,
@@ -31,7 +33,7 @@ import {
   listDeviceActivity,
   listDeviceLogs,
   listRecentEvents,
-} from "./legacy-server-deps";
+} from "../../backend/data";
 import type { PreferencesStore } from "./preferences-store";
 import {
   createApprovedNodeRule,
@@ -77,6 +79,23 @@ function createEmptySnapshot(): DesktopSnapshot {
     events: [],
     logs: [],
     activities: [],
+  };
+}
+
+function offlineGatewaySnapshot() {
+  return {
+    ...EMPTY_GATEWAY,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function degradedEmptySnapshot(issue: string): DesktopSnapshot {
+  return {
+    ...createEmptySnapshot(),
+    liveStatus: "Gateway degraded",
+    runtimeState: "degraded",
+    gatewayIssue: issue,
+    gateway: offlineGatewaySnapshot(),
   };
 }
 
@@ -170,6 +189,10 @@ export function createManagedGatewayRuntime(
   function liveStatusFor(snapshotState: DesktopSnapshot) {
     if (snapshotState.runtimeState === "starting") {
       return "Starting gateway runtime…";
+    }
+
+    if (snapshotState.runtimeState === "restarting") {
+      return "Restarting gateway runtime…";
     }
 
     if (snapshotState.runtimeState === "degraded") {
@@ -328,7 +351,9 @@ export function createManagedGatewayRuntime(
         }),
       );
 
-      if (!byId.has(approvedNode.id)) {
+      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode);
+
+      if (!alreadyPresent) {
         byId.set(approvedNode.id, {
           id: approvedNode.id,
           label:
@@ -664,16 +689,18 @@ export function createManagedGatewayRuntime(
   function applyDataEvent(event: DesktopDataEvent) {
     switch (event.type) {
       case "motion-update":
+        {
+          const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+            snapshot.devices,
+            event.payload.device,
+          );
         snapshot = {
           ...snapshot,
-          devices: mergeGatewayDeviceUpdate(
-            snapshot.devices,
-            event.payload.device as GatewayRuntimeDeviceSummary,
-          ),
+          devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
         };
         emit({
           type: "device-upserted",
-          device: event.payload.device as GatewayRuntimeDeviceSummary,
+          device,
         });
         if (event.payload.event) {
           snapshot = {
@@ -710,13 +737,35 @@ export function createManagedGatewayRuntime(
         }
         void refreshSetupNodes();
         break;
-      case "device-log":
+        }
+      case "device-log": {
+        const activity: DeviceActivitySummary = {
+          id: `log-${event.payload.id}`,
+          deviceId: event.payload.deviceId,
+          sequence: event.payload.sequence,
+          kind: "lifecycle",
+          title: event.payload.code ?? event.payload.level.toUpperCase(),
+          message: event.payload.message,
+          state: null,
+          level: event.payload.level,
+          code: event.payload.code,
+          delta: null,
+          eventTimestamp: event.payload.deviceTimestamp,
+          receivedAt: event.payload.receivedAt,
+          bootId: event.payload.bootId,
+          firmwareVersion: event.payload.firmwareVersion,
+          hardwareId: event.payload.hardwareId,
+          metadata: event.payload.metadata,
+        };
         snapshot = {
           ...snapshot,
           logs: mergeLogUpdate(snapshot.logs, event.payload, 18),
+          activities: mergeActivityUpdate(snapshot.activities, activity, 30),
         };
         emit({ type: "log-recorded", log: event.payload });
+        emit({ type: "activity-recorded", activity });
         break;
+      }
       case "device-updated":
         void refreshGatewayState().then(() => {
           emit({ type: "snapshot", snapshot });
@@ -730,22 +779,34 @@ export function createManagedGatewayRuntime(
     }
   }
 
-  async function startRuntime() {
-    snapshot = createEmptySnapshot();
+  async function startRuntime(options?: { preserveSnapshot?: boolean }) {
+    const preserveSnapshot = options?.preserveSnapshot ?? false;
+
+    if (!preserveSnapshot) {
+      snapshot = createEmptySnapshot();
+      emit({ type: "snapshot", snapshot });
+      mergeSetupNodes([]);
+    } else {
+      snapshot = {
+        ...snapshot,
+        runtimeState: "restarting",
+        liveStatus: liveStatusFor({
+          ...snapshot,
+          runtimeState: "restarting",
+        }),
+        gatewayIssue: null,
+      };
+      emit({ type: "snapshot", snapshot });
+    }
+
     if (!usesWindowsNativeGateway(process.platform)) {
       await refreshAdapters();
     }
-    emit({ type: "snapshot", snapshot });
-    mergeSetupNodes([]);
 
     const startIssue = runtimeStartIssue();
 
     if (startIssue) {
-      updateGatewayStatus(
-        { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
-        "degraded",
-        startIssue,
-      );
+      snapshot = degradedEmptySnapshot(startIssue);
       emit({ type: "snapshot", snapshot });
       return;
     }
@@ -761,11 +822,10 @@ export function createManagedGatewayRuntime(
       windowsScanRequested = false;
     } catch (error) {
       windowsScanRequested = false;
-      updateGatewayStatus(
-        { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
-        "degraded",
+      snapshot = degradedEmptySnapshot(
         error instanceof Error ? error.message : "Gateway runtime failed to start.",
       );
+      emit({ type: "snapshot", snapshot });
       throw error;
     }
   }
@@ -783,8 +843,17 @@ export function createManagedGatewayRuntime(
     }
 
     stopChild();
-    snapshot = createEmptySnapshot();
-    await startRuntime();
+    snapshot = {
+      ...snapshot,
+      runtimeState: "restarting",
+      gatewayIssue: null,
+      liveStatus: liveStatusFor({
+        ...snapshot,
+        runtimeState: "restarting",
+      }),
+    };
+    emit({ type: "snapshot", snapshot });
+    await startRuntime({ preserveSnapshot: true });
     return snapshot;
   }
 

@@ -7,7 +7,8 @@ export {
   parseFirmwareReport,
   parseHeartbeatPayload,
   parseIngestPayload,
-} from "@/lib/motion";
+} from "./motion";
+
 export {
   checkForFirmwareUpdate,
   createOrUpdateDeviceRegistration,
@@ -23,4 +24,4 @@ export {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "@/lib/repository";
+} from "./repository";

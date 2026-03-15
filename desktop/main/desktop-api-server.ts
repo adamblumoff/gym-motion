@@ -23,12 +23,12 @@ import {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "./legacy-server-deps";
+} from "../../backend/data";
 import {
   createPresignedReadUrl,
   hasBucketConfig,
   isExternalAssetUrl,
-} from "@/lib/storage-bucket";
+} from "../../backend/storage-bucket";
 
 export type DesktopDataEvent =
   | {

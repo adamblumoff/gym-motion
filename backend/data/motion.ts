@@ -25,7 +25,6 @@ export const gatewayConnectionStateSchema = z.enum([
   "disconnected",
   "unreachable",
 ]);
-export const telemetryFreshnessSchema = z.enum(["fresh", "stale", "missing"]);
 export const otaRuntimeStatusSchema = z.enum([
   "idle",
   "available",
@@ -38,8 +37,6 @@ export const otaRuntimeStatusSchema = z.enum([
   "failed",
   "rolled_back",
 ]);
-export const themePreferenceSchema = z.enum(["dark", "light", "system"]);
-export const resolvedThemeSchema = z.enum(["dark", "light"]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
@@ -85,6 +82,13 @@ export const firmwareReleaseSchema = z.object({
   rolloutState: z.enum(["draft", "active", "paused"]).default("draft"),
 });
 
+export const firmwareReportSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  status: updateStatusSchema,
+  targetVersion: z.string().trim().min(1).max(120).optional(),
+  detail: z.string().trim().min(1).max(280).optional(),
+});
+
 export const deviceLogSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
   level: deviceLogLevelSchema,
@@ -95,24 +99,25 @@ export const deviceLogSchema = z.object({
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
   hardwareId: z.string().trim().min(1).max(120).optional(),
   timestamp: z.number().int().nonnegative().optional(),
-  metadata: z.record(
-    z.string(),
-    z.union([z.string(), z.number(), z.boolean(), z.null()]),
-  ).optional(),
+  metadata: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+    .optional(),
 });
 
+export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
+export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
+export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
+export type DeviceRegistrationInput = z.infer<typeof deviceRegistrationSchema>;
+export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
+export type DeviceLogInput = z.infer<typeof deviceLogSchema>;
 export type MotionState = z.infer<typeof motionStateSchema>;
 export type ProvisioningState = z.infer<typeof provisioningStateSchema>;
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
 export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
 export type GatewayConnectionState = z.infer<typeof gatewayConnectionStateSchema>;
-export type TelemetryFreshness = z.infer<typeof telemetryFreshnessSchema>;
 export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
-export type ThemePreference = z.infer<typeof themePreferenceSchema>;
-export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>;
-export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
-export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -149,49 +154,14 @@ export type GatewayStatusSummary = {
   lastAdvertisementAt: string | null;
 };
 
-export type BleAdapterSummary = {
-  id: string;
-  label: string;
-  transport: "usb" | "hci" | "winrt" | "unknown";
-  runtimeDeviceId: number | null;
-  isAvailable: boolean;
-  issue: string | null;
-  details: string[];
-};
-
-export type ApprovedNodeRule = {
-  id: string;
-  label: string;
-  peripheralId: string | null;
-  address: string | null;
-  localName: string | null;
-  knownDeviceId: string | null;
-};
-
-export type DiscoveredNodeSummary = {
-  id: string;
-  label: string;
-  peripheralId: string | null;
-  address: string | null;
-  localName: string | null;
-  knownDeviceId: string | null;
-  machineLabel: string | null;
-  siteId: string | null;
-  lastRssi: number | null;
-  lastSeenAt: string | null;
-  gatewayConnectionState: GatewayConnectionState | "visible";
-  isApproved: boolean;
-};
-
-export type DesktopSetupState = {
-  adapterIssue: string | null;
-  approvedNodes: ApprovedNodeRule[];
-  nodes: DiscoveredNodeSummary[];
+export type GatewayHealthResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  error?: string;
 };
 
 export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayConnectionState: GatewayConnectionState;
-  telemetryFreshness: TelemetryFreshness;
   peripheralId: string | null;
   gatewayLastAdvertisementAt: string | null;
   gatewayLastConnectedAt: string | null;
@@ -208,6 +178,19 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   otaFailureDetail: string | null;
   otaLastStatusMessage: string | null;
   otaUpdatedAt: string | null;
+};
+
+export type GatewayRuntimeDevicesResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  devices: GatewayRuntimeDeviceSummary[];
+  error?: string;
+};
+
+export type DeviceCleanupResult = {
+  deviceId: string;
+  deletedEvents: number;
+  deletedDevices: number;
 };
 
 export type MotionEventSummary = {
@@ -257,34 +240,119 @@ export type DeviceActivitySummary = {
   metadata: Record<string, string | number | boolean | null> | null;
 };
 
-export type DesktopSnapshot = {
-  liveStatus: string;
-  trayHint: string;
-  runtimeState: "starting" | "running" | "restarting" | "degraded";
-  gatewayIssue: string | null;
-  gateway: GatewayStatusSummary;
-  devices: GatewayRuntimeDeviceSummary[];
-  events: MotionEventSummary[];
-  logs: DeviceLogSummary[];
+export type MotionStreamPayload = {
+  device: DeviceSummary;
+  event?: MotionEventSummary;
+};
+
+export type DeviceLogStreamPayload = {
+  log: DeviceLogSummary;
+};
+
+export type GatewayDeviceStreamPayload = {
+  device: GatewayRuntimeDeviceSummary;
+};
+
+export type GatewayStatusStreamPayload = GatewayHealthResponse;
+
+export type DeviceActivityResponse = {
   activities: DeviceActivitySummary[];
 };
 
-export function normalizeThemePreference(
-  value: string | null | undefined,
-): ThemePreference {
-  const result = themePreferenceSchema.safeParse(value);
-  return result.success ? result.data : "dark";
-}
+export type DeviceSyncStateSummary = {
+  deviceId: string;
+  lastAckedSequence: number;
+  lastAckedBootId: string | null;
+  lastSyncCompletedAt: string | null;
+  lastOverflowDetectedAt: string | null;
+};
 
-export function resolveTheme(
-  preference: ThemePreference,
-  systemWantsDark: boolean,
-): ResolvedTheme {
-  if (preference === "system") {
-    return systemWantsDark ? "dark" : "light";
-  }
+export type BackfillMotionRecordInput = {
+  kind: "motion";
+  sequence: number;
+  state: MotionState;
+  delta: number | null;
+  timestamp: number;
+  bootId?: string;
+  firmwareVersion?: string;
+  hardwareId?: string;
+};
 
-  return preference;
+export type BackfillLogRecordInput = {
+  kind: "node-log";
+  sequence: number;
+  level: DeviceLogLevel;
+  code: string;
+  message: string;
+  timestamp?: number;
+  bootId?: string;
+  firmwareVersion?: string;
+  hardwareId?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
+export type BackfillRecordInput = BackfillMotionRecordInput | BackfillLogRecordInput;
+
+export const backfillRecordSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("motion"),
+    sequence: z.number().int().nonnegative(),
+    state: motionStateSchema,
+    delta: z.number().int().nullable().optional(),
+    timestamp: z.number().int().positive(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+  }),
+  z.object({
+    kind: z.literal("node-log"),
+    sequence: z.number().int().nonnegative(),
+    level: deviceLogLevelSchema,
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(280),
+    timestamp: z.number().int().nonnegative().optional(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+    metadata: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+      .optional(),
+  }),
+]);
+
+export const backfillBatchSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  records: z.array(backfillRecordSchema).max(500),
+  ackSequence: z.number().int().nonnegative(),
+  overflowDetectedAt: z.string().datetime().optional(),
+});
+
+export type BackfillBatchInput = z.infer<typeof backfillBatchSchema>;
+
+export type BackfillBatchResult = {
+  insertedEvents: MotionEventSummary[];
+  insertedLogs: DeviceLogSummary[];
+  syncState: DeviceSyncStateSummary;
+};
+
+export type FirmwareReleaseSummary = {
+  version: string;
+  gitSha: string;
+  assetUrl: string;
+  sha256: string;
+  md5: string | null;
+  sizeBytes: number;
+  rolloutState: "draft" | "active" | "paused";
+  createdAt: string;
+};
+
+export function mergeDeviceUpdate(devices: DeviceSummary[], device: DeviceSummary): DeviceSummary[] {
+  const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
+
+  return nextDevices.sort(
+    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
 }
 
 export function mergeGatewayDeviceUpdate(
@@ -294,8 +362,7 @@ export function mergeGatewayDeviceUpdate(
   const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
 
   return nextDevices.sort(
-    (left, right) =>
-      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
   );
 }
 
@@ -305,6 +372,38 @@ export function mergeEventUpdate(
   limit = 12,
 ): MotionEventSummary[] {
   return [event, ...events.filter((item) => item.id !== event.id)].slice(0, limit);
+}
+
+export function parseIngestPayload(input: unknown) {
+  return ingestPayloadSchema.safeParse(input);
+}
+
+export function parseHeartbeatPayload(input: unknown) {
+  return heartbeatPayloadSchema.safeParse(input);
+}
+
+export function parseDeviceAssignment(input: unknown) {
+  return deviceAssignmentSchema.safeParse(input);
+}
+
+export function parseDeviceRegistration(input: unknown) {
+  return deviceRegistrationSchema.safeParse(input);
+}
+
+export function parseFirmwareRelease(input: unknown) {
+  return firmwareReleaseSchema.safeParse(input);
+}
+
+export function parseFirmwareReport(input: unknown) {
+  return firmwareReportSchema.safeParse(input);
+}
+
+export function parseDeviceLog(input: unknown) {
+  return deviceLogSchema.safeParse(input);
+}
+
+export function parseBackfillBatch(input: unknown) {
+  return backfillBatchSchema.safeParse(input);
 }
 
 export function mergeLogUpdate(
@@ -339,26 +438,8 @@ export function mergeActivityUpdate(
     .slice(0, limit);
 }
 
-export function parseIngestPayload(input: unknown) {
-  return ingestPayloadSchema.safeParse(input);
-}
-
-export function parseHeartbeatPayload(input: unknown) {
-  return heartbeatPayloadSchema.safeParse(input);
-}
-
-export function parseDeviceAssignment(input: unknown) {
-  return deviceAssignmentSchema.safeParse(input);
-}
-
-export function parseDeviceRegistration(input: unknown) {
-  return deviceRegistrationSchema.safeParse(input);
-}
-
-export function parseFirmwareRelease(input: unknown) {
-  return firmwareReleaseSchema.safeParse(input);
-}
-
-export function parseDeviceLog(input: unknown) {
-  return deviceLogSchema.safeParse(input);
+export function formatZodError(message: z.ZodError) {
+  return message.issues
+    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+    .join("; ");
 }

@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "bun test",
-    "db:setup": "bun run ./scripts/setup-db.ts",
+    "db:setup": "cd .. && bun run db:setup",
     "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
     "seed": "bun run ./scripts/send-test-event.ts",
     "gateway": "node ./scripts/ble-gateway.mjs",

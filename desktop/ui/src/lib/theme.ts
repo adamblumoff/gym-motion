@@ -7,6 +7,7 @@ export function applyThemeState(themeState: ThemeState) {
   root.dataset.themePreference = themeState.preference;
   root.dataset.theme = themeState.resolvedTheme;
   root.style.colorScheme = themeState.resolvedTheme;
+  root.classList.toggle("dark", themeState.resolvedTheme === "dark");
 }
 
 export function createFallbackThemeState(

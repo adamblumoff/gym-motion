@@ -8,7 +8,9 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use btleplug::{
-    api::{Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter, WriteType},
+    api::{
+        Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter, WriteType,
+    },
     platform::{Adapter, Manager, Peripheral},
 };
 use futures::StreamExt;
@@ -35,6 +37,7 @@ const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
+const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -140,9 +143,11 @@ fn all_approved_nodes_connected(
     connected_nodes: &HashMap<String, DiscoveredNode>,
 ) -> bool {
     !rules.is_empty()
-        && rules
-            .iter()
-            .all(|rule| connected_nodes.values().any(|node| rule_matches_node(rule, node)))
+        && rules.iter().all(|rule| {
+            connected_nodes
+                .values()
+                .any(|node| rule_matches_node(rule, node))
+        })
 }
 
 struct Sidecar {
@@ -484,7 +489,8 @@ async fn run_session(
                         }
 
                         let peripheral = adapter.peripheral(&id).await?;
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                        let allowed = allowed_nodes.read().await.clone();
+                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered { node: node.clone() }).await?;
                             writer.send(&Event::GatewayState {
@@ -497,7 +503,7 @@ async fn run_session(
                                 }
                             }).await?;
 
-                            if is_approved(&node, &allowed_nodes.read().await) {
+                            if is_approved(&node, &allowed) {
                                 let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
                                 let mut active = active_connections.lock().await;
                                 if !active.contains(&key) {
@@ -526,10 +532,10 @@ async fn run_session(
                     }
                     CentralEvent::DeviceConnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                        let allowed = allowed_nodes.read().await.clone();
+                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
                             connected_nodes.insert(node_key(&node), node.clone());
                             if scanning {
-                                let allowed = allowed_nodes.read().await;
                                 if all_approved_nodes_connected(&allowed, &connected_nodes) {
                                     let _ = adapter.stop_scan().await;
                                     scanning = false;
@@ -559,9 +565,27 @@ async fn run_session(
                     }
                     CentralEvent::DeviceDisconnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                        let allowed = allowed_nodes.read().await.clone();
+                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                            sleep(Duration::from_millis(DISCONNECT_CONFIRM_MS)).await;
+                            if peripheral.is_connected().await.unwrap_or(false) {
+                                writer.send(&Event::Log {
+                                    level: "warn".to_string(),
+                                    message: format!(
+                                        "Ignoring transient disconnect for {} after transport re-check.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                    })),
+                                }).await?;
+                                continue;
+                            }
+
                             connected_nodes.remove(&node_key(&node));
-                            let state = if is_approved(&node, &allowed_nodes.read().await) {
+                            let state = if is_approved(&node, &allowed) {
                                 "reconnecting"
                             } else {
                                 "disconnected"
@@ -647,8 +671,12 @@ async fn connect_and_stream(
 
     let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&characteristic).await?;
-    write_chunked_json_command(&peripheral, &control_characteristic, r#"{"type":"sync-now"}"#)
-        .await?;
+    write_chunked_json_command(
+        &peripheral,
+        &control_characteristic,
+        r#"{"type":"sync-now"}"#,
+    )
+    .await?;
     writer
         .send(&Event::NodeConnectionState {
             node: node.clone(),
@@ -726,6 +754,7 @@ fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {
 async fn discovered_node_from_peripheral(
     peripheral: &Peripheral,
     config: &Config,
+    allowed_nodes: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
 ) -> Result<Option<DiscoveredNode>> {
     let Some(properties) = peripheral.properties().await? else {
@@ -748,9 +777,47 @@ async fn discovered_node_from_peripheral(
         return Ok(None);
     }
 
-    let peripheral_id = peripheral.id().to_string();
-    let known_device_id = known_device_ids.read().await.get(&peripheral_id).cloned();
     let address = Some(properties.address.to_string());
+    let peripheral_id = peripheral.id().to_string();
+    let known_device_id = known_device_ids
+        .read()
+        .await
+        .get(&peripheral_id)
+        .cloned()
+        .or_else(|| {
+            allowed_nodes.iter().find_map(|rule| {
+                if rule
+                    .peripheral_id
+                    .as_ref()
+                    .map(|value| value == &peripheral_id)
+                    .unwrap_or(false)
+                {
+                    return rule.known_device_id.clone();
+                }
+
+                if rule
+                    .address
+                    .as_ref()
+                    .zip(address.as_ref())
+                    .map(|(left, right)| left.eq_ignore_ascii_case(right))
+                    .unwrap_or(false)
+                {
+                    return rule.known_device_id.clone();
+                }
+
+                if rule
+                    .local_name
+                    .as_ref()
+                    .zip(local_name.as_ref())
+                    .map(|(left, right)| left == right)
+                    .unwrap_or(false)
+                {
+                    return rule.known_device_id.clone();
+                }
+
+                None
+            })
+        });
     let label = local_name
         .clone()
         .or_else(|| known_device_id.clone())
@@ -838,7 +905,10 @@ mod tests {
         let frames = control_command_frames(r#"{"type":"sync-now"}"#);
 
         assert_eq!(frames.first().map(Vec::as_slice), Some(&b"BEGIN:19"[..]));
-        assert_eq!(frames.get(1).map(Vec::as_slice), Some(&br#"{"type":"sync-now"}"#[..]));
+        assert_eq!(
+            frames.get(1).map(Vec::as_slice),
+            Some(&br#"{"type":"sync-now"}"#[..])
+        );
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
     }
 }
