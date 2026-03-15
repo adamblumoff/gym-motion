@@ -40,6 +40,8 @@ const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
+const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 4_000;
+const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
@@ -290,6 +292,73 @@ async fn sync_scan_state(
         )
         .await?;
     }
+
+    Ok(())
+}
+
+async fn restart_approved_reconnect_scan(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    selected_adapter_id: &str,
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    last_advertisement_at: &Option<String>,
+    scan_burst: u32,
+    advertisements_seen: u32,
+) -> Result<()> {
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: "Restarting approved-node reconnect scan burst.".to_string(),
+            details: Some(json!({
+                "scanBurst": scan_burst,
+                "advertisementsSeen": advertisements_seen,
+                "lastAdvertisementAt": last_advertisement_at,
+                "connectedApprovedCount": connected_nodes.len(),
+            })),
+        })
+        .await?;
+
+    let _ = adapter.stop_scan().await;
+    sleep(Duration::from_millis(
+        APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS,
+    ))
+    .await;
+
+    let cleared_peripherals = if connected_nodes.is_empty() {
+        adapter.clear_peripherals().await.is_ok()
+    } else {
+        false
+    };
+
+    adapter.start_scan(ScanFilter::default()).await?;
+    emit_gateway_state(
+        writer,
+        adapter,
+        selected_adapter_id,
+        "scanning",
+        scan_reason(
+            allowed,
+            connected_nodes,
+            reconnect_states,
+            None,
+            Instant::now(),
+        ),
+        last_advertisement_at,
+    )
+    .await?;
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: "Approved-node reconnect scan burst restarted.".to_string(),
+            details: Some(json!({
+                "scanBurst": scan_burst + 1,
+                "cacheResetAttempted": connected_nodes.is_empty(),
+                "cacheResetApplied": cleared_peripherals,
+            })),
+        })
+        .await?;
 
     Ok(())
 }
@@ -615,6 +684,12 @@ async fn run_session(
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
     reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reconnect_diagnostic_tick.tick().await;
+    let mut reconnect_scan_restart_tick =
+        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS));
+    reconnect_scan_restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect_scan_restart_tick.tick().await;
+    let mut reconnect_scan_burst = 0_u32;
+    let mut advertisements_seen_this_burst = 0_u32;
 
     {
         let allowed = allowed_nodes.read().await.clone();
@@ -760,6 +835,37 @@ async fn run_session(
                     }).await?;
                 }
             }
+            _ = reconnect_scan_restart_tick.tick() => {
+                let allowed = allowed_nodes.read().await.clone();
+                if !scanning {
+                    continue;
+                }
+
+                if scan_reason(
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    manual_scan_deadline,
+                    Instant::now(),
+                ) != Some("approved-reconnect") {
+                    continue;
+                }
+
+                restart_approved_reconnect_scan(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    &last_advertisement_at,
+                    reconnect_scan_burst,
+                    advertisements_seen_this_burst,
+                )
+                .await?;
+                reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
+                advertisements_seen_this_burst = 0;
+            }
             event = events.next() => {
                 let Some(event) = event else {
                     break;
@@ -793,6 +899,9 @@ async fn run_session(
                         if !scanning {
                             continue;
                         }
+
+                        advertisements_seen_this_burst =
+                            advertisements_seen_this_burst.saturating_add(1);
 
                         let Some(peripheral) =
                             peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
@@ -1503,7 +1612,12 @@ fn chrono_like_seconds(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{control_command_frames, APP_SESSION_LEASE_TIMEOUT_MS};
+    use super::{
+        approved_nodes_pending_connection, control_command_frames, should_scan,
+        ApprovedReconnectState, APP_SESSION_LEASE_TIMEOUT_MS,
+    };
+    use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
+    use std::{collections::HashMap, time::Instant};
     use serde_json::Value;
 
     #[test]
@@ -1555,9 +1669,16 @@ mod tests {
             known_device_id: None,
         }];
         let connected = HashMap::new();
+        let reconnect_states = HashMap::new();
 
-        assert!(approved_nodes_pending_connection(&rules, &connected));
-        assert!(should_scan(&rules, &connected, None, Instant::now()));
+        assert!(approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
     }
 
     #[test]
@@ -1571,6 +1692,7 @@ mod tests {
             known_device_id: None,
         }];
         let mut connected = HashMap::new();
+        let reconnect_states = HashMap::new();
         connected.insert(
             "peripheral-1".to_string(),
             DiscoveredNode {
@@ -1585,7 +1707,42 @@ mod tests {
             },
         );
 
-        assert!(!approved_nodes_pending_connection(&rules, &connected));
-        assert!(!should_scan(&rules, &connected, None, Instant::now()));
+        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn exhausted_approved_nodes_no_longer_keep_reconnect_scan_active() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::new();
+        let reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: 20,
+                retry_exhausted: true,
+            },
+        )]);
+
+        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
     }
 }
