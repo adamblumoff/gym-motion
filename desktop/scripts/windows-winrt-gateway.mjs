@@ -324,10 +324,14 @@ function handleNodeConnectionState(event) {
     return;
   }
 
-  runtimeServer.noteDisconnected({
+  const applied = runtimeServer.noteDisconnected({
     ...peripheralInfo,
     reason: event.reason ?? "ble-disconnected",
   });
+  if (!applied) {
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
     level: connectionState === "reconnecting" ? "warn" : "info",
     code: "node.disconnected",

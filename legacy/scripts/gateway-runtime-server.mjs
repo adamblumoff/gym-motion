@@ -6,10 +6,20 @@ import path from "node:path";
 
 const METADATA_REFRESH_MS = 15_000;
 const STREAM_PING_MS = 15_000;
+const TRANSIENT_DISCONNECT_GRACE_MS = 3_000;
 const DEFAULT_KNOWN_NODE_DIR = path.join(process.cwd(), "data");
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function parseIsoTime(value) {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function jsonResponse(response, statusCode, payload) {
@@ -417,6 +427,20 @@ export function createGatewayRuntimeServer({
         emitDevice(deviceId);
       }
     }
+  }
+
+  function shouldIgnoreTransientDisconnect(deviceId) {
+    const runtime = runtimeByDeviceId.get(deviceId);
+    if (!runtime) {
+      return false;
+    }
+
+    const lastTelemetryAt = parseIsoTime(runtime.gatewayLastTelemetryAt);
+    if (lastTelemetryAt === 0) {
+      return false;
+    }
+
+    return Date.now() - lastTelemetryAt < TRANSIENT_DISCONNECT_GRACE_MS;
   }
 
   function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }) {
@@ -851,7 +875,11 @@ export function createGatewayRuntimeServer({
       });
 
       if (!deviceId) {
-        return;
+        return false;
+      }
+
+      if (shouldIgnoreTransientDisconnect(deviceId)) {
+        return false;
       }
 
       updateRuntimeNode(deviceId, {
@@ -865,6 +893,7 @@ export function createGatewayRuntimeServer({
       });
       emitDevice(deviceId);
       broadcastGatewayStatus();
+      return true;
     },
 
     noteOtaStatus(deviceId, patch) {
