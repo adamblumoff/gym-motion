@@ -38,6 +38,7 @@ const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
+const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -820,36 +821,49 @@ async fn connect_and_stream(
         .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
 
-    while let Some(notification) = notifications.next().await {
-        if notification.uuid != config.telemetry_uuid {
-            continue;
-        }
+    loop {
+        tokio::select! {
+            notification = notifications.next() => {
+                let Some(notification) = notification else {
+                    break;
+                };
 
-        for payload in decoder.push_bytes(&notification.value)? {
-            match serde_json::from_value::<TelemetryPayload>(payload) {
-                Ok(payload) => {
-                    if let Some(peripheral_id) = node.peripheral_id.clone() {
-                        known_device_ids
-                            .write()
-                            .await
-                            .insert(peripheral_id, payload.device_id.clone());
-                    }
-                    let mut enriched = node.clone();
-                    enriched.known_device_id = Some(payload.device_id.clone());
-                    writer
-                        .send(&Event::Telemetry {
-                            node: enriched,
-                            payload,
-                        })
-                        .await?;
+                if notification.uuid != config.telemetry_uuid {
+                    continue;
                 }
-                Err(error) => {
-                    writer
-                        .error(
-                            format!("Failed to parse telemetry payload: {error}"),
-                            Some(json!({ "node": node.id })),
-                        )
-                        .await;
+
+                for payload in decoder.push_bytes(&notification.value)? {
+                    match serde_json::from_value::<TelemetryPayload>(payload) {
+                        Ok(payload) => {
+                            if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                known_device_ids
+                                    .write()
+                                    .await
+                                    .insert(peripheral_id, payload.device_id.clone());
+                            }
+                            let mut enriched = node.clone();
+                            enriched.known_device_id = Some(payload.device_id.clone());
+                            writer
+                                .send(&Event::Telemetry {
+                                    node: enriched,
+                                    payload,
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            writer
+                                .error(
+                                    format!("Failed to parse telemetry payload: {error}"),
+                                    Some(json!({ "node": node.id })),
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+            _ = sleep(Duration::from_millis(CONNECTION_HEALTH_POLL_MS)) => {
+                if !peripheral.is_connected().await.unwrap_or(false) {
+                    return Ok(Some(format!("BLE transport ended for {}.", node.label)));
                 }
             }
         }

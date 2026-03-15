@@ -48,6 +48,7 @@ type ManagedGatewayRuntime = {
   getSnapshot: () => Promise<DesktopSnapshot>;
   getSetupState: () => Promise<DesktopSetupState>;
   rescanAdapters: () => Promise<DesktopSetupState>;
+  requestSilentReconnect: () => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
@@ -901,6 +902,20 @@ export function createManagedGatewayRuntime(
 
       await refreshAdapters();
       return setupState;
+    },
+    async requestSilentReconnect() {
+      if (usesWindowsNativeGateway(process.platform)) {
+        if (child) {
+          sendWindowsGatewayCommand({ type: "rescan" });
+          return;
+        }
+
+        windowsScanRequested = true;
+        await restartRuntime();
+        return;
+      }
+
+      await refreshAdapters();
     },
     async setAllowedNodes(nodes) {
       const nextNodes = dedupeApprovedNodes(nodes);
