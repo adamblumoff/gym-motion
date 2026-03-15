@@ -243,9 +243,48 @@ async function forwardTelemetry(payload, node = {}) {
   context.advertisedName = node.localName ?? context.advertisedName ?? null;
   context.rssi = node.lastRssi ?? node.rssi ?? context.rssi ?? null;
 
-  flushNodeLogs(payload.deviceId, describeNode(node), payload);
+  const peripheralInfo = {
+    ...describeNode(node),
+    deviceId: payload.deviceId,
+    knownDeviceId: payload.deviceId,
+  };
 
-  const telemetryResult = await runtimeServer.noteTelemetry(payload, describeNode(node));
+  flushNodeLogs(payload.deviceId, peripheralInfo, payload);
+
+  const connectionBeforeTelemetry = runtimeServer.inspectNodeConnection({
+    deviceId: payload.deviceId,
+    knownDeviceId: payload.deviceId,
+    peripheralId: peripheralInfo.peripheralId,
+    localName: peripheralInfo.localName,
+    address: peripheralInfo.address,
+  });
+
+  if (connectionBeforeTelemetry?.gatewayConnectionState !== "connected") {
+    const transition = runtimeServer.noteConnected(peripheralInfo);
+
+    if (
+      transition?.before?.gatewayConnectionState &&
+      transition.before.gatewayConnectionState !== "connected"
+    ) {
+      void writeDeviceLog({
+        deviceId: payload.deviceId,
+        level: "info",
+        code: "node.transport_reasserted_by_telemetry",
+        message: "Live BLE telemetry reasserted the Windows transport connection.",
+        bootId: payload.bootId ?? null,
+        firmwareVersion: payload.firmwareVersion ?? null,
+        hardwareId: payload.hardwareId ?? null,
+        metadata: {
+          peripheralId: peripheralInfo.peripheralId,
+          address: peripheralInfo.address,
+          transportStateBefore: transition.before.gatewayConnectionState,
+          transportStateAfter: transition.after?.gatewayConnectionState ?? "connected",
+        },
+      });
+    }
+  }
+
+  const telemetryResult = await runtimeServer.noteTelemetry(payload, peripheralInfo);
   const connectionStateBeforeTelemetry = telemetryResult?.before?.gatewayConnectionState ?? null;
 
   if (
