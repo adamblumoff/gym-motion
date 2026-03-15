@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type {
-  ApprovedNodeRule,
-  DesktopSetupState,
   GatewayRuntimeDeviceSummary,
   ThemePreference,
 } from "@core/contracts";
@@ -13,6 +11,7 @@ import { DashboardPage } from "./components/dashboard-page";
 import { DeviceDetailModal } from "./components/device-detail-modal";
 import { Header } from "./components/header";
 import { SetupPage } from "./components/setup-page";
+import { buildApprovedNodeRules } from "./lib/setup-rules";
 import { useDesktopApp } from "./lib/use-desktop-app";
 
 export type AppRoute = "dashboard" | "setup" | "analytics";
@@ -24,54 +23,6 @@ const ROUTES: Array<{ id: AppRoute; label: string; badge?: string }> = [
 ];
 
 const THEME_OPTIONS: ThemePreference[] = ["dark", "system", "light"];
-
-function buildApprovedNodeRules(
-  setup: DesktopSetupState,
-  selectedIds: Iterable<string>,
-): ApprovedNodeRule[] {
-  const visibleNodes =
-    setup.nodes.length > 0
-      ? setup.nodes
-      : setup.approvedNodes.map((node) => ({
-          id: node.id,
-          label: node.label,
-          peripheralId: node.peripheralId,
-          address: node.address,
-          localName: node.localName,
-          knownDeviceId: node.knownDeviceId,
-          machineLabel: null,
-          siteId: null,
-          lastRssi: null,
-          lastSeenAt: null,
-          gatewayConnectionState: "visible" as const,
-          isApproved: true,
-        }));
-  const existingById = new Map(setup.approvedNodes.map((rule) => [rule.id, rule]));
-  const nextRules: ApprovedNodeRule[] = [];
-
-  for (const id of selectedIds) {
-    const visibleNode = visibleNodes.find((node) => node.id === id);
-
-    if (visibleNode) {
-      nextRules.push({
-        id: visibleNode.id,
-        label: visibleNode.label,
-        peripheralId: visibleNode.peripheralId,
-        address: visibleNode.address,
-        localName: visibleNode.localName,
-        knownDeviceId: visibleNode.knownDeviceId,
-      });
-      continue;
-    }
-
-    const existing = existingById.get(id);
-    if (existing) {
-      nextRules.push(existing);
-    }
-  }
-
-  return nextRules;
-}
 
 export function App() {
   const {

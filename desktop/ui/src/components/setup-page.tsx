@@ -5,25 +5,7 @@ import type {
 } from "@core/contracts";
 
 import { formatRelativeFromNow, formatRssi } from "../lib/formatters";
-
-function resolveVisibleNodes(setup: DesktopSetupState) {
-  return setup.nodes.length > 0
-    ? setup.nodes
-    : setup.approvedNodes.map((node) => ({
-        id: node.id,
-        label: node.label,
-        peripheralId: node.peripheralId,
-        address: node.address,
-        localName: node.localName,
-        knownDeviceId: node.knownDeviceId,
-        machineLabel: null,
-        siteId: null,
-        lastRssi: null,
-        lastSeenAt: null,
-        gatewayConnectionState: "visible" as const,
-        isApproved: true,
-      }));
-}
+import { resolveVisibleNodes } from "../lib/setup-rules";
 
 function NodeRow({
   node,
