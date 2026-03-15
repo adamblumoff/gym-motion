@@ -387,6 +387,8 @@ async fn restart_approved_reconnect_scan(
     last_advertisement_at: &Option<String>,
     scan_burst: u32,
     advertisements_seen: u32,
+    rejected_candidates: u32,
+    classified_candidates: u32,
 ) -> Result<()> {
     writer
         .send(&Event::Log {
@@ -395,6 +397,8 @@ async fn restart_approved_reconnect_scan(
             details: Some(json!({
                 "scanBurst": scan_burst,
                 "advertisementsSeen": advertisements_seen,
+                "rejectedCandidates": rejected_candidates,
+                "classifiedCandidates": classified_candidates,
                 "lastAdvertisementAt": last_advertisement_at,
                 "connectedApprovedCount": connected_nodes.len(),
             })),
@@ -771,6 +775,8 @@ async fn run_session(
     reconnect_scan_restart_tick.tick().await;
     let mut reconnect_scan_burst = 0_u32;
     let mut advertisements_seen_this_burst = 0_u32;
+    let mut rejected_candidates_this_burst = 0_u32;
+    let mut classified_candidates_this_burst = 0_u32;
 
     {
         let allowed = allowed_nodes.read().await.clone();
@@ -942,10 +948,14 @@ async fn run_session(
                     &last_advertisement_at,
                     reconnect_scan_burst,
                     advertisements_seen_this_burst,
+                    rejected_candidates_this_burst,
+                    classified_candidates_this_burst,
                 )
                 .await?;
                 reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
                 advertisements_seen_this_burst = 0;
+                rejected_candidates_this_burst = 0;
+                classified_candidates_this_burst = 0;
             }
             event = events.next() => {
                 let Some(event) = event else {
@@ -1001,6 +1011,8 @@ async fn run_session(
                         )
                         .await
                         {
+                            classified_candidates_this_burst =
+                                classified_candidates_this_burst.saturating_add(1);
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered { node: node.clone() }).await?;
                             writer.send(&Event::GatewayState {
@@ -1130,6 +1142,9 @@ async fn run_session(
                                     });
                                 }
                             }
+                        } else {
+                            rejected_candidates_this_burst =
+                                rejected_candidates_this_burst.saturating_add(1);
                         }
                     }
                     CentralEvent::DeviceConnected(id) => {
@@ -1320,8 +1335,6 @@ async fn discovered_node_for_event(
 ) -> Option<DiscoveredNode> {
     match discovered_node_from_peripheral(
         peripheral,
-        writer,
-        event_name,
         config,
         allowed,
         known_device_ids,
@@ -1562,8 +1575,6 @@ fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {
 
 async fn discovered_node_from_peripheral(
     peripheral: &Peripheral,
-    writer: &EventWriter,
-    event_name: &str,
     config: &Config,
     allowed_nodes: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
@@ -1597,26 +1608,6 @@ async fn discovered_node_from_peripheral(
         || (allow_approved_identity_fallback && classification.approved_identity_matched);
 
     if !accepted {
-        if allow_approved_identity_fallback {
-            writer
-                .send(&Event::Log {
-                    level: "info".to_string(),
-                    message: format!(
-                        "Rejected approved-reconnect advertisement candidate during {event_name}."
-                    ),
-                    details: Some(json!({
-                        "peripheralId": peripheral_id,
-                        "address": address,
-                        "localName": local_name,
-                        "servicesCount": properties.services.len(),
-                        "runtimeServiceMatched": classification.runtime_service_matched,
-                        "namePrefixMatched": classification.name_prefix_matched,
-                        "approvedIdentityMatched": classification.approved_identity_matched,
-                    })),
-                })
-                .await
-                .ok();
-        }
         return Ok(None);
     }
 

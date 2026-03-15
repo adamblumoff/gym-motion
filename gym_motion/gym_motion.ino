@@ -650,6 +650,27 @@ void logRuntimeTransportEvent(const String& message) {
   Serial.println(message);
 }
 
+void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
+  if (advertising == nullptr) {
+    return;
+  }
+
+  advertising->stop();
+  advertising->reset();
+  advertising->setScanResponse(true);
+
+  BLEAdvertisementData advertisementData;
+  advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+  advertisementData.setName(createBleDeviceName());
+  advertising->setAdvertisementData(advertisementData);
+
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setCompleteServices(BLEUUID(RUNTIME_SERVICE_UUID));
+  advertising->setScanResponseData(scanResponseData);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+}
+
 void startRuntimeAdvertising(const String& reason) {
   if (bleServer == nullptr) {
     return;
@@ -661,10 +682,12 @@ void startRuntimeAdvertising(const String& reason) {
     return;
   }
 
+  configureRuntimeAdvertisingPayload(advertising);
   advertising->start();
   lastDisconnectedAdvertisingLogAt = millis();
   logRuntimeTransportEvent(
-    "Advertising for Windows app reconnect (" + reason + ")."
+    "Advertising for Windows app reconnect (" + reason + ") as " +
+    createBleDeviceName() + " with runtime scan response."
   );
 }
 
@@ -1274,11 +1297,13 @@ void setupBle() {
   runtimeService->start();
 
   BLEAdvertising* advertising = bleServer->getAdvertising();
-  advertising->addServiceUUID(PROVISIONING_SERVICE_UUID);
-  advertising->addServiceUUID(RUNTIME_SERVICE_UUID);
+  configureRuntimeAdvertisingPayload(advertising);
   advertising->start();
   lastDisconnectedAdvertisingLogAt = millis();
-  logRuntimeTransportEvent("BLE advertising started.");
+  logRuntimeTransportEvent(
+    "BLE advertising started as " + createBleDeviceName() +
+    " with runtime scan response."
+  );
 }
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
