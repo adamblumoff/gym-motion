@@ -216,4 +216,64 @@ describe("setup selection helpers", () => {
     expect(reconciled.knownDeviceId).toBe("stack-001");
     expect(reconciled.address).toBe("AA:BB:CC:DD");
   });
+
+  it("persists a runtime address when upgrading older approved nodes", () => {
+    const reconciled = reconcileApprovedNodeRule(
+      {
+        id: "peripheral:peripheral-1",
+        label: "Bench Sensor",
+        peripheralId: "peripheral-1",
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      [
+        {
+          id: "stack-001",
+          lastState: "still",
+          lastSeenAt: 0,
+          lastDelta: null,
+          updatedAt: new Date().toISOString(),
+          hardwareId: "hw-1",
+          bootId: "boot-2",
+          firmwareVersion: "0.5.2",
+          machineLabel: "Leg Press",
+          siteId: null,
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          updateTargetVersion: null,
+          updateDetail: null,
+          updateUpdatedAt: null,
+          lastHeartbeatAt: null,
+          lastEventReceivedAt: null,
+          healthStatus: "stale",
+          gatewayConnectionState: "reconnecting",
+          telemetryFreshness: "stale",
+          peripheralId: "peripheral-1",
+          address: "AA:BB:CC:DD",
+          gatewayLastAdvertisementAt: null,
+          gatewayLastConnectedAt: null,
+          gatewayLastDisconnectedAt: null,
+          gatewayLastTelemetryAt: null,
+          gatewayDisconnectReason: null,
+          advertisedName: "GymMotion-f4e9d4",
+          lastRssi: -60,
+          otaStatus: "idle",
+          otaTargetVersion: null,
+          otaProgressBytesSent: null,
+          otaTotalBytes: null,
+          otaLastPhase: null,
+          otaFailureDetail: null,
+          otaLastStatusMessage: null,
+          otaUpdatedAt: null,
+          reconnectAttempt: 0,
+          reconnectAttemptLimit: 20,
+          reconnectRetryExhausted: false,
+        },
+      ],
+    );
+
+    expect(reconciled.id).toBe("known:stack-001");
+    expect(reconciled.address).toBe("AA:BB:CC:DD");
+  });
 });

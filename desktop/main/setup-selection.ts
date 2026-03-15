@@ -115,18 +115,19 @@ export function reconcileApprovedNodeRule(
 
   const nextKnownDeviceId = matchingDevice.id;
   const nextPeripheralId = matchingDevice.peripheralId ?? approvedNode.peripheralId;
+  const nextAddress = matchingDevice.address ?? approvedNode.address;
   const nextLocalName = matchingDevice.advertisedName ?? approvedNode.localName;
 
   return {
     id: nodeRuleId({
       knownDeviceId: nextKnownDeviceId,
       peripheralId: nextPeripheralId,
-      address: approvedNode.address,
+      address: nextAddress,
       localName: nextLocalName,
     }),
     label: matchingDevice.machineLabel ?? approvedNode.label,
     peripheralId: nextPeripheralId,
-    address: approvedNode.address,
+    address: nextAddress,
     localName: nextLocalName,
     knownDeviceId: nextKnownDeviceId,
   };

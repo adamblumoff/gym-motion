@@ -269,6 +269,10 @@ fn scan_reason(
     None
 }
 
+fn allow_approved_identity_fallback(scan_reason: Option<&str>) -> bool {
+    scan_reason == Some("approved-reconnect")
+}
+
 async fn emit_gateway_state(
     writer: &EventWriter,
     adapter: &Adapter,
@@ -1044,6 +1048,13 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
+                        let current_scan_reason = scan_reason(
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            manual_scan_deadline,
+                            Instant::now(),
+                        );
                         if let Some(node) = discovered_node_for_event(
                             &peripheral,
                             &writer,
@@ -1051,7 +1062,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            true,
+                            allow_approved_identity_fallback(current_scan_reason),
                         )
                         .await
                         {
@@ -1063,13 +1074,7 @@ async fn run_session(
                                 gateway: GatewayStatePayload {
                                     adapter_state: normalize_adapter_state(adapter.adapter_state().await.unwrap_or(CentralState::Unknown)),
                                     scan_state: "scanning".to_string(),
-                                    scan_reason: scan_reason(
-                                        &allowed,
-                                        &connected_nodes,
-                                        &reconnect_states,
-                                        manual_scan_deadline,
-                                        Instant::now(),
-                                    ).map(str::to_string),
+                                    scan_reason: current_scan_reason.map(str::to_string),
                                     selected_adapter_id: Some(selected_adapter_id.clone()),
                                     last_advertisement_at: last_advertisement_at.clone(),
                                     issue: None,
@@ -1754,8 +1759,9 @@ fn chrono_like_seconds(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        approved_nodes_pending_connection, classify_discovery_candidate, control_command_frames,
-        scan_reason, should_scan, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
+        allow_approved_identity_fallback, approved_nodes_pending_connection,
+        classify_discovery_candidate, control_command_frames, scan_reason, should_scan,
+        ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::{Duration, Instant}};
@@ -1938,6 +1944,13 @@ mod tests {
             ),
             Some("manual")
         );
+    }
+
+    #[test]
+    fn approved_identity_fallback_only_applies_to_silent_reconnect_scans() {
+        assert!(allow_approved_identity_fallback(Some("approved-reconnect")));
+        assert!(!allow_approved_identity_fallback(Some("manual")));
+        assert!(!allow_approved_identity_fallback(None));
     }
 
     #[test]

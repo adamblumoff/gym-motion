@@ -663,10 +663,11 @@ void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
   BLEAdvertisementData advertisementData;
   advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
   advertisementData.setName(createBleDeviceName());
+  advertisementData.setCompleteServices(BLEUUID(PROVISIONING_SERVICE_UUID));
   advertising->setAdvertisementData(advertisementData);
 
   BLEAdvertisementData scanResponseData;
-  scanResponseData.setCompleteServices(BLEUUID(RUNTIME_SERVICE_UUID));
+  scanResponseData.setPartialServices(BLEUUID(RUNTIME_SERVICE_UUID));
   advertising->setScanResponseData(scanResponseData);
   advertising->setMinPreferred(0x06);
   advertising->setMinPreferred(0x12);
