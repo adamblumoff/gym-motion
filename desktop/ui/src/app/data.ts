@@ -150,6 +150,13 @@ export function buildSignalHistory(
 ) {
   const activeNodes = nodes.slice(0, 5);
   const sortedEvents = [...events].sort((left, right) => left.eventTimestamp - right.eventTimestamp);
+  const eventsByDeviceId = new Map<string, MotionEventSummary[]>();
+
+  for (const event of sortedEvents) {
+    const existing = eventsByDeviceId.get(event.deviceId) ?? [];
+    existing.push(event);
+    eventsByDeviceId.set(event.deviceId, existing);
+  }
 
   type SignalBucket = {
     time: string;
@@ -162,9 +169,8 @@ export function buildSignalHistory(
   type SignalKey = "sensorA" | "sensorB" | "sensorC" | "sensorD" | "sensorE";
 
   return sortedEvents.map((event, index) => {
-    const node = activeNodes.find((item) => item.id === event.deviceId);
     const bucket: SignalBucket = {
-      time: new Date(event.receivedAt).toLocaleTimeString("en-US", {
+      time: new Date(event.eventTimestamp).toLocaleTimeString("en-US", {
         hour12: false,
         hour: "2-digit",
         minute: "2-digit",
@@ -178,7 +184,7 @@ export function buildSignalHistory(
 
     activeNodes.forEach((activeNode, nodeIndex) => {
       const fallbackSignal = activeNode.signalStrength ?? 0;
-      const activeEvents = sortedEvents.filter((item) => item.deviceId === activeNode.id);
+      const activeEvents = eventsByDeviceId.get(activeNode.id) ?? [];
       const eventForNode =
         activeEvents[Math.min(index, Math.max(0, activeEvents.length - 1))] ?? null;
       const level = eventForNode
@@ -187,10 +193,6 @@ export function buildSignalHistory(
       const key = `sensor${String.fromCharCode(65 + nodeIndex)}` as SignalKey;
       bucket[key] = level;
     });
-
-    if (node && activeNodes.length === 1) {
-      bucket.sensorA = node.signalStrength ?? 0;
-    }
 
     return bucket;
   });

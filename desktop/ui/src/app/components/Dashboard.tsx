@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 
 import { buildBluetoothNodes } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
+import { forgetApprovedNodeRules } from '../../lib/setup-rules';
 import { CommandPalette } from './CommandPalette';
 import { DashboardHeader } from './DashboardHeader';
 import { BluetoothNode } from './BluetoothNode';
@@ -35,7 +36,7 @@ export function Dashboard() {
       return;
     }
 
-    const nextRules = setup.approvedNodes.filter((approvedNode) => approvedNode.id !== nodeId);
+    const nextRules = forgetApprovedNodeRules(setup.approvedNodes, nodeId);
     await setAllowedNodes(nextRules);
 
     if (selectedNodeId === nodeId) {

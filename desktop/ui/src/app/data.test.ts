@@ -2,7 +2,12 @@ import { describe, expect, it } from "bun:test";
 
 import type { DesktopSnapshot } from "@core/contracts";
 
-import { buildBluetoothNodes, buildMovementData, calculateAverageSignal } from "./data";
+import {
+  buildBluetoothNodes,
+  buildMovementData,
+  buildSignalHistory,
+  calculateAverageSignal,
+} from "./data";
 
 describe("buildBluetoothNodes", () => {
   it("preserves non-connected gateway states instead of flattening them to offline", () => {
@@ -114,5 +119,99 @@ describe("calculateAverageSignal", () => {
         sensorE: 0,
       }),
     ).toBe(80);
+  });
+});
+
+describe("buildSignalHistory", () => {
+  it("uses event time for chart labels", () => {
+    const eventTimestamp = Date.parse("2026-03-14T09:15:00.000Z");
+    const expectedTime = new Date(eventTimestamp).toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const history = buildSignalHistory(
+      [
+        {
+          id: 1,
+          deviceId: "stack-001",
+          sequence: 1,
+          state: "moving",
+          delta: 15,
+          eventTimestamp,
+          receivedAt: new Date("2026-03-14T14:45:00.000Z").toISOString(),
+          bootId: "boot-1",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-1",
+        },
+      ],
+      [
+        {
+          id: "stack-001",
+          name: "Leg Press",
+          macAddress: "peripheral-1",
+          isConnected: true,
+          connectionState: "connected",
+          healthStatus: "online",
+          telemetryFreshness: "fresh",
+          isMoving: true,
+          signalStrength: 60,
+          batteryLevel: null,
+          logs: [],
+        },
+      ],
+    );
+
+    expect(history[0]?.time).toBe(expectedTime);
+  });
+
+  it("keeps per-event signal levels for a single active node", () => {
+    const history = buildSignalHistory(
+      [
+        {
+          id: 1,
+          deviceId: "stack-001",
+          sequence: 1,
+          state: "moving",
+          delta: 10,
+          eventTimestamp: Date.parse("2026-03-14T09:15:00.000Z"),
+          receivedAt: new Date("2026-03-14T09:15:01.000Z").toISOString(),
+          bootId: "boot-1",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-1",
+        },
+        {
+          id: 2,
+          deviceId: "stack-001",
+          sequence: 2,
+          state: "moving",
+          delta: 40,
+          eventTimestamp: Date.parse("2026-03-14T09:16:00.000Z"),
+          receivedAt: new Date("2026-03-14T09:16:01.000Z").toISOString(),
+          bootId: "boot-1",
+          firmwareVersion: "0.5.1",
+          hardwareId: "hw-1",
+        },
+      ],
+      [
+        {
+          id: "stack-001",
+          name: "Leg Press",
+          macAddress: "peripheral-1",
+          isConnected: true,
+          connectionState: "connected",
+          healthStatus: "online",
+          telemetryFreshness: "fresh",
+          isMoving: true,
+          signalStrength: 80,
+          batteryLevel: null,
+          logs: [],
+        },
+      ],
+    );
+
+    expect(history[0]?.sensorA).toBe(35);
+    expect(history[1]?.sensorA).toBe(65);
   });
 });

@@ -50,3 +50,15 @@ export function buildApprovedNodeRules(
 
   return nextRules;
 }
+
+export function forgetApprovedNodeRules(
+  approvedNodes: ApprovedNodeRule[],
+  runtimeDeviceId: string,
+) {
+  return approvedNodes.filter(
+    (rule) =>
+      rule.id !== runtimeDeviceId &&
+      rule.knownDeviceId !== runtimeDeviceId &&
+      rule.peripheralId !== runtimeDeviceId,
+  );
+}

@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 
 import type { DesktopSetupState } from "@core/contracts";
 
-import { buildApprovedNodeRules, resolveVisibleNodes } from "./setup-rules";
+import {
+  buildApprovedNodeRules,
+  forgetApprovedNodeRules,
+  resolveVisibleNodes,
+} from "./setup-rules";
 
 function createSetupState(): DesktopSetupState {
   return {
@@ -61,5 +65,11 @@ describe("setup-rules", () => {
         knownDeviceId: "stack-001",
       },
     ]);
+  });
+
+  it("forgets approved nodes by runtime device id", () => {
+    const setup = createSetupState();
+
+    expect(forgetApprovedNodeRules(setup.approvedNodes, "stack-001")).toEqual([]);
   });
 });
