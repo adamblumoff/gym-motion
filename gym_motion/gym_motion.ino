@@ -1026,10 +1026,10 @@ void handleProvisioningCommand(const String& payload) {
 
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
-  runtimeLeaseRequired = true;
   lastRuntimeControlAt = millis();
 
   if (type == "app-session-lease") {
+    runtimeLeaseRequired = true;
     const String sessionId = extractJsonString(payload, "sessionId");
     const unsigned long expiresInMs = extractJsonUnsignedLong(
       payload,

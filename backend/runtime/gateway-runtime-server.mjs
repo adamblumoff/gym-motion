@@ -461,6 +461,7 @@ export function createGatewayRuntimeServer({
     const previous = runtimeByDeviceId.get(deviceId) ?? {
       gatewayConnectionState: "discovered",
       peripheralId: patch.peripheralId ?? null,
+      address: patch.address ?? null,
       gatewayLastAdvertisementAt: null,
       gatewayLastConnectedAt: null,
       gatewayLastDisconnectedAt: null,
@@ -846,6 +847,7 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: nextConnectionState,
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
@@ -913,6 +915,7 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: nextConnectionState,
         gatewayLastAdvertisementAt: nowIso(),
         advertisedName: localName ?? null,
@@ -975,6 +978,7 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: "connected",
         gatewayLastConnectedAt: nowIso(),
         gatewayDisconnectReason: null,
@@ -1010,6 +1014,11 @@ export function createGatewayRuntimeServer({
           peripheralInfo.peripheralId ??
           runtimeByDeviceId.get(payload.deviceId)?.peripheralId ??
           knownNodesByDeviceId.get(payload.deviceId)?.peripheralId ??
+          null,
+        address:
+          peripheralInfo.address ??
+          runtimeByDeviceId.get(payload.deviceId)?.address ??
+          knownNodesByDeviceId.get(payload.deviceId)?.lastKnownAddress ??
           null,
         gatewayLastTelemetryAt: telemetryAt,
         gatewayLastAdvertisementAt:
@@ -1094,6 +1103,7 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",

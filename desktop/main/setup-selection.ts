@@ -84,6 +84,14 @@ export function findMatchingGatewayDeviceForApprovedNode(
     return byPeripheralId;
   }
 
+  const byAddress = approvedNode.address
+    ? devices.filter((device) => exactIdentityMatch(approvedNode.address, device.address))
+    : [];
+
+  if (byAddress.length === 1) {
+    return byAddress[0];
+  }
+
   const byAdvertisedName = approvedNode.localName
     ? devices.filter((device) => device.advertisedName === approvedNode.localName)
     : [];

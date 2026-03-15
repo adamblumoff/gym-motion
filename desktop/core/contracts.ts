@@ -194,6 +194,7 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayConnectionState: GatewayConnectionState;
   telemetryFreshness: TelemetryFreshness;
   peripheralId: string | null;
+  address?: string | null;
   gatewayLastAdvertisementAt: string | null;
   gatewayLastConnectedAt: string | null;
   gatewayLastDisconnectedAt: string | null;

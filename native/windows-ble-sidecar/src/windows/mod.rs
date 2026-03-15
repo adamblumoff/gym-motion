@@ -303,6 +303,7 @@ async fn sync_scan_state(
     connected_nodes: &HashMap<String, DiscoveredNode>,
     reconnect_states: &HashMap<String, ApprovedReconnectState>,
     scanning: &mut bool,
+    current_scan_reason: &mut Option<String>,
     manual_scan_deadline: Option<Instant>,
     last_advertisement_at: &Option<String>,
 ) -> Result<()> {
@@ -317,6 +318,7 @@ async fn sync_scan_state(
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
         *scanning = true;
+        *current_scan_reason = next_scan_reason.map(str::to_string);
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -348,9 +350,27 @@ async fn sync_scan_state(
         return Ok(());
     }
 
+    if should_scan_now && *scanning {
+        let next_scan_reason_string = next_scan_reason.map(str::to_string);
+        if *current_scan_reason != next_scan_reason_string {
+            *current_scan_reason = next_scan_reason_string;
+            emit_gateway_state(
+                writer,
+                adapter,
+                selected_adapter_id,
+                "scanning",
+                next_scan_reason,
+                last_advertisement_at,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
     if !should_scan_now && *scanning {
         let _ = adapter.stop_scan().await;
         *scanning = false;
+        *current_scan_reason = None;
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -764,6 +784,7 @@ async fn run_session(
     let mut reconnect_states = HashMap::<String, ApprovedReconnectState>::new();
     let mut last_advertisement_at = None;
     let mut scanning = false;
+    let mut current_scan_reason = None;
     let mut manual_scan_deadline = None;
     let mut reconnect_diagnostic_tick =
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
@@ -788,6 +809,7 @@ async fn run_session(
             &connected_nodes,
             &reconnect_states,
             &mut scanning,
+            &mut current_scan_reason,
             manual_scan_deadline,
             &last_advertisement_at,
         )
@@ -853,6 +875,7 @@ async fn run_session(
                             &connected_nodes,
                             &reconnect_states,
                             &mut scanning,
+                            &mut current_scan_reason,
                             manual_scan_deadline,
                             &last_advertisement_at,
                         )
@@ -870,6 +893,7 @@ async fn run_session(
                     &connected_nodes,
                     &reconnect_states,
                     &mut scanning,
+                    &mut current_scan_reason,
                     manual_scan_deadline,
                     &last_advertisement_at,
                 )
@@ -892,6 +916,7 @@ async fn run_session(
                     &connected_nodes,
                     &reconnect_states,
                     &mut scanning,
+                    &mut current_scan_reason,
                     manual_scan_deadline,
                     &last_advertisement_at,
                 )
@@ -1178,6 +1203,7 @@ async fn run_session(
                                 &connected_nodes,
                                 &reconnect_states,
                                 &mut scanning,
+                                &mut current_scan_reason,
                                 manual_scan_deadline,
                                 &last_advertisement_at,
                             )
@@ -1250,6 +1276,7 @@ async fn run_session(
                                 &connected_nodes,
                                 &reconnect_states,
                                 &mut scanning,
+                                &mut current_scan_reason,
                                 manual_scan_deadline,
                                 &last_advertisement_at,
                             )
@@ -1693,7 +1720,7 @@ mod tests {
         scan_reason, should_scan, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
-    use std::{collections::HashMap, time::Instant};
+    use std::{collections::HashMap, time::{Duration, Instant}};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -1837,6 +1864,29 @@ mod tests {
         assert_eq!(
             scan_reason(&rules, &HashMap::new(), &HashMap::new(), None, Instant::now()),
             Some("approved-reconnect")
+        );
+    }
+
+    #[test]
+    fn manual_scan_reason_overrides_silent_reconnect_when_operator_starts_scan() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(
+                &rules,
+                &HashMap::new(),
+                &HashMap::new(),
+                Some(Instant::now() + Duration::from_secs(5)),
+                Instant::now(),
+            ),
+            Some("manual")
         );
     }
 
