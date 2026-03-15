@@ -15,6 +15,14 @@ import {
   mapMotionEventRow,
 } from "./shared";
 
+export function shouldApplyBackfillMotionState(
+  currentLastSeenAt: number,
+  batchLastSeenAt: number,
+  hasMotionRecord: boolean,
+) {
+  return hasMotionRecord && batchLastSeenAt >= currentLastSeenAt;
+}
+
 export async function getDeviceSyncState(deviceId: string): Promise<DeviceSyncStateSummary> {
   const result = await getDb().query<DeviceSyncStateRow>(
     `select
@@ -73,13 +81,18 @@ export async function recordBackfillBatch(
          update_status,
          last_event_received_at
        )
-       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', null)
        on conflict (id) do update
-       set last_state = case when $2::text is null then devices.last_state else $2::text end,
+       set last_state = case
+             when $2::text is null then devices.last_state
+             when $3 >= devices.last_seen_at then $2::text
+             else devices.last_state
+           end,
            last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
            last_delta = case
              when $2::text is null then devices.last_delta
-             else coalesce($4::int, devices.last_delta)
+             when $3 >= devices.last_seen_at then coalesce($4::int, devices.last_delta)
+             else devices.last_delta
            end,
            updated_at = now(),
            hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
@@ -89,7 +102,7 @@ export async function recordBackfillBatch(
              when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
              else devices.provisioning_state
            end,
-           last_event_received_at = now()
+           last_event_received_at = devices.last_event_received_at
        returning
          ${DEVICE_SELECT_COLUMNS}`,
       [
