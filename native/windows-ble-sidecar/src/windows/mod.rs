@@ -1048,7 +1048,7 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
-                        let current_scan_reason = scan_reason(
+                        let discovery_scan_reason = scan_reason(
                             &allowed,
                             &connected_nodes,
                             &reconnect_states,
@@ -1062,7 +1062,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            allow_approved_identity_fallback(current_scan_reason),
+                            allow_approved_identity_fallback(discovery_scan_reason),
                         )
                         .await
                         {
@@ -1074,7 +1074,7 @@ async fn run_session(
                                 gateway: GatewayStatePayload {
                                     adapter_state: normalize_adapter_state(adapter.adapter_state().await.unwrap_or(CentralState::Unknown)),
                                     scan_state: "scanning".to_string(),
-                                    scan_reason: current_scan_reason.map(str::to_string),
+                                    scan_reason: discovery_scan_reason.map(str::to_string),
                                     selected_adapter_id: Some(selected_adapter_id.clone()),
                                     last_advertisement_at: last_advertisement_at.clone(),
                                     issue: None,
@@ -1204,6 +1204,13 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
+                        let lifecycle_scan_reason = scan_reason(
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            manual_scan_deadline,
+                            Instant::now(),
+                        );
                         if let Some(node) = discovered_node_for_event(
                             &peripheral,
                             &writer,
@@ -1211,7 +1218,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            false,
+                            allow_approved_identity_fallback(lifecycle_scan_reason),
                         )
                         .await
                         {
@@ -1254,6 +1261,13 @@ async fn run_session(
                             continue;
                         };
                         let allowed = allowed_nodes.read().await.clone();
+                        let lifecycle_scan_reason = scan_reason(
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            manual_scan_deadline,
+                            Instant::now(),
+                        );
                         if let Some(node) = discovered_node_for_event(
                             &peripheral,
                             &writer,
@@ -1261,7 +1275,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
-                            false,
+                            allow_approved_identity_fallback(lifecycle_scan_reason),
                         )
                         .await
                         {
