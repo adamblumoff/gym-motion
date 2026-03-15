@@ -397,7 +397,11 @@ export function createManagedGatewayRuntime(
         }),
       );
 
-      if (!byId.has(approvedNode.id)) {
+      const alreadyPresent = [...byId.values()].some((node) =>
+        matchesApprovedNodeRule(approvedNode, node),
+      );
+
+      if (!alreadyPresent) {
         byId.set(approvedNode.id, {
           id: approvedNode.id,
           label:

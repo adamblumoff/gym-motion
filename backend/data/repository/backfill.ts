@@ -56,6 +56,8 @@ export async function recordBackfillBatch(
     const lastMotionRecord = [...input.records]
       .reverse()
       .find((record) => record.kind === "motion");
+    const lastState = lastMotionRecord?.state ?? null;
+    const lastDelta = lastMotionRecord?.delta ?? null;
 
     await client.query<DeviceRow>(
       `insert into devices (
@@ -71,11 +73,14 @@ export async function recordBackfillBatch(
          update_status,
          last_event_received_at
        )
-       values ($1, $2, $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
        on conflict (id) do update
-       set last_state = case when $2 is null then devices.last_state else excluded.last_state end,
+       set last_state = case when $2::text is null then devices.last_state else $2::text end,
            last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
-           last_delta = coalesce(excluded.last_delta, devices.last_delta),
+           last_delta = case
+             when $2::text is null then devices.last_delta
+             else coalesce($4::int, devices.last_delta)
+           end,
            updated_at = now(),
            hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
            boot_id = coalesce(excluded.boot_id, devices.boot_id),
@@ -89,9 +94,9 @@ export async function recordBackfillBatch(
          ${DEVICE_SELECT_COLUMNS}`,
       [
         input.deviceId,
-        lastMotionRecord?.state ?? "still",
+        lastState,
         maxTimestamp,
-        lastMotionRecord?.delta ?? null,
+        lastDelta,
         lastMotionRecord?.hardwareId ?? input.records.at(-1)?.hardwareId ?? null,
         input.bootId ?? input.records.at(-1)?.bootId ?? null,
         input.records.at(-1)?.firmwareVersion ?? "unknown",
@@ -115,7 +120,7 @@ export async function recordBackfillBatch(
              hardware_id
            )
            values ($1, $2, $3, $4, $5, $6, $7, $8)
-           on conflict (device_id, sequence) do nothing
+           on conflict (device_id, sequence) where sequence is not null do nothing
            returning
              id,
              device_id,
@@ -159,7 +164,7 @@ export async function recordBackfillBatch(
            metadata
          )
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         on conflict (device_id, sequence) do nothing
+         on conflict (device_id, sequence) where sequence is not null do nothing
          returning
            id,
            device_id,
