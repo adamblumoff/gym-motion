@@ -10,7 +10,7 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
-const char* FIRMWARE_VERSION = "0.5.1";
+const char* FIRMWARE_VERSION = "0.5.2";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREF_DEVICE_ID = "device_id";
@@ -39,6 +39,7 @@ const int MOTION_THRESHOLD = 70;
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
+const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
@@ -76,13 +77,19 @@ int lastReportedDelta = 0;
 unsigned long lastTelemetryAt = 0;
 bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
+bool runtimeAppSessionConnected = false;
+bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
+unsigned long lastAppSessionLeaseAt = 0;
+unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
 unsigned long ackedHistorySequence = 0;
 unsigned long lastJournaledSequence = 0;
 unsigned long historyDroppedCount = 0;
 bool historyOverflowed = false;
+uint16_t runtimeBleConnId = 0;
+String runtimeAppSessionId;
 
 struct OtaTransferState {
   bool active = false;
@@ -617,6 +624,96 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
+void resetRuntimeAppSessionState() {
+  runtimeAppSessionConnected = false;
+  runtimeAppSessionId = "";
+  lastAppSessionLeaseAt = 0;
+  appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
+}
+
+void markRuntimeAppSessionOnline(
+  const String& sessionId,
+  unsigned long expiresInMs,
+  unsigned long timestamp
+) {
+  const unsigned long nextTimeout =
+    expiresInMs > 0 ? expiresInMs : APP_SESSION_LEASE_DEFAULT_MS;
+  const bool sessionChanged =
+    !runtimeAppSessionConnected || runtimeAppSessionId != sessionId;
+
+  runtimeAppSessionConnected = true;
+  runtimeAppSessionId = sessionId;
+  lastAppSessionLeaseAt = timestamp;
+  appSessionLeaseTimeoutMs = nextTimeout;
+
+  if (!sessionChanged) {
+    return;
+  }
+
+  journalNodeLog(
+    "info",
+    "runtime.app_session.online",
+    "Windows app session lease is active.",
+    timestamp
+  );
+}
+
+void noteRuntimeAppSessionExpired(unsigned long timestamp) {
+  const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
+  resetRuntimeAppSessionState();
+
+  if (!hadSession) {
+    return;
+  }
+
+  journalNodeLog(
+    "warn",
+    "runtime.app_session.expired",
+    "Windows app session lease expired; resetting BLE advertising.",
+    timestamp
+  );
+}
+
+void noteRuntimeTransportDisconnected(unsigned long timestamp) {
+  const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
+  resetRuntimeAppSessionState();
+  runtimeBleConnIdKnown = false;
+  runtimeBleConnId = 0;
+
+  if (!hadSession) {
+    return;
+  }
+
+  journalNodeLog(
+    "warn",
+    "runtime.app_session.offline",
+    "BLE runtime transport disconnected from the Windows app.",
+    timestamp
+  );
+}
+
+void enforceRuntimeAppSessionLease() {
+  if (!runtimeBleConnected || !runtimeAppSessionConnected || lastAppSessionLeaseAt == 0) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (now - lastAppSessionLeaseAt < appSessionLeaseTimeoutMs) {
+    return;
+  }
+
+  noteRuntimeAppSessionExpired(now);
+
+  if (bleServer != nullptr && runtimeBleConnIdKnown) {
+    bleServer->disconnect(runtimeBleConnId);
+    return;
+  }
+
+  if (bleServer != nullptr) {
+    bleServer->getAdvertising()->start();
+  }
+}
+
 void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {
   if (!runtimeBleConnected) {
     return;
@@ -787,6 +884,28 @@ void handleProvisioningCommand(const String& payload) {
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
 
+  if (type == "app-session-lease") {
+    const String sessionId = extractJsonString(payload, "sessionId");
+    const unsigned long expiresInMs = extractJsonUnsignedLong(
+      payload,
+      "expiresInMs",
+      APP_SESSION_LEASE_DEFAULT_MS
+    );
+
+    if (sessionId.length() == 0) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.invalid",
+        "Ignored app session lease without a session id.",
+        millis()
+      );
+      return;
+    }
+
+    markRuntimeAppSessionOnline(sessionId, expiresInMs, millis());
+    return;
+  }
+
   if (type == "sync-now") {
     sendTelemetry(lastReportedDelta, millis(), true);
     return;
@@ -823,15 +942,28 @@ void handleRuntimeControl(const String& payload) {
 
 class GymServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
+    (void)server;
+  }
+
+  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     provisioningBleConnected = true;
     runtimeBleConnected = true;
+    runtimeBleConnIdKnown = param != nullptr;
+    runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
+    resetRuntimeAppSessionState();
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
   }
 
   void onDisconnect(BLEServer* server) override {
+    (void)server;
+  }
+
+  void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
+    (void)param;
     provisioningBleConnected = false;
     runtimeBleConnected = false;
+    noteRuntimeTransportDisconnected(millis());
     server->getAdvertising()->start();
   }
 };
@@ -1048,6 +1180,7 @@ void setup() {
 
 void loop() {
   finishPendingRestart();
+  enforceRuntimeAppSessionLease();
   updateMotionState();
   delay(LOOP_DELAY_MS);
 }

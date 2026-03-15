@@ -39,6 +39,8 @@ const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
+const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
+const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -472,6 +474,7 @@ async fn run_session(
     mut shutdown: watch::Receiver<bool>,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
 ) -> Result<()> {
+    let app_session_id = Uuid::new_v4().to_string();
     let adapter_state = normalize_adapter_state(
         adapter
             .adapter_state()
@@ -614,6 +617,7 @@ async fn run_session(
                                     let allowed_nodes_clone = allowed_nodes.clone();
                                     let active_connections_clone = active_connections.clone();
                                     let known_device_ids_clone = known_device_ids.clone();
+                                    let app_session_id_clone = app_session_id.clone();
                                     tokio::spawn(async move {
                                         let result = connect_and_stream(
                                             peripheral,
@@ -622,6 +626,7 @@ async fn run_session(
                                             config_clone,
                                             allowed_nodes_clone,
                                             known_device_ids_clone,
+                                            app_session_id_clone,
                                         )
                                         .await;
                                         match result {
@@ -775,6 +780,7 @@ async fn connect_and_stream(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
+    app_session_id: String,
 ) -> Result<Option<String>> {
     if !is_approved(&node, &allowed_nodes.read().await) {
         return Ok(None);
@@ -812,6 +818,7 @@ async fn connect_and_stream(
         r#"{"type":"sync-now"}"#,
     )
     .await?;
+    send_app_session_lease(&peripheral, &control_characteristic, &app_session_id).await?;
     writer
         .send(&Event::NodeConnectionState {
             node: node.clone(),
@@ -821,6 +828,10 @@ async fn connect_and_stream(
         .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut connected_identity_confirmed = node.known_device_id.is_some();
+    let mut lease_heartbeat =
+        tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
+    lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    lease_heartbeat.tick().await;
 
     loop {
         tokio::select! {
@@ -877,6 +888,10 @@ async fn connect_and_stream(
                     return Ok(Some(format!("BLE transport ended for {}.", node.label)));
                 }
             }
+            _ = lease_heartbeat.tick() => {
+                send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
+                    .await?;
+            }
         }
     }
 
@@ -886,6 +901,20 @@ async fn connect_and_stream(
 
     sleep(Duration::from_millis(100)).await;
     Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
+}
+
+async fn send_app_session_lease(
+    peripheral: &Peripheral,
+    characteristic: &btleplug::api::Characteristic,
+    session_id: &str,
+) -> Result<()> {
+    let payload = json!({
+        "type": "app-session-lease",
+        "sessionId": session_id,
+        "expiresInMs": APP_SESSION_LEASE_TIMEOUT_MS,
+    })
+    .to_string();
+    write_chunked_json_command(peripheral, characteristic, &payload).await
 }
 
 async fn write_chunked_json_command(
@@ -1061,7 +1090,8 @@ fn chrono_like_seconds(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::control_command_frames;
+    use super::{control_command_frames, APP_SESSION_LEASE_TIMEOUT_MS};
+    use serde_json::Value;
 
     #[test]
     fn frames_runtime_control_commands_for_firmware_parser() {
@@ -1072,6 +1102,32 @@ mod tests {
             frames.get(1).map(Vec::as_slice),
             Some(&br#"{"type":"sync-now"}"#[..])
         );
+        assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn frames_app_session_lease_commands_for_firmware_parser() {
+        let payload = format!(
+            r#"{{"type":"app-session-lease","sessionId":"session-1","expiresInMs":{}}}"#,
+            APP_SESSION_LEASE_TIMEOUT_MS
+        );
+        let frames = control_command_frames(&payload);
+
+        assert_eq!(
+            frames.first().map(Vec::as_slice),
+            Some(format!("BEGIN:{}", payload.len()).as_bytes())
+        );
+
+        let body = frames[1..frames.len() - 1]
+            .iter()
+            .flat_map(|frame| frame.iter().copied())
+            .collect::<Vec<_>>();
+        let decoded: Value =
+            serde_json::from_slice(&body).expect("lease payload should decode as JSON");
+
+        assert_eq!(decoded["type"], "app-session-lease");
+        assert_eq!(decoded["sessionId"], "session-1");
+        assert_eq!(decoded["expiresInMs"], APP_SESSION_LEASE_TIMEOUT_MS);
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
     }
 
