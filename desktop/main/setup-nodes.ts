@@ -19,7 +19,12 @@ export function matchingApprovedSetupNodeId(
     if (
       (approvedNode.knownDeviceId && node.knownDeviceId === approvedNode.knownDeviceId) ||
       (approvedNode.peripheralId && node.peripheralId === approvedNode.peripheralId) ||
-      addressIdentityMatch(approvedNode.address, node.address)
+      addressIdentityMatch(approvedNode.address, node.address) ||
+      (!approvedNode.knownDeviceId &&
+        !approvedNode.peripheralId &&
+        !approvedNode.address &&
+        approvedNode.localName &&
+        node.localName === approvedNode.localName)
     ) {
       return node.id;
     }

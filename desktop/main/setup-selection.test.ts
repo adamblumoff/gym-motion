@@ -45,6 +45,14 @@ describe("setup selection helpers", () => {
         localName: null,
       }),
     ).toBe(true);
+    expect(
+      matchesApprovedNodeRule(rule, {
+        knownDeviceId: null,
+        peripheralId: null,
+        address: "00:11:22:33:44:55".toLowerCase(),
+        localName: null,
+      }),
+    ).toBe(true);
   });
 
   it("prefers a stable runtime device match for approved reboot recovery", () => {

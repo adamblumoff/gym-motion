@@ -54,7 +54,7 @@ export function matchesApprovedNodeRule(
   return Boolean(
     (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
       (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
-      (rule.address && identity.address === rule.address) ||
+      addressIdentityMatch(rule.address, identity.address) ||
       (rule.localName && identity.localName === rule.localName),
   );
 }
