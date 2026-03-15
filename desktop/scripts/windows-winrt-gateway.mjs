@@ -349,7 +349,12 @@ async function forwardTelemetry(payload, node = {}) {
 function handleNodeDiscovered(node) {
   const peripheralInfo = describeNode(node);
 
-  runtimeServer.noteDiscovery(peripheralInfo);
+  runtimeServer.noteDiscovery({
+    ...peripheralInfo,
+    reconnectAttempt: node.reconnect?.attempt ?? null,
+    reconnectAttemptLimit: node.reconnect?.attempt_limit ?? null,
+    reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
+  });
   queueNodeLog(peripheralInfo, {
     code: "node.discovered",
     message: `Gateway discovered ${node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node"}.`,
@@ -371,13 +376,21 @@ function handleNodeConnectionState(event) {
     event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
   if (connectionState === "connecting") {
-    const transition = runtimeServer.noteConnecting(peripheralInfo);
+    const transition = runtimeServer.noteConnecting({
+      ...peripheralInfo,
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+    });
     queueNodeLog(peripheralInfo, {
       code: "node.connecting",
       message: `Gateway is connecting to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
         lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
@@ -389,13 +402,19 @@ function handleNodeConnectionState(event) {
   }
 
   if (connectionState === "connected") {
-    const transition = runtimeServer.noteConnected(peripheralInfo);
+    const transition = runtimeServer.noteConnected({
+      ...peripheralInfo,
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+    });
     queueNodeLog(peripheralInfo, {
       code: "node.connected",
       message: `Gateway connected to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? "connected",
         lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
@@ -409,6 +428,9 @@ function handleNodeConnectionState(event) {
   const transition = runtimeServer.noteDisconnected({
     ...peripheralInfo,
     reason: event.reason ?? "ble-disconnected",
+    reconnectAttempt: event.reconnect?.attempt ?? null,
+    reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+    reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
   });
   if (!transition?.applied) {
     queueNodeLog(peripheralInfo, {
@@ -419,6 +441,9 @@ function handleNodeConnectionState(event) {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
         reason: event.reason ?? "ble-disconnected",
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
         lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
@@ -441,6 +466,9 @@ function handleNodeConnectionState(event) {
       peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
       address: node.address ?? null,
       reason: event.reason ?? "ble-disconnected",
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
       transportStateBefore: transition.before?.gatewayConnectionState ?? null,
       transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
       lastTelemetryAt: transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,

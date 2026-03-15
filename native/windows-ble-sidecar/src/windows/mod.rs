@@ -27,7 +27,7 @@ use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
         AdapterSummary, ApprovedNodeRule, Command, DiscoveredNode, Event, GatewayStatePayload,
-        TelemetryPayload,
+        ReconnectStatus, TelemetryPayload,
     },
 };
 
@@ -42,6 +42,7 @@ const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
+const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -114,20 +115,48 @@ enum SessionCommand {
     },
 }
 
+#[derive(Clone, Debug, Default)]
+struct ApprovedReconnectState {
+    attempt: u32,
+    retry_exhausted: bool,
+}
+
+fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> Option<String> {
+    rules.iter()
+        .find(|rule| rule_matches_node(rule, node))
+        .map(|rule| rule.id.clone())
+}
+
+fn reconnect_status_for_rule(
+    rule_id: Option<&str>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+) -> Option<ReconnectStatus> {
+    rule_id.map(|id| {
+        let state = reconnect_states.get(id).cloned().unwrap_or_default();
+        ReconnectStatus {
+            attempt: state.attempt,
+            attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+            retry_exhausted: state.retry_exhausted,
+        }
+    })
+}
+
 fn approved_nodes_pending_connection(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
 ) -> bool {
-    !rules.is_empty() && !all_approved_nodes_connected(rules, connected_nodes)
+    !rules.is_empty() && !all_approved_nodes_connected(rules, connected_nodes, reconnect_states)
 }
 
 fn should_scan(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
     manual_scan_deadline: Option<Instant>,
     now: Instant,
 ) -> bool {
-    approved_nodes_pending_connection(rules, connected_nodes)
+    approved_nodes_pending_connection(rules, connected_nodes, reconnect_states)
         || manual_scan_deadline
             .map(|deadline| deadline > now)
             .unwrap_or(false)
@@ -136,6 +165,7 @@ fn should_scan(
 fn scan_reason(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
     manual_scan_deadline: Option<Instant>,
     now: Instant,
 ) -> Option<&'static str> {
@@ -146,7 +176,7 @@ fn scan_reason(
         return Some("manual");
     }
 
-    if approved_nodes_pending_connection(rules, connected_nodes) {
+    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
         return Some("approved-reconnect");
     }
 
@@ -188,14 +218,18 @@ async fn sync_scan_state(
     selected_adapter_id: &str,
     allowed: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
     scanning: &mut bool,
     manual_scan_deadline: Option<Instant>,
     last_advertisement_at: &Option<String>,
 ) -> Result<()> {
     let now = Instant::now();
-    let should_scan_now = should_scan(allowed, connected_nodes, manual_scan_deadline, now);
-    let approved_pending = approved_nodes_pending_connection(allowed, connected_nodes);
-    let next_scan_reason = scan_reason(allowed, connected_nodes, manual_scan_deadline, now);
+    let should_scan_now =
+        should_scan(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
+    let approved_pending =
+        approved_nodes_pending_connection(allowed, connected_nodes, reconnect_states);
+    let next_scan_reason =
+        scan_reason(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
@@ -296,9 +330,18 @@ fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
 fn all_approved_nodes_connected(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
 ) -> bool {
     !rules.is_empty()
         && rules.iter().all(|rule| {
+            if reconnect_states
+                .get(&rule.id)
+                .map(|state| state.retry_exhausted)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+
             connected_nodes
                 .values()
                 .any(|node| rule_matches_node(rule, node))
@@ -564,6 +607,7 @@ async fn run_session(
     let active_connections = Arc::new(Mutex::new(HashSet::<String>::new()));
     let known_device_ids = Arc::new(RwLock::new(HashMap::<String, String>::new()));
     let mut connected_nodes = HashMap::<String, DiscoveredNode>::new();
+    let mut reconnect_states = HashMap::<String, ApprovedReconnectState>::new();
     let mut last_advertisement_at = None;
     let mut scanning = false;
     let mut manual_scan_deadline = None;
@@ -580,6 +624,7 @@ async fn run_session(
             &selected_adapter_id,
             &allowed,
             &connected_nodes,
+            &reconnect_states,
             &mut scanning,
             manual_scan_deadline,
             &last_advertisement_at,
@@ -607,8 +652,22 @@ async fn run_session(
                     SessionCommand::ConnectionEnded { node, reason } => {
                         let key = node_key(&node);
                         connected_nodes.remove(&key);
-                        manual_scan_deadline =
-                            Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                        let allowed = allowed_nodes.read().await.clone();
+                        let reconnect = approved_rule_id_for_node(&node, &allowed).map(|rule_id| {
+                            let state = reconnect_states.entry(rule_id).or_default();
+                            if state.attempt >= RECONNECT_ATTEMPT_LIMIT {
+                                state.retry_exhausted = true;
+                            }
+                            ReconnectStatus {
+                                attempt: state.attempt,
+                                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                                retry_exhausted: state.retry_exhausted,
+                            }
+                        });
+                        if reconnect.as_ref().map(|state| !state.retry_exhausted).unwrap_or(true) {
+                            manual_scan_deadline =
+                                Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                        }
                         writer.send(&Event::Log {
                             level: "info".to_string(),
                             message: format!(
@@ -619,13 +678,28 @@ async fn run_session(
                                 "peripheralId": node.peripheral_id,
                                 "knownDeviceId": node.known_device_id,
                                 "reason": reason,
+                                "reconnect": reconnect,
                             })),
                         }).await?;
                         writer.send(&Event::NodeConnectionState {
                             node,
                             gateway_connection_state: "disconnected".to_string(),
                             reason: Some(reason),
+                            reconnect,
                         }).await?;
+                        sync_scan_state(
+                            &adapter,
+                            &writer,
+                            &selected_adapter_id,
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            &mut scanning,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                        )
+                        .await?;
+                        continue;
                     }
                 }
 
@@ -636,6 +710,7 @@ async fn run_session(
                     &selected_adapter_id,
                     &allowed,
                     &connected_nodes,
+                    &reconnect_states,
                     &mut scanning,
                     manual_scan_deadline,
                     &last_advertisement_at,
@@ -657,6 +732,7 @@ async fn run_session(
                     &selected_adapter_id,
                     &allowed,
                     &connected_nodes,
+                    &reconnect_states,
                     &mut scanning,
                     manual_scan_deadline,
                     &last_advertisement_at,
@@ -665,7 +741,7 @@ async fn run_session(
             }
             _ = reconnect_diagnostic_tick.tick() => {
                 let allowed = allowed_nodes.read().await.clone();
-                if approved_nodes_pending_connection(&allowed, &connected_nodes) {
+                if approved_nodes_pending_connection(&allowed, &connected_nodes, &reconnect_states) {
                     writer.send(&Event::Log {
                         level: "info".to_string(),
                         message: "Approved-node reconnect scan still running; waiting for rediscovery.".to_string(),
@@ -675,6 +751,7 @@ async fn run_session(
                             "scanReason": scan_reason(
                                 &allowed,
                                 &connected_nodes,
+                                &reconnect_states,
                                 manual_scan_deadline,
                                 Instant::now(),
                             ),
@@ -698,6 +775,7 @@ async fn run_session(
                                     scan_reason(
                                         &allowed_nodes.read().await,
                                         &connected_nodes,
+                                        &reconnect_states,
                                         manual_scan_deadline,
                                         Instant::now(),
                                     )
@@ -741,6 +819,7 @@ async fn run_session(
                                     scan_reason: scan_reason(
                                         &allowed,
                                         &connected_nodes,
+                                        &reconnect_states,
                                         manual_scan_deadline,
                                         Instant::now(),
                                     ).map(str::to_string),
@@ -751,6 +830,14 @@ async fn run_session(
                             }).await?;
 
                             if is_approved(&node, &allowed) {
+                                let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) else {
+                                    continue;
+                                };
+                                let reconnect_state =
+                                    reconnect_states.get(&rule_id).cloned().unwrap_or_default();
+                                if reconnect_state.retry_exhausted {
+                                    continue;
+                                }
                                 writer.send(&Event::Log {
                                     level: "info".to_string(),
                                     message: format!(
@@ -761,13 +848,33 @@ async fn run_session(
                                         "peripheralId": node.peripheral_id,
                                         "knownDeviceId": node.known_device_id,
                                         "address": node.address,
+                                        "reconnectAttempt": reconnect_state.attempt + 1,
+                                        "reconnectAttemptLimit": RECONNECT_ATTEMPT_LIMIT,
                                     })),
                                 }).await?;
                                 let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
                                 let mut active = active_connections.lock().await;
                                 if !active.contains(&key) {
+                                    let next_attempt = reconnect_state.attempt + 1;
+                                    reconnect_states.insert(
+                                        rule_id.clone(),
+                                        ApprovedReconnectState {
+                                            attempt: next_attempt,
+                                            retry_exhausted: false,
+                                        },
+                                    );
                                     active.insert(key.clone());
                                     drop(active);
+                                    writer.send(&Event::NodeConnectionState {
+                                        node: node.clone(),
+                                        gateway_connection_state: "connecting".to_string(),
+                                        reason: None,
+                                        reconnect: Some(ReconnectStatus {
+                                            attempt: next_attempt,
+                                            attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                                            retry_exhausted: false,
+                                        }),
+                                    }).await?;
                                     let writer_clone = writer.clone();
                                     let config_clone = config.clone();
                                     let allowed_nodes_clone = allowed_nodes.clone();
@@ -784,6 +891,11 @@ async fn run_session(
                                             allowed_nodes_clone,
                                             known_device_ids_clone,
                                             app_session_id_clone,
+                                            Some(ReconnectStatus {
+                                                attempt: next_attempt,
+                                                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                                                retry_exhausted: false,
+                                            }),
                                         )
                                         .await;
                                         match result {
@@ -846,6 +958,14 @@ async fn run_session(
                         )
                         .await
                         {
+                            if let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) {
+                                reconnect_states.insert(rule_id, ApprovedReconnectState::default());
+                            }
+                            let reconnect =
+                                reconnect_status_for_rule(
+                                    approved_rule_id_for_node(&node, &allowed).as_deref(),
+                                    &reconnect_states,
+                                );
                             connected_nodes.insert(node_key(&node), node.clone());
                             sync_scan_state(
                                 &adapter,
@@ -853,6 +973,7 @@ async fn run_session(
                                 &selected_adapter_id,
                                 &allowed,
                                 &connected_nodes,
+                                &reconnect_states,
                                 &mut scanning,
                                 manual_scan_deadline,
                                 &last_advertisement_at,
@@ -862,6 +983,7 @@ async fn run_session(
                                 node,
                                 gateway_connection_state: "connected".to_string(),
                                 reason: None,
+                                reconnect,
                             }).await?;
                         }
                     }
@@ -887,6 +1009,11 @@ async fn run_session(
                         )
                         .await
                         {
+                            let reconnect =
+                                reconnect_status_for_rule(
+                                    approved_rule_id_for_node(&node, &allowed).as_deref(),
+                                    &reconnect_states,
+                                );
                             sleep(Duration::from_millis(DISCONNECT_CONFIRM_MS)).await;
                             if peripheral.is_connected().await.unwrap_or(false) {
                                 writer.send(&Event::Log {
@@ -909,6 +1036,7 @@ async fn run_session(
                                 node,
                                 gateway_connection_state: "disconnected".to_string(),
                                 reason: Some("Device disconnected.".to_string()),
+                                reconnect,
                             }).await?;
                             sync_scan_state(
                                 &adapter,
@@ -916,6 +1044,7 @@ async fn run_session(
                                 &selected_adapter_id,
                                 &allowed,
                                 &connected_nodes,
+                                &reconnect_states,
                                 &mut scanning,
                                 manual_scan_deadline,
                                 &last_advertisement_at,
@@ -1024,6 +1153,7 @@ async fn connect_and_stream(
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     app_session_id: String,
+    reconnect: Option<ReconnectStatus>,
 ) -> Result<Option<String>> {
     if !is_approved(&node, &allowed_nodes.read().await) {
         return Ok(None);
@@ -1034,6 +1164,7 @@ async fn connect_and_stream(
             node: node.clone(),
             gateway_connection_state: "connecting".to_string(),
             reason: None,
+            reconnect: reconnect.clone(),
         })
         .await?;
 
@@ -1067,14 +1198,42 @@ async fn connect_and_stream(
             node: node.clone(),
             gateway_connection_state: "connected".to_string(),
             reason: None,
+            reconnect: reconnect.clone(),
         })
         .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut connected_identity_confirmed = node.known_device_id.is_some();
-    let mut lease_heartbeat =
-        tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
-    lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    lease_heartbeat.tick().await;
+    let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
+    let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
+    let lease_peripheral = peripheral.clone();
+    let lease_characteristic = control_characteristic.clone();
+    let lease_session_id = app_session_id.clone();
+    let lease_task = tokio::spawn(async move {
+        let mut lease_heartbeat =
+            tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
+        lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        lease_heartbeat.tick().await;
+
+        loop {
+            tokio::select! {
+                changed = lease_shutdown_rx.changed() => {
+                    if changed.is_ok() && *lease_shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = lease_heartbeat.tick() => {
+                    if let Err(error) = send_app_session_lease(
+                        &lease_peripheral,
+                        &lease_characteristic,
+                        &lease_session_id,
+                    ).await {
+                        let _ = lease_failure_tx.send(error.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    });
 
     loop {
         tokio::select! {
@@ -1105,6 +1264,7 @@ async fn connect_and_stream(
                                         node: enriched.clone(),
                                         gateway_connection_state: "connected".to_string(),
                                         reason: None,
+                                        reconnect: reconnect.clone(),
                                     })
                                     .await?;
                             }
@@ -1128,15 +1288,25 @@ async fn connect_and_stream(
             }
             _ = sleep(Duration::from_millis(CONNECTION_HEALTH_POLL_MS)) => {
                 if !peripheral.is_connected().await.unwrap_or(false) {
+                    let _ = lease_shutdown_tx.send(true);
+                    let _ = lease_task.await;
                     return Ok(Some(format!("BLE transport ended for {}.", node.label)));
                 }
             }
-            _ = lease_heartbeat.tick() => {
-                send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
-                    .await?;
+            Some(reason) = lease_failure_rx.recv() => {
+                let _ = lease_shutdown_tx.send(true);
+                let _ = lease_task.await;
+                return Ok(Some(format!(
+                    "App-session lease heartbeat failed for {}: {}",
+                    node.label,
+                    reason,
+                )));
             }
         }
     }
+
+    let _ = lease_shutdown_tx.send(true);
+    let _ = lease_task.await;
 
     if peripheral.is_connected().await.unwrap_or(false) {
         let _ = peripheral.disconnect().await;

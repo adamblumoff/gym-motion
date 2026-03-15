@@ -43,6 +43,13 @@ pub struct DiscoveredNode {
     pub last_seen_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconnectStatus {
+    pub attempt: u32,
+    pub attempt_limit: u32,
+    pub retry_exhausted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TelemetryPayload {
     #[serde(alias = "deviceId")]
@@ -91,6 +98,7 @@ pub enum Event {
         node: DiscoveredNode,
         gateway_connection_state: String,
         reason: Option<String>,
+        reconnect: Option<ReconnectStatus>,
     },
     Telemetry {
         node: DiscoveredNode,

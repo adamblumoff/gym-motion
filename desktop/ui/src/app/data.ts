@@ -30,6 +30,9 @@ export type BluetoothNodeData = {
   isMoving: boolean;
   signalStrength: number | null;
   batteryLevel: number | null;
+  reconnectAttempt: number;
+  reconnectAttemptLimit: number;
+  reconnectRetryExhausted: boolean;
   logs: NodeLog[];
 };
 
@@ -103,6 +106,9 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
       device.telemetryFreshness === "fresh",
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
+    reconnectAttempt: device.reconnectAttempt,
+    reconnectAttemptLimit: device.reconnectAttemptLimit,
+    reconnectRetryExhausted: device.reconnectRetryExhausted,
     logs: buildNodeLogs(device, snapshot.activities),
   }));
 }

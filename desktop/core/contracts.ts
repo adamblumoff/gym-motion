@@ -209,6 +209,9 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   otaFailureDetail: string | null;
   otaLastStatusMessage: string | null;
   otaUpdatedAt: string | null;
+  reconnectAttempt: number;
+  reconnectAttemptLimit: number;
+  reconnectRetryExhausted: boolean;
 };
 
 export type MotionEventSummary = {

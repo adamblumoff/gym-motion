@@ -63,6 +63,9 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     otaFailureDetail: existing?.otaFailureDetail ?? null,
     otaLastStatusMessage: existing?.otaLastStatusMessage ?? null,
     otaUpdatedAt: existing?.otaUpdatedAt ?? null,
+    reconnectAttempt: existing?.reconnectAttempt ?? 0,
+    reconnectAttemptLimit: existing?.reconnectAttemptLimit ?? 20,
+    reconnectRetryExhausted: existing?.reconnectRetryExhausted ?? false,
     ...partialDevice,
   };
 }
