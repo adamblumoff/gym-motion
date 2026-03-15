@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   GatewayRuntimeDeviceSummary,
@@ -75,34 +75,26 @@ export function App() {
     analytics: `${resolvedSnapshot.activities.length}`,
   } satisfies Record<AppRoute, string>;
 
-  const headerMetrics = useMemo(
-    () => [
-      {
-        label: "Live Nodes",
-        value: String(resolvedSnapshot.gateway.connectedNodeCount),
-        tone: "accent" as const,
-      },
-      {
-        label: "Managed",
-        value: String(resolvedSetup.approvedNodes.length),
-        tone: "default" as const,
-      },
-      {
-        label: "Signals",
-        value: resolvedSnapshot.liveStatus,
-        tone:
-          resolvedSnapshot.runtimeState === "running"
-            ? ("success" as const)
-            : ("warn" as const),
-      },
-    ],
-    [
-      resolvedSetup.approvedNodes.length,
-      resolvedSnapshot.gateway.connectedNodeCount,
-      resolvedSnapshot.liveStatus,
-      resolvedSnapshot.runtimeState,
-    ],
-  );
+  const headerMetrics = [
+    {
+      label: "Live Nodes",
+      value: String(resolvedSnapshot.gateway.connectedNodeCount),
+      tone: "accent" as const,
+    },
+    {
+      label: "Managed",
+      value: String(resolvedSetup.approvedNodes.length),
+      tone: "default" as const,
+    },
+    {
+      label: "Signals",
+      value: resolvedSnapshot.liveStatus,
+      tone:
+        resolvedSnapshot.runtimeState === "running"
+          ? ("success" as const)
+          : ("warn" as const),
+    },
+  ];
 
   async function connectNode(nodeId: string) {
     const nextIds = new Set(resolvedSetup.approvedNodes.map((node) => node.id));
