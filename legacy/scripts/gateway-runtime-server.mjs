@@ -6,7 +6,10 @@ import path from "node:path";
 
 const METADATA_REFRESH_MS = 15_000;
 const STREAM_PING_MS = 15_000;
-const TRANSIENT_DISCONNECT_GRACE_MS = 3_000;
+// The firmware emits a keepalive telemetry update roughly every 15 seconds when idle.
+// WinRT can report a transient disconnect between those notifications, so keep the
+// node connected until it misses at least one full keepalive window.
+const TRANSIENT_DISCONNECT_GRACE_MS = 20_000;
 const DEFAULT_KNOWN_NODE_DIR = path.join(process.cwd(), "data");
 
 function nowIso() {
