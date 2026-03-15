@@ -123,6 +123,14 @@ struct ApprovedReconnectState {
     retry_exhausted: bool,
 }
 
+#[derive(Clone, Debug)]
+struct DiscoveryClassification {
+    runtime_service_matched: bool,
+    name_prefix_matched: bool,
+    approved_identity_matched: bool,
+    matched_known_device_id: Option<String>,
+}
+
 fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> Option<String> {
     rules.iter()
         .find(|rule| rule_matches_node(rule, node))
@@ -141,6 +149,79 @@ fn reconnect_status_for_rule(
             retry_exhausted: state.retry_exhausted,
         }
     })
+}
+
+fn classify_discovery_candidate(
+    peripheral_id: &str,
+    address: Option<&str>,
+    local_name: Option<&str>,
+    has_runtime_service: bool,
+    config: &Config,
+    allowed_nodes: &[ApprovedNodeRule],
+    known_device_ids: &HashMap<String, String>,
+) -> DiscoveryClassification {
+    let name_prefix_matched = local_name
+        .map(|name| !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix))
+        .unwrap_or(false);
+    let matched_known_device_id = known_device_ids.get(peripheral_id).cloned().or_else(|| {
+        allowed_nodes.iter().find_map(|rule| {
+            if rule
+                .peripheral_id
+                .as_ref()
+                .map(|value| value == peripheral_id)
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            if rule
+                .address
+                .as_ref()
+                .zip(address)
+                .map(|(left, right)| left.eq_ignore_ascii_case(right))
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            if rule
+                .local_name
+                .as_ref()
+                .zip(local_name)
+                .map(|(left, right)| left == right)
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            None
+        })
+    });
+
+    DiscoveryClassification {
+        runtime_service_matched: has_runtime_service,
+        name_prefix_matched,
+        approved_identity_matched: matched_known_device_id.is_some()
+            || allowed_nodes.iter().any(|rule| {
+                rule.peripheral_id
+                    .as_ref()
+                    .map(|value| value == peripheral_id)
+                    .unwrap_or(false)
+                    || rule
+                        .address
+                        .as_ref()
+                        .zip(address)
+                        .map(|(left, right)| left.eq_ignore_ascii_case(right))
+                        .unwrap_or(false)
+                    || rule
+                        .local_name
+                        .as_ref()
+                        .zip(local_name)
+                        .map(|(left, right)| left == right)
+                        .unwrap_or(false)
+            }),
+        matched_known_device_id,
+    }
 }
 
 fn approved_nodes_pending_connection(
@@ -916,6 +997,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
+                            true,
                         )
                         .await
                         {
@@ -1064,6 +1146,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
+                            false,
                         )
                         .await
                         {
@@ -1115,6 +1198,7 @@ async fn run_session(
                             &config,
                             &allowed,
                             &known_device_ids,
+                            false,
                         )
                         .await
                         {
@@ -1232,8 +1316,19 @@ async fn discovered_node_for_event(
     config: &Config,
     allowed: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    allow_approved_identity_fallback: bool,
 ) -> Option<DiscoveredNode> {
-    match discovered_node_from_peripheral(peripheral, config, allowed, known_device_ids).await {
+    match discovered_node_from_peripheral(
+        peripheral,
+        writer,
+        event_name,
+        config,
+        allowed,
+        known_device_ids,
+        allow_approved_identity_fallback,
+    )
+    .await
+    {
         Ok(node) => node,
         Err(error) => {
             writer
@@ -1467,9 +1562,12 @@ fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {
 
 async fn discovered_node_from_peripheral(
     peripheral: &Peripheral,
+    writer: &EventWriter,
+    event_name: &str,
     config: &Config,
     allowed_nodes: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    allow_approved_identity_fallback: bool,
 ) -> Result<Option<DiscoveredNode>> {
     let Some(properties) = peripheral.properties().await? else {
         return Ok(None);
@@ -1480,58 +1578,49 @@ async fn discovered_node_from_peripheral(
         .services
         .iter()
         .any(|uuid| *uuid == config.service_uuid);
-    let prefix_matches = local_name
-        .as_ref()
-        .map(|name| {
-            !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix)
-        })
-        .unwrap_or(false);
+    let address = Some(properties.address.to_string());
+    let peripheral_id = peripheral.id().to_string();
+    let known_device_ids_guard = known_device_ids.read().await;
+    let classification = classify_discovery_candidate(
+        &peripheral_id,
+        address.as_deref(),
+        local_name.as_deref(),
+        has_runtime_service,
+        config,
+        allowed_nodes,
+        &known_device_ids_guard,
+    );
+    drop(known_device_ids_guard);
 
-    if !has_runtime_service && !prefix_matches {
+    let accepted = classification.runtime_service_matched
+        || classification.name_prefix_matched
+        || (allow_approved_identity_fallback && classification.approved_identity_matched);
+
+    if !accepted {
+        if allow_approved_identity_fallback {
+            writer
+                .send(&Event::Log {
+                    level: "info".to_string(),
+                    message: format!(
+                        "Rejected approved-reconnect advertisement candidate during {event_name}."
+                    ),
+                    details: Some(json!({
+                        "peripheralId": peripheral_id,
+                        "address": address,
+                        "localName": local_name,
+                        "servicesCount": properties.services.len(),
+                        "runtimeServiceMatched": classification.runtime_service_matched,
+                        "namePrefixMatched": classification.name_prefix_matched,
+                        "approvedIdentityMatched": classification.approved_identity_matched,
+                    })),
+                })
+                .await
+                .ok();
+        }
         return Ok(None);
     }
 
-    let address = Some(properties.address.to_string());
-    let peripheral_id = peripheral.id().to_string();
-    let known_device_id = known_device_ids
-        .read()
-        .await
-        .get(&peripheral_id)
-        .cloned()
-        .or_else(|| {
-            allowed_nodes.iter().find_map(|rule| {
-                if rule
-                    .peripheral_id
-                    .as_ref()
-                    .map(|value| value == &peripheral_id)
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                if rule
-                    .address
-                    .as_ref()
-                    .zip(address.as_ref())
-                    .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                if rule
-                    .local_name
-                    .as_ref()
-                    .zip(local_name.as_ref())
-                    .map(|(left, right)| left == right)
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                None
-            })
-        });
+    let known_device_id = classification.matched_known_device_id;
     let label = local_name
         .clone()
         .or_else(|| known_device_id.clone())
@@ -1613,12 +1702,13 @@ fn chrono_like_seconds(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        approved_nodes_pending_connection, control_command_frames, should_scan,
-        ApprovedReconnectState, APP_SESSION_LEASE_TIMEOUT_MS,
+        approved_nodes_pending_connection, classify_discovery_candidate, control_command_frames,
+        should_scan, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::Instant};
     use serde_json::Value;
+    use uuid::Uuid;
 
     #[test]
     fn frames_runtime_control_commands_for_firmware_parser() {
@@ -1744,5 +1834,103 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn approved_reconnect_candidate_matches_by_peripheral_id_without_service_uuid() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-1",
+            Some("AA:BB"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(classification.approved_identity_matched);
+        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+        assert!(!classification.runtime_service_matched);
+        assert!(!classification.name_prefix_matched);
+    }
+
+    #[test]
+    fn approved_reconnect_candidate_matches_by_address_without_service_uuid() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: None,
+            address: Some("AA:BB".to_string()),
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-2",
+            Some("aa:bb"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(classification.approved_identity_matched);
+        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+    }
+
+    #[test]
+    fn manual_discovery_stays_strict_when_only_approved_identity_matches() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-1",
+            Some("AA:BB"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        let manual_discovery_accepted =
+            classification.runtime_service_matched || classification.name_prefix_matched;
+
+        assert!(classification.approved_identity_matched);
+        assert!(!manual_discovery_accepted);
     }
 }
