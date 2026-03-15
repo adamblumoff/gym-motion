@@ -234,6 +234,79 @@ describe("buildBluetoothNodes", () => {
     expect(node?.reconnectAttemptLimit).toBe(20);
     expect(node?.reconnectRetryExhausted).toBe(true);
   });
+
+  it("prefers the stable BLE address over an opaque runtime peripheral id", () => {
+    const snapshot: DesktopSnapshot = {
+      liveStatus: "Gateway live",
+      trayHint: "Waiting",
+      runtimeState: "running",
+      gatewayIssue: null,
+      gateway: {
+        hostname: "test-host",
+        mode: "reference-ble-node-gateway",
+        sessionId: "session-1",
+        adapterState: "poweredOn",
+        scanState: "stopped",
+        connectedNodeCount: 1,
+        reconnectingNodeCount: 0,
+        knownNodeCount: 1,
+        startedAt: new Date("2026-03-14T20:00:00.000Z").toISOString(),
+        updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+        lastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+      },
+      devices: [
+        {
+          id: "stack-001",
+          lastState: "still",
+          lastSeenAt: Date.parse("2026-03-14T20:05:00.000Z"),
+          lastDelta: 0,
+          updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          hardwareId: "hw-1",
+          bootId: "boot-1",
+          firmwareVersion: "0.5.0",
+          machineLabel: "Leg Press",
+          siteId: "Dallas",
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          updateTargetVersion: null,
+          updateDetail: null,
+          updateUpdatedAt: null,
+          lastHeartbeatAt: null,
+          lastEventReceivedAt: null,
+          healthStatus: "online",
+          gatewayConnectionState: "connected",
+          telemetryFreshness: "fresh",
+          peripheralId: "opaque-winrt-handle",
+          address: "AA:BB:CC:DD:EE:FF",
+          gatewayLastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          gatewayLastConnectedAt: new Date("2026-03-14T20:04:00.000Z").toISOString(),
+          gatewayLastDisconnectedAt: null,
+          gatewayLastTelemetryAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          gatewayDisconnectReason: null,
+          advertisedName: "GymMotion-f4e9d4",
+          lastRssi: -55,
+          otaStatus: "idle",
+          otaTargetVersion: null,
+          otaProgressBytesSent: null,
+          otaTotalBytes: null,
+          otaLastPhase: null,
+          otaFailureDetail: null,
+          otaLastStatusMessage: null,
+          otaUpdatedAt: null,
+          reconnectAttempt: 0,
+          reconnectAttemptLimit: 20,
+          reconnectRetryExhausted: false,
+        },
+      ],
+      events: [],
+      logs: [],
+      activities: [],
+    };
+
+    const [node] = buildBluetoothNodes(snapshot);
+
+    expect(node?.macAddress).toBe("AA:BB:CC:DD:EE:FF");
+  });
 });
 
 describe("buildMovementData", () => {

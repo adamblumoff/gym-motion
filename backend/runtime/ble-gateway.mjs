@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import process from "node:process";
+import readline from "node:readline";
 
 import noble from "@abandonware/noble";
 import { createJsonObjectDecoder } from "./ble-json-decoder.mjs";
@@ -33,7 +34,7 @@ const config = {
   runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
   runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
 };
-const approvedNodeRules = parseApprovedNodeRules(
+let approvedNodeRules = parseApprovedNodeRules(
   process.env.GATEWAY_APPROVED_NODE_RULES,
 );
 
@@ -70,6 +71,13 @@ function parseApprovedNodeRules(raw) {
   } catch {
     return [];
   }
+}
+
+function updateApprovedNodeRules(nodes) {
+  approvedNodeRules = Array.isArray(nodes) ? nodes : [];
+  debug("updated approved node rules", {
+    count: approvedNodeRules.length,
+  });
 }
 
 function log(message, details) {
@@ -1625,6 +1633,31 @@ async function registerPeripheral(peripheral) {
 
 async function start() {
   await runtimeServer.start();
+
+  const commandReader = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+
+  commandReader.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    try {
+      const command = JSON.parse(trimmed);
+
+      if (command?.type === "set_allowed_nodes") {
+        updateApprovedNodeRules(command.nodes);
+      }
+    } catch (error) {
+      debug(
+        "ignoring malformed gateway command",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  });
 
   noble.on("stateChange", async (state) => {
     log(`bluetooth adapter state: ${state}`);

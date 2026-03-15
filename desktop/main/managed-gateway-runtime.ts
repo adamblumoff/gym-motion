@@ -171,8 +171,8 @@ export function createManagedGatewayRuntime(
   let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
 
-  function sendWindowsGatewayCommand(command: Record<string, unknown>) {
-    if (!usesWindowsNativeGateway(process.platform) || !child?.stdin || child.killed) {
+  function sendGatewayCommand(command: Record<string, unknown>) {
+    if (!child?.stdin || child.killed) {
       return;
     }
 
@@ -268,8 +268,8 @@ export function createManagedGatewayRuntime(
 
     store.setJson(APPROVED_NODES_KEY, nextApprovedNodes);
 
-    if (usesWindowsNativeGateway(process.platform) && child) {
-      sendWindowsGatewayCommand({
+    if (child) {
+      sendGatewayCommand({
         type: "set_allowed_nodes",
         nodes: nextApprovedNodes,
       });
@@ -956,7 +956,7 @@ export function createManagedGatewayRuntime(
     async requestSilentReconnect() {
       if (usesWindowsNativeGateway(process.platform)) {
         if (child) {
-          sendWindowsGatewayCommand({ type: "request_silent_reconnect" });
+          sendGatewayCommand({ type: "request_silent_reconnect" });
           return;
         }
 
@@ -972,7 +972,7 @@ export function createManagedGatewayRuntime(
       await refreshAdapters();
 
       if (usesWindowsNativeGateway(process.platform)) {
-        sendWindowsGatewayCommand({
+        sendGatewayCommand({
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });

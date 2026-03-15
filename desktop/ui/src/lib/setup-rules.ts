@@ -99,24 +99,39 @@ export function forgetApprovedNodeRules(
         }
       : identity;
 
-  return approvedNodes.filter(
-    (rule) =>
-      !(
-        forgetFieldMatches(rule.id, forgetIdentity.id, exactIdentityMatch) ||
-        forgetFieldMatches(
-          rule.knownDeviceId,
-          forgetIdentity.knownDeviceId,
-          exactIdentityMatch,
-        ) ||
-        forgetFieldMatches(
-          rule.peripheralId,
-          forgetIdentity.peripheralId,
-          exactIdentityMatch,
-        ) ||
-        forgetFieldMatches(rule.address, forgetIdentity.address, addressIdentityMatch) ||
-        forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch)
-      ),
+  const localNameMatches = approvedNodes.filter((rule) =>
+    forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch),
   );
+  const allowLocalNameFallback = localNameMatches.length === 1;
+
+  return approvedNodes.filter((rule) => {
+    const strongIdentityMatch =
+      forgetFieldMatches(rule.id, forgetIdentity.id, exactIdentityMatch) ||
+      forgetFieldMatches(
+        rule.knownDeviceId,
+        forgetIdentity.knownDeviceId,
+        exactIdentityMatch,
+      ) ||
+      forgetFieldMatches(
+        rule.peripheralId,
+        forgetIdentity.peripheralId,
+        exactIdentityMatch,
+      ) ||
+      forgetFieldMatches(rule.address, forgetIdentity.address, addressIdentityMatch);
+
+    if (strongIdentityMatch) {
+      return false;
+    }
+
+    if (
+      allowLocalNameFallback &&
+      forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function matchesApprovedNodeIdentity(

@@ -63,7 +63,7 @@ function displayNodeName(device: GatewayRuntimeDeviceSummary) {
 }
 
 function displayNodeAddress(device: GatewayRuntimeDeviceSummary) {
-  return device.peripheralId ?? device.id;
+  return device.address ?? device.peripheralId ?? device.id;
 }
 
 function displayDiscoveryName(node: Pick<DiscoveredNodeSummary, "machineLabel" | "localName" | "knownDeviceId" | "label" | "id">) {

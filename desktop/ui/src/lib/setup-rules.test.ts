@@ -128,6 +128,37 @@ describe("setup-rules", () => {
     ).toEqual([approvedNodes[1]!]);
   });
 
+  it("does not forget every approved node that only shares a local name", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "name:GymMotion-f4e9d4-a",
+        label: "Stack 001",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      {
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Stack 002",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: null,
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+      }),
+    ).toEqual(approvedNodes);
+  });
+
   it("matches approved nodes by identity fields, not only exact ids", () => {
     const [rule] = createSetupState().approvedNodes;
 
