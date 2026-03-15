@@ -154,6 +154,19 @@ fn reconnect_status_for_rule(
     })
 }
 
+fn mark_node_connected(
+    connected_nodes: &mut HashMap<String, DiscoveredNode>,
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+    node: &DiscoveredNode,
+    allowed: &[ApprovedNodeRule],
+) {
+    connected_nodes.insert(node_key(node), node.clone());
+
+    if let Some(rule_id) = approved_rule_id_for_node(node, allowed) {
+        reconnect_states.insert(rule_id, ApprovedReconnectState::default());
+    }
+}
+
 fn classify_discovery_candidate(
     peripheral_id: &str,
     address: Option<&str>,
@@ -842,9 +855,12 @@ async fn run_session(
                     SessionCommand::RefreshScanPolicy => {}
                     SessionCommand::ConnectionHealthy { node } => {
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) {
-                            reconnect_states.insert(rule_id, ApprovedReconnectState::default());
-                        }
+                        mark_node_connected(
+                            &mut connected_nodes,
+                            &mut reconnect_states,
+                            &node,
+                            &allowed,
+                        );
                         sync_scan_state(
                             &adapter,
                             &writer,
@@ -1227,7 +1243,12 @@ async fn run_session(
                                     approved_rule_id_for_node(&node, &allowed).as_deref(),
                                     &reconnect_states,
                                 );
-                            connected_nodes.insert(node_key(&node), node.clone());
+                            mark_node_connected(
+                                &mut connected_nodes,
+                                &mut reconnect_states,
+                                &node,
+                                &allowed,
+                            );
                             sync_scan_state(
                                 &adapter,
                                 &writer,
@@ -1775,7 +1796,7 @@ mod tests {
     use super::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
         classify_discovery_candidate, control_command_frames, scan_reason, should_scan,
-        ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
+        mark_node_connected, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::{Duration, Instant}};
@@ -1918,6 +1939,48 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn healthy_connections_clear_pending_reconnect_even_without_device_connected_event() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+        }];
+        let mut connected = HashMap::new();
+        let mut reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: 7,
+                retry_exhausted: false,
+            },
+        )]);
+        let node = DiscoveredNode {
+            id: "known:stack-001".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+            last_rssi: None,
+            last_seen_at: None,
+        };
+
+        mark_node_connected(&mut connected, &mut reconnect_states, &node, &rules);
+
+        assert!(!approved_nodes_pending_connection(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
+        assert_eq!(
+            reconnect_states.get("node-1").map(|state| state.attempt),
+            Some(0)
+        );
     }
 
     #[test]

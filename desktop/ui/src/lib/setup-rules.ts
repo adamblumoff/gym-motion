@@ -7,6 +7,10 @@ type DiscoveryIdentity = {
   knownDeviceId: string | null;
 };
 
+type ForgetIdentity = DiscoveryIdentity & {
+  id: string | null;
+};
+
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
     ? setup.nodes
@@ -60,13 +64,26 @@ export function buildApprovedNodeRules(
 
 export function forgetApprovedNodeRules(
   approvedNodes: ApprovedNodeRule[],
-  runtimeDeviceId: string,
+  identity: string | ForgetIdentity,
 ) {
+  const forgetIdentity: ForgetIdentity =
+    typeof identity === "string"
+      ? {
+          id: identity,
+          knownDeviceId: identity,
+          peripheralId: identity,
+          address: null,
+          localName: null,
+        }
+      : identity;
+
   return approvedNodes.filter(
     (rule) =>
-      rule.id !== runtimeDeviceId &&
-      rule.knownDeviceId !== runtimeDeviceId &&
-      rule.peripheralId !== runtimeDeviceId,
+      rule.id !== forgetIdentity.id &&
+      rule.knownDeviceId !== forgetIdentity.knownDeviceId &&
+      rule.peripheralId !== forgetIdentity.peripheralId &&
+      rule.address !== forgetIdentity.address &&
+      rule.localName !== forgetIdentity.localName,
   );
 }
 

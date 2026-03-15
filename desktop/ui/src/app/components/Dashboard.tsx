@@ -41,7 +41,14 @@ export function Dashboard() {
       return;
     }
 
-    const nextRules = forgetApprovedNodeRules(setup.approvedNodes, nodeId);
+    const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId);
+    const nextRules = forgetApprovedNodeRules(setup.approvedNodes, {
+      id: nodeId,
+      knownDeviceId: runtimeDevice?.id ?? nodeId,
+      peripheralId: runtimeDevice?.peripheralId ?? null,
+      address: runtimeDevice?.address ?? null,
+      localName: runtimeDevice?.advertisedName ?? null,
+    });
     await setAllowedNodes(nextRules);
 
     if (selectedNodeId === nodeId) {

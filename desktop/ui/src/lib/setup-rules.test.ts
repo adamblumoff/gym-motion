@@ -74,6 +74,29 @@ describe("setup-rules", () => {
     expect(forgetApprovedNodeRules(setup.approvedNodes, "stack-001")).toEqual([]);
   });
 
+  it("forgets approved nodes by runtime identity fields from the dashboard", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "address:AA:BB",
+        label: "Stack 001",
+        peripheralId: null,
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral-1",
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+      }),
+    ).toEqual([]);
+  });
+
   it("matches approved nodes by identity fields, not only exact ids", () => {
     const [rule] = createSetupState().approvedNodes;
 

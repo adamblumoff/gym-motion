@@ -200,16 +200,21 @@ app.on("before-quit", (event) => {
   isDisposingRuntime = true;
 
   void (async () => {
-    await runtimeBridge?.dispose();
-    runtimeBridge = null;
-    themeBridgeDisposer?.();
-    themeBridgeDisposer = null;
-    ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
-    ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.setPreference);
-    tray?.destroy();
-    tray = null;
-    mainWindow = null;
-    app.quit();
+    try {
+      await runtimeBridge?.dispose();
+    } catch (error) {
+      console.error("[runtime] failed to dispose managed gateway runtime", error);
+    } finally {
+      runtimeBridge = null;
+      themeBridgeDisposer?.();
+      themeBridgeDisposer = null;
+      ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
+      ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.setPreference);
+      tray?.destroy();
+      tray = null;
+      mainWindow = null;
+      app.quit();
+    }
   })();
 });
 
