@@ -1144,10 +1144,9 @@ class GymServerCallbacks : public BLEServerCallbacks {
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
     logRuntimeTransportEvent(
-      "BLE client connected; runtime lease will arm after runtime control traffic."
+      "BLE client connected; waiting for runtime telemetry subscription before lease bootstrap."
     );
     resetRuntimeAppSessionState();
-    runtimeBootstrapLeasePending = true;
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
   }
@@ -1213,6 +1212,32 @@ class RuntimeControlCallbacks : public BLECharacteristicCallbacks {
 
     runtimeCommandBuffer += value;
   }
+};
+
+class RuntimeTelemetryCallbacks : public BLECharacteristicCallbacks {
+#if defined(CONFIG_NIMBLE_ENABLED)
+  void onSubscribe(
+    BLECharacteristic* characteristic,
+    ble_gap_conn_desc* desc,
+    uint16_t subValue
+  ) override {
+    (void)characteristic;
+    (void)desc;
+
+    if (subValue == 0) {
+      return;
+    }
+
+    if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    runtimeBootstrapLeasePending = true;
+    logRuntimeTransportEvent(
+      "Runtime telemetry subscribed; waiting for runtime control traffic."
+    );
+  }
+#endif
 };
 
 class RuntimeOtaDataCallbacks : public BLECharacteristicCallbacks {
@@ -1345,6 +1370,7 @@ void setupBle() {
 
   runtimeTelemetryCharacteristic->addDescriptor(new BLE2902());
   runtimeStatusCharacteristic->addDescriptor(new BLE2902());
+  runtimeTelemetryCharacteristic->setCallbacks(new RuntimeTelemetryCallbacks());
   runtimeControlCharacteristic->setCallbacks(new RuntimeControlCallbacks());
   runtimeOtaDataCharacteristic->setCallbacks(new RuntimeOtaDataCallbacks());
   runtimeService->start();
