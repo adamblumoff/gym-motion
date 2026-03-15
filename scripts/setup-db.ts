@@ -3,16 +3,16 @@ import path from "node:path";
 
 import dotenv from "dotenv";
 
-import { getDb } from "@/lib/db";
+import { getDb } from "../backend/data/db";
 
-const repoRoot = new URL("../../", import.meta.url);
+const repoRoot = new URL("../", import.meta.url);
 const rootEnvPath = path.join(repoRoot.pathname, ".env.local");
 
 dotenv.config({ path: rootEnvPath });
 
 async function main() {
   const db = getDb();
-  const sqlDir = new URL("../../sql/", import.meta.url);
+  const sqlDir = new URL("../sql/", import.meta.url);
   const filenames = (await readdir(sqlDir))
     .filter((filename) => filename.endsWith(".sql"))
     .sort();

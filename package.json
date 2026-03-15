@@ -5,6 +5,7 @@
   "description": "Windows-first Gym Motion desktop gateway and operator console.",
   "main": "out/main/index.js",
   "scripts": {
+    "db:setup": "bun run ./scripts/setup-db.ts",
     "dev": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
     "build": "electron-vite build && electron-builder --config electron-builder.config.mjs --dir",
     "build:win": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
