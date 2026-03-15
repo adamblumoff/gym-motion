@@ -28,7 +28,7 @@ This keeps the edit/build loop comfortable in WSL while still making it easy to 
 
 The Windows-side repo now builds a Rust WinRT BLE sidecar before `bun run dev` and `bun run build:win`, so Windows is the source of truth for native BLE validation.
 
-Managed nodes on Windows should now reconnect automatically in the background after app restarts or BLE link loss. After BLE reconnect, the gateway sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for a new motion event.
+Managed nodes on Windows should now reconnect automatically in the background after app restarts or BLE link loss. The desktop app also sends silent reconnect nudges every 10 seconds while an approved node stays disconnected. For the current test pass, the forget-device prompt appears after 20 seconds per disconnected device before we raise it back to 10 minutes. After BLE reconnect, the gateway sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for a new motion event.
 
 ## Current Limitation
 

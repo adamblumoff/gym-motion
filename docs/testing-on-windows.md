@@ -78,5 +78,6 @@ Validate the same Setup and reconnect flow in the packaged app.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
 - The `Setup` tab is node-only, and Bluetooth discovery is manual-only for discovery and pairing. Approved nodes should reconnect automatically in the background after app restarts or link loss.
 - When an approved node loses power or the BLE link drops, the dashboard should move to `Disconnected` immediately instead of waiting for telemetry freshness to age out.
+- While an approved node stays disconnected, the Windows app now sends silent reconnect nudges every 10 seconds. For this test pass, the forget-device prompt appears after 20 seconds per disconnected device; raise that back to 10 minutes once the flow is validated.
 - After the gateway reconnects to a managed node, it sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for fresh motion.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.
