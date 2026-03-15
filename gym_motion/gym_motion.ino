@@ -560,26 +560,40 @@ void setupADXL345() {
 }
 
 void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  Serial.print("BLE -> ");
-  Serial.println(payload);
-
-  if (characteristic == nullptr || !connected) {
+  if (characteristic == nullptr) {
+    Serial.print("BLE notify skipped (missing characteristic): ");
+    Serial.println(payload);
     return;
   }
 
+  if (!connected) {
+    Serial.print("BLE notify skipped (runtime client disconnected): ");
+    Serial.println(payload);
+    return;
+  }
+
+  Serial.print("BLE notify sent: ");
+  Serial.println(payload);
   characteristic->setValue(payload.c_str());
   characteristic->notify();
   delay(30);
 }
 
 void notifyCharacteristicChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  Serial.print("BLE -> ");
-  Serial.println(payload);
-
-  if (characteristic == nullptr || !connected) {
+  if (characteristic == nullptr) {
+    Serial.print("BLE chunked notify skipped (missing characteristic): ");
+    Serial.println(payload);
     return;
   }
 
+  if (!connected) {
+    Serial.print("BLE chunked notify skipped (runtime client disconnected): ");
+    Serial.println(payload);
+    return;
+  }
+
+  Serial.print("BLE chunked notify sent: ");
+  Serial.println(payload);
   characteristic->setValue(("BEGIN:" + String(payload.length())).c_str());
   characteristic->notify();
   delay(30);

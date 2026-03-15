@@ -39,6 +39,7 @@ const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
+const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const CONTROL_CHUNK_SIZE: usize = 120;
@@ -566,6 +567,10 @@ async fn run_session(
     let mut last_advertisement_at = None;
     let mut scanning = false;
     let mut manual_scan_deadline = None;
+    let mut reconnect_diagnostic_tick =
+        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
+    reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect_diagnostic_tick.tick().await;
 
     {
         let allowed = allowed_nodes.read().await.clone();
@@ -657,6 +662,26 @@ async fn run_session(
                     &last_advertisement_at,
                 )
                 .await?;
+            }
+            _ = reconnect_diagnostic_tick.tick() => {
+                let allowed = allowed_nodes.read().await.clone();
+                if approved_nodes_pending_connection(&allowed, &connected_nodes) {
+                    writer.send(&Event::Log {
+                        level: "info".to_string(),
+                        message: "Approved-node reconnect scan still running; waiting for rediscovery.".to_string(),
+                        details: Some(json!({
+                            "approvedCount": allowed.len(),
+                            "connectedApprovedCount": connected_nodes.len(),
+                            "scanReason": scan_reason(
+                                &allowed,
+                                &connected_nodes,
+                                manual_scan_deadline,
+                                Instant::now(),
+                            ),
+                            "lastAdvertisementAt": last_advertisement_at,
+                        })),
+                    }).await?;
+                }
             }
             event = events.next() => {
                 let Some(event) = event else {
