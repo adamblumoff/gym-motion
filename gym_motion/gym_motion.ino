@@ -81,6 +81,7 @@ unsigned long lastTelemetryAt = 0;
 bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
 bool runtimeAppSessionConnected = false;
+bool runtimeBootstrapLeasePending = false;
 bool runtimeLeaseRequired = false;
 bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
@@ -723,6 +724,7 @@ void logRuntimeLeaseState(const char* reason, unsigned long now) {
 
 void resetRuntimeAppSessionState() {
   runtimeAppSessionConnected = false;
+  runtimeBootstrapLeasePending = false;
   runtimeLeaseRequired = false;
   runtimeAppSessionId = "";
   lastAppSessionLeaseAt = 0;
@@ -810,11 +812,39 @@ void enforceRuntimeAppSessionLease() {
     return;
   }
 
-  if (!runtimeLeaseRequired) {
+  const unsigned long now = millis();
+
+  if (runtimeBootstrapLeasePending) {
+    if (
+      runtimeBleConnectedAt > 0 &&
+      now - runtimeBleConnectedAt >= APP_SESSION_BOOTSTRAP_TIMEOUT_MS
+    ) {
+      logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.missing",
+        "BLE client connected without runtime control traffic; dropping stale client.",
+        now
+      );
+      logRuntimeTransportEvent(
+        "BLE client never started a runtime session; dropping stale client."
+      );
+      resetRuntimeAppSessionState();
+
+      if (bleServer != nullptr && runtimeBleConnIdKnown) {
+        bleServer->disconnect(runtimeBleConnId);
+        return;
+      }
+
+      startRuntimeAdvertising("missing runtime bootstrap");
+    }
+
     return;
   }
 
-  const unsigned long now = millis();
+  if (!runtimeLeaseRequired) {
+    return;
+  }
 
   if (!runtimeAppSessionConnected || lastAppSessionLeaseAt == 0) {
     if (
@@ -995,6 +1025,7 @@ void completeOtaTransfer() {
 }
 
 void handleProvisioningCommand(const String& payload) {
+  runtimeBootstrapLeasePending = false;
   const String type = extractJsonString(payload, "type");
 
   if (type != "provision") {
@@ -1030,11 +1061,13 @@ void handleRuntimeControl(const String& payload) {
   lastRuntimeControlAt = millis();
 
   if (type == "app-session-bootstrap") {
+    runtimeBootstrapLeasePending = false;
     runtimeLeaseRequired = true;
     return;
   }
 
   if (type == "app-session-lease") {
+    runtimeBootstrapLeasePending = false;
     runtimeLeaseRequired = true;
     const String sessionId = extractJsonString(payload, "sessionId");
     const unsigned long expiresInMs = extractJsonUnsignedLong(
@@ -1058,26 +1091,31 @@ void handleRuntimeControl(const String& payload) {
   }
 
   if (type == "sync-now") {
+    runtimeBootstrapLeasePending = false;
     sendTelemetry(lastReportedDelta, millis(), true);
     return;
   }
 
   if (type == "ota-begin") {
+    runtimeBootstrapLeasePending = false;
     beginOtaTransfer(payload);
     return;
   }
 
   if (type == "ota-end") {
+    runtimeBootstrapLeasePending = false;
     completeOtaTransfer();
     return;
   }
 
   if (type == "ota-abort") {
+    runtimeBootstrapLeasePending = false;
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
 
   if (type == "history-sync-begin") {
+    runtimeBootstrapLeasePending = false;
     const unsigned long afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
     const size_t maxRecords = extractJsonSize(payload, "maxRecords", HISTORY_SYNC_PAGE_SIZE);
     streamHistoryRecords(afterSequence, maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE);
@@ -1085,6 +1123,7 @@ void handleRuntimeControl(const String& payload) {
   }
 
   if (type == "history-ack") {
+    runtimeBootstrapLeasePending = false;
     const unsigned long sequence = extractJsonUnsignedLong(payload, "sequence", 0);
     acknowledgeHistoryThrough(sequence);
     return;
@@ -1108,6 +1147,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
       "BLE client connected; runtime lease will arm after runtime control traffic."
     );
     resetRuntimeAppSessionState();
+    runtimeBootstrapLeasePending = true;
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
   }

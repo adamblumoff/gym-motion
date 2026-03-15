@@ -66,6 +66,13 @@ function exactIdentityMatch(
   return Boolean(left && right && left === right);
 }
 
+function addressIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
 export function findMatchingGatewayDeviceForApprovedNode(
   approvedNode: ApprovedNodeRule,
   devices: GatewayRuntimeDeviceSummary[],
@@ -85,7 +92,7 @@ export function findMatchingGatewayDeviceForApprovedNode(
   }
 
   const byAddress = approvedNode.address
-    ? devices.filter((device) => exactIdentityMatch(approvedNode.address, device.address))
+    ? devices.filter((device) => addressIdentityMatch(approvedNode.address, device.address))
     : [];
 
   if (byAddress.length === 1) {

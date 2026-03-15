@@ -167,6 +167,13 @@ fn mark_node_connected(
     }
 }
 
+fn should_clear_reconnect_peripherals(
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    active_connection_count: usize,
+) -> bool {
+    connected_nodes.is_empty() && active_connection_count == 0
+}
+
 fn classify_discovery_candidate(
     peripheral_id: &str,
     address: Option<&str>,
@@ -429,6 +436,7 @@ async fn restart_approved_reconnect_scan(
     advertisements_seen: u32,
     rejected_candidates: u32,
     classified_candidates: u32,
+    active_connection_count: usize,
 ) -> Result<()> {
     writer
         .send(&Event::Log {
@@ -441,6 +449,7 @@ async fn restart_approved_reconnect_scan(
                 "classifiedCandidates": classified_candidates,
                 "lastAdvertisementAt": last_advertisement_at,
                 "connectedApprovedCount": connected_nodes.len(),
+                "activeConnectionCount": active_connection_count,
             })),
         })
         .await?;
@@ -451,7 +460,10 @@ async fn restart_approved_reconnect_scan(
     ))
     .await;
 
-    let cleared_peripherals = if connected_nodes.is_empty() {
+    let should_clear_peripherals =
+        should_clear_reconnect_peripherals(connected_nodes, active_connection_count);
+
+    let cleared_peripherals = if should_clear_peripherals {
         adapter.clear_peripherals().await.is_ok()
     } else {
         false
@@ -479,8 +491,9 @@ async fn restart_approved_reconnect_scan(
             message: "Approved-node reconnect scan burst restarted.".to_string(),
             details: Some(json!({
                 "scanBurst": scan_burst + 1,
-                "cacheResetAttempted": connected_nodes.is_empty(),
+                "cacheResetAttempted": should_clear_peripherals,
                 "cacheResetApplied": cleared_peripherals,
+                "activeConnectionCount": active_connection_count,
             })),
         })
         .await?;
@@ -1014,6 +1027,7 @@ async fn run_session(
                     advertisements_seen_this_burst,
                     rejected_candidates_this_burst,
                     classified_candidates_this_burst,
+                    active_connections.lock().await.len(),
                 )
                 .await?;
                 reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
@@ -1796,7 +1810,8 @@ mod tests {
     use super::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
         classify_discovery_candidate, control_command_frames, scan_reason, should_scan,
-        mark_node_connected, ApprovedReconnectState, Config, APP_SESSION_LEASE_TIMEOUT_MS,
+        mark_node_connected, should_clear_reconnect_peripherals, ApprovedReconnectState, Config,
+        APP_SESSION_LEASE_TIMEOUT_MS,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::{Duration, Instant}};
@@ -1981,6 +1996,14 @@ mod tests {
             reconnect_states.get("node-1").map(|state| state.attempt),
             Some(0)
         );
+    }
+
+    #[test]
+    fn reconnect_scan_does_not_clear_peripherals_while_a_handshake_is_in_flight() {
+        let connected = HashMap::new();
+
+        assert!(!should_clear_reconnect_peripherals(&connected, 1));
+        assert!(should_clear_reconnect_peripherals(&connected, 0));
     }
 
     #[test]
