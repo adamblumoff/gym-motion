@@ -361,7 +361,21 @@ export function createGatewayRuntimeServer({
     return deviceIdByPeripheralId.get(peripheralId) ?? null;
   }
 
-  function resolveKnownDeviceIdByDiscovery({ peripheralId, localName, address }) {
+  function resolveKnownDeviceIdByDiscovery({
+    deviceId = null,
+    knownDeviceId = null,
+    peripheralId,
+    localName,
+    address,
+  }) {
+    if (deviceId) {
+      return deviceId;
+    }
+
+    if (knownDeviceId) {
+      return knownDeviceId;
+    }
+
     const directMatch = resolveKnownDeviceId(peripheralId);
 
     if (directMatch) {
@@ -442,9 +456,16 @@ export function createGatewayRuntimeServer({
     }
   }
 
-  function inspectNodeConnection({ deviceId = null, peripheralId, localName, address }) {
+  function inspectNodeConnection({
+    deviceId = null,
+    knownDeviceId = null,
+    peripheralId,
+    localName,
+    address,
+  }) {
     const resolvedDeviceId =
-      deviceId ?? resolveKnownDeviceIdByDiscovery({ peripheralId, localName, address });
+      deviceId ??
+      resolveKnownDeviceIdByDiscovery({ knownDeviceId, peripheralId, localName, address });
 
     if (!resolvedDeviceId) {
       return null;
@@ -722,10 +743,12 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    noteDiscovery({ peripheralId, address, localName, rssi }) {
+    noteDiscovery({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
       const timestamp = nowIso();
       touchGatewayState({ lastAdvertisementAt: timestamp });
-      const knownDeviceId = resolveKnownDeviceIdByDiscovery({
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
         peripheralId,
         localName,
         address,
@@ -735,24 +758,24 @@ export function createGatewayRuntimeServer({
         address,
         localName,
         rssi,
-        knownDeviceId,
+        knownDeviceId: resolvedDeviceId,
       });
 
-      if (!knownDeviceId) {
+      if (!resolvedDeviceId) {
         broadcastGatewayStatus();
         return;
       }
 
-      updateRuntimeNode(knownDeviceId, {
+      updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
       });
-      emitDevice(knownDeviceId);
+      emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
 
-      upsertKnownNode(knownDeviceId, {
+      upsertKnownNode(resolvedDeviceId, {
         peripheralId,
         lastAdvertisedName: localName ?? null,
         lastKnownAddress: address ?? null,
@@ -760,9 +783,17 @@ export function createGatewayRuntimeServer({
       });
     },
 
-    noteConnecting({ peripheralId, address, localName, rssi }) {
-      const previous = inspectNodeConnection({ peripheralId, localName, address });
-      const knownDeviceId = resolveKnownDeviceIdByDiscovery({
+    noteConnecting({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
+      const previous = inspectNodeConnection({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
         peripheralId,
         localName,
         address,
@@ -772,36 +803,44 @@ export function createGatewayRuntimeServer({
         address,
         localName,
         rssi,
-        knownDeviceId,
+        knownDeviceId: resolvedDeviceId,
       });
 
-      if (!knownDeviceId) {
+      if (!resolvedDeviceId) {
         return;
       }
 
-      updateRuntimeNode(knownDeviceId, {
+      updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         gatewayConnectionState: "connecting",
         gatewayLastAdvertisementAt: nowIso(),
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
       });
-      upsertKnownNode(knownDeviceId, {
+      upsertKnownNode(resolvedDeviceId, {
         peripheralId,
         lastAdvertisedName: localName ?? null,
         lastKnownAddress: address ?? null,
       });
-      emitDevice(knownDeviceId);
+      emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
       return {
         before: previous,
-        after: inspectNodeConnection({ deviceId: knownDeviceId }),
+        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
       };
     },
 
-    noteConnected({ peripheralId, address, localName, rssi }) {
-      const previous = inspectNodeConnection({ peripheralId, localName, address });
-      const knownDeviceId = resolveKnownDeviceIdByDiscovery({
+    noteConnected({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
+      const previous = inspectNodeConnection({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
         peripheralId,
         localName,
         address,
@@ -811,14 +850,14 @@ export function createGatewayRuntimeServer({
         address,
         localName,
         rssi,
-        knownDeviceId,
+        knownDeviceId: resolvedDeviceId,
       });
 
-      if (!knownDeviceId) {
+      if (!resolvedDeviceId) {
         return;
       }
 
-      updateRuntimeNode(knownDeviceId, {
+      updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         gatewayConnectionState: "connected",
         gatewayLastConnectedAt: nowIso(),
@@ -826,17 +865,17 @@ export function createGatewayRuntimeServer({
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
       });
-      upsertKnownNode(knownDeviceId, {
+      upsertKnownNode(resolvedDeviceId, {
         peripheralId,
         lastAdvertisedName: localName ?? null,
         lastKnownAddress: address ?? null,
         lastConnectedAt: nowIso(),
       });
-      emitDevice(knownDeviceId);
+      emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
       return {
         before: previous,
-        after: inspectNodeConnection({ deviceId: knownDeviceId }),
+        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
       };
     },
 
@@ -897,15 +936,23 @@ export function createGatewayRuntimeServer({
       };
     },
 
-    noteDisconnected({ peripheralId, localName, address, reason }) {
-      const previous = inspectNodeConnection({ peripheralId, localName, address });
-      const deviceId = resolveKnownDeviceIdByDiscovery({
+    noteDisconnected({ deviceId = null, knownDeviceId = null, peripheralId, localName, address, reason }) {
+      const previous = inspectNodeConnection({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
         peripheralId,
         localName,
         address,
       });
 
-      if (!deviceId) {
+      if (!resolvedDeviceId) {
         return {
           applied: false,
           before: previous,
@@ -913,7 +960,7 @@ export function createGatewayRuntimeServer({
         };
       }
 
-      updateRuntimeNode(deviceId, {
+      updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         gatewayConnectionState:
           gatewayState.adapterState === "poweredOn" && gatewayState.scanState === "scanning"
@@ -922,12 +969,12 @@ export function createGatewayRuntimeServer({
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
       });
-      emitDevice(deviceId);
+      emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
       return {
         applied: true,
         before: previous,
-        after: inspectNodeConnection({ deviceId }),
+        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
       };
     },
 

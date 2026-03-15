@@ -12,6 +12,41 @@ afterEach(async () => {
 });
 
 describe("gateway runtime server", () => {
+  it("accepts explicit known device ids on transport events", async () => {
+    const runtimePort = 46110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("connected");
+  });
+
   it("keeps telemetry from changing transport connection state", async () => {
     const runtimePort = 46110 + Math.floor(Math.random() * 1000);
     const runtimeServer = createGatewayRuntimeServer({

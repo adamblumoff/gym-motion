@@ -80,6 +80,8 @@ function parseApprovedNodeRules(raw) {
 
 function describeNode(node = {}) {
   return {
+    deviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+    knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
     peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
     address: node.address ?? null,
     localName: node.localName ?? node.local_name ?? null,
