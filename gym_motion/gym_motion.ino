@@ -61,6 +61,7 @@ Preferences preferences;
 BLEServer* bleServer = nullptr;
 BLECharacteristic* provisioningControlCharacteristic = nullptr;
 BLECharacteristic* provisioningStatusCharacteristic = nullptr;
+BLE2902* provisioningStatusDescriptor = nullptr;
 BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
 BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
@@ -733,6 +734,19 @@ void resetRuntimeAppSessionState() {
   appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 }
 
+void armRuntimeBootstrapWatchdog(const String& message) {
+  if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+    return;
+  }
+
+  runtimeBootstrapLeasePending = true;
+  logRuntimeTransportEvent(message);
+}
+
+void disarmRuntimeBootstrapWatchdog() {
+  runtimeBootstrapLeasePending = false;
+}
+
 void markRuntimeAppSessionOnline(
   const String& sessionId,
   unsigned long expiresInMs,
@@ -1062,13 +1076,13 @@ void handleRuntimeControl(const String& payload) {
   lastRuntimeControlAt = millis();
 
   if (type == "app-session-bootstrap") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     runtimeLeaseRequired = true;
     return;
   }
 
   if (type == "app-session-lease") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     runtimeLeaseRequired = true;
     const String sessionId = extractJsonString(payload, "sessionId");
     const unsigned long expiresInMs = extractJsonUnsignedLong(
@@ -1092,31 +1106,31 @@ void handleRuntimeControl(const String& payload) {
   }
 
   if (type == "sync-now") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     sendTelemetry(lastReportedDelta, millis(), true);
     return;
   }
 
   if (type == "ota-begin") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     beginOtaTransfer(payload);
     return;
   }
 
   if (type == "ota-end") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     completeOtaTransfer();
     return;
   }
 
   if (type == "ota-abort") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
 
   if (type == "history-sync-begin") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     const unsigned long afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
     const size_t maxRecords = extractJsonSize(payload, "maxRecords", HISTORY_SYNC_PAGE_SIZE);
     streamHistoryRecords(afterSequence, maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE);
@@ -1124,7 +1138,7 @@ void handleRuntimeControl(const String& payload) {
   }
 
   if (type == "history-ack") {
-    runtimeBootstrapLeasePending = false;
+    disarmRuntimeBootstrapWatchdog();
     const unsigned long sequence = extractJsonUnsignedLong(payload, "sequence", 0);
     acknowledgeHistoryThrough(sequence);
     return;
@@ -1144,10 +1158,10 @@ class GymServerCallbacks : public BLEServerCallbacks {
     lastConnectedRuntimeDebugAt = 0;
     runtimeBleConnIdKnown = param != nullptr;
     runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
-    logRuntimeTransportEvent(
-      "BLE client connected; waiting for runtime telemetry subscription before lease bootstrap."
-    );
     resetRuntimeAppSessionState();
+    armRuntimeBootstrapWatchdog(
+      "BLE client connected; waiting for runtime or provisioning traffic."
+    );
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
   }
@@ -1175,6 +1189,8 @@ class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
       return;
     }
 
+    disarmRuntimeBootstrapWatchdog();
+
     if (value.startsWith("BEGIN:")) {
       provisioningCommandBuffer = "";
       return;
@@ -1188,6 +1204,32 @@ class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
     }
 
     provisioningCommandBuffer += value;
+  }
+};
+
+class ProvisioningStatusDescriptorCallbacks : public BLEDescriptorCallbacks {
+  void onWrite(BLEDescriptor* descriptor) override {
+    if (descriptor == nullptr) {
+      return;
+    }
+
+    const uint8_t* value = descriptor->getValue();
+    const size_t length = descriptor->getLength();
+    const bool notificationsEnabled =
+      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
+
+    if (!notificationsEnabled) {
+      return;
+    }
+
+    if (!runtimeBleConnected || !runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    disarmRuntimeBootstrapWatchdog();
+    logRuntimeTransportEvent(
+      "Provisioning status notifications enabled; leaving runtime lease watchdog idle."
+    );
   }
 };
 
@@ -1229,12 +1271,11 @@ class RuntimeTelemetryCallbacks : public BLECharacteristicCallbacks {
       return;
     }
 
-    if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
       return;
     }
 
-    runtimeBootstrapLeasePending = true;
-    logRuntimeTransportEvent(
+    armRuntimeBootstrapWatchdog(
       "Runtime telemetry subscribed; waiting for runtime control traffic."
     );
   }
@@ -1256,12 +1297,11 @@ class RuntimeTelemetryDescriptorCallbacks : public BLEDescriptorCallbacks {
       return;
     }
 
-    if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
       return;
     }
 
-    runtimeBootstrapLeasePending = true;
-    logRuntimeTransportEvent(
+    armRuntimeBootstrapWatchdog(
       "Runtime telemetry notifications enabled; waiting for runtime control traffic."
     );
   }
@@ -1373,7 +1413,9 @@ void setupBle() {
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
   provisioningControlCharacteristic->setCallbacks(new ProvisioningControlCallbacks());
-  provisioningStatusCharacteristic->addDescriptor(new BLE2902());
+  provisioningStatusDescriptor = new BLE2902();
+  provisioningStatusDescriptor->setCallbacks(new ProvisioningStatusDescriptorCallbacks());
+  provisioningStatusCharacteristic->addDescriptor(provisioningStatusDescriptor);
   provisioningStatusCharacteristic->setValue(createProvisioningReadyPayload().c_str());
   provisioningService->start();
 

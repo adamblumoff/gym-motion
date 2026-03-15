@@ -304,8 +304,26 @@ fn allow_approved_identity_fallback(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
     reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
 ) -> bool {
-    approved_nodes_pending_connection(rules, connected_nodes, reconnect_states)
+    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
+        return true;
+    }
+
+    let manual_scan_active = manual_scan_deadline
+        .map(|deadline| deadline > now)
+        .unwrap_or(false);
+    if !manual_scan_active {
+        return false;
+    }
+
+    rules.iter().any(|rule| {
+        reconnect_states
+            .get(&rule.id)
+            .map(|state| state.retry_exhausted)
+            .unwrap_or(false)
+    })
 }
 
 async fn emit_gateway_state(
@@ -1122,6 +1140,8 @@ async fn run_session(
                                 &allowed,
                                 &connected_nodes,
                                 &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
                             ),
                         )
                         .await
@@ -1265,6 +1285,8 @@ async fn run_session(
                                 &allowed,
                                 &connected_nodes,
                                 &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
                             ),
                         )
                         .await
@@ -1295,6 +1317,8 @@ async fn run_session(
                                 &allowed,
                                 &connected_nodes,
                                 &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
                             ),
                         )
                         .await
@@ -2078,7 +2102,9 @@ mod tests {
         assert!(allow_approved_identity_fallback(
             &rules,
             &HashMap::new(),
-            &HashMap::new()
+            &HashMap::new(),
+            None,
+            Instant::now()
         ));
 
         let mut connected_nodes = HashMap::new();
@@ -2103,7 +2129,9 @@ mod tests {
         assert!(!allow_approved_identity_fallback(
             &rules,
             &connected_nodes,
-            &HashMap::new()
+            &HashMap::new(),
+            None,
+            Instant::now()
         ));
     }
 
@@ -2132,7 +2160,45 @@ mod tests {
         assert!(allow_approved_identity_fallback(
             &rules,
             &HashMap::new(),
-            &HashMap::new()
+            &HashMap::new(),
+            Some(Instant::now() + Duration::from_secs(5)),
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn manual_scan_keeps_approved_identity_fallback_for_retry_exhausted_nodes() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: None,
+            known_device_id: None,
+        }];
+        let reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: APPROVED_RECONNECT_ATTEMPT_LIMIT,
+                retry_exhausted: true,
+            },
+        )]);
+        let now = Instant::now();
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &reconnect_states,
+            Some(now + Duration::from_secs(5)),
+            now
+        ));
+
+        assert!(!allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &reconnect_states,
+            None,
+            now
         ));
     }
 
