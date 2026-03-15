@@ -4,6 +4,7 @@ import type { DesktopSnapshot } from "@core/contracts";
 
 import {
   buildBluetoothNodes,
+  buildPairedDevices,
   buildSetupVisibleDevices,
   buildMovementData,
   buildSignalHistory,
@@ -472,5 +473,92 @@ describe("buildSetupVisibleDevices", () => {
     );
 
     expect(devices[0]?.isPaired).toBe(true);
+  });
+});
+
+describe("buildPairedDevices", () => {
+  it("reuses live runtime connection state for approved nodes", () => {
+    const devices = buildPairedDevices(
+      {
+        adapterIssue: null,
+        approvedNodes: [
+          {
+            id: "stack-001",
+            label: "Leg Press",
+            peripheralId: "peripheral-1",
+            address: null,
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: "stack-001",
+          },
+        ],
+        nodes: [],
+      },
+      {
+        liveStatus: "Gateway live",
+        trayHint: "Waiting",
+        runtimeState: "running",
+        gatewayIssue: null,
+        gateway: {
+          hostname: "test-host",
+          mode: "reference-ble-node-gateway",
+          sessionId: "session-1",
+          adapterState: "poweredOn",
+          scanState: "scanning",
+          connectedNodeCount: 0,
+          reconnectingNodeCount: 1,
+          knownNodeCount: 1,
+          startedAt: new Date("2026-03-14T20:00:00.000Z").toISOString(),
+          updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          lastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+        },
+        devices: [
+          {
+            id: "stack-001",
+            lastState: "still",
+            lastSeenAt: Date.parse("2026-03-14T20:05:00.000Z"),
+            lastDelta: null,
+            updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+            hardwareId: "hw-1",
+            bootId: "boot-1",
+            firmwareVersion: "0.5.2",
+            machineLabel: "Leg Press",
+            siteId: "Dallas",
+            provisioningState: "provisioned",
+            updateStatus: "idle",
+            updateTargetVersion: null,
+            updateDetail: null,
+            updateUpdatedAt: null,
+            lastHeartbeatAt: null,
+            lastEventReceivedAt: null,
+            healthStatus: "stale",
+            gatewayConnectionState: "reconnecting",
+            telemetryFreshness: "stale",
+            peripheralId: "peripheral-1",
+            gatewayLastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+            gatewayLastConnectedAt: new Date("2026-03-14T20:04:00.000Z").toISOString(),
+            gatewayLastDisconnectedAt: new Date("2026-03-14T20:04:30.000Z").toISOString(),
+            gatewayLastTelemetryAt: new Date("2026-03-14T20:04:20.000Z").toISOString(),
+            gatewayDisconnectReason: "link lost",
+            advertisedName: "GymMotion-f4e9d4",
+            lastRssi: -61,
+            otaStatus: "idle",
+            otaTargetVersion: null,
+            otaProgressBytesSent: null,
+            otaTotalBytes: null,
+            otaLastPhase: null,
+            otaFailureDetail: null,
+            otaLastStatusMessage: null,
+            otaUpdatedAt: null,
+          },
+        ],
+        events: [],
+        logs: [],
+        activities: [],
+      },
+    );
+
+    expect(devices[0]?.connectionState).toBe("reconnecting");
+    expect(devices[0]?.name).toBe("Leg Press");
+    expect(devices[0]?.macAddress).toBe("peripheral-1");
   });
 });

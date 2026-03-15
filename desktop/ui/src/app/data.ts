@@ -39,6 +39,7 @@ export type SetupDevice = {
   macAddress: string | null;
   signalStrength: number | null;
   isPaired: boolean;
+  connectionState: GatewayConnectionState | "visible";
 };
 
 function rssiToPercent(rssi: number | null) {
@@ -141,17 +142,38 @@ export function buildSetupVisibleDevices(
         knownDeviceId: node.knownDeviceId ?? null,
       }),
     ),
+    connectionState: node.gatewayConnectionState,
   }));
 }
 
-export function buildPairedDevices(setup: DesktopSetupState): SetupDevice[] {
-  return setup.approvedNodes.map((node) => ({
-    id: node.id,
-    name: node.label,
-    macAddress: node.address ?? node.peripheralId ?? node.knownDeviceId ?? node.id,
-    signalStrength: null,
-    isPaired: true,
-  }));
+export function buildPairedDevices(
+  setup: DesktopSetupState,
+  snapshot: DesktopSnapshot | null = null,
+): SetupDevice[] {
+  return setup.approvedNodes.map((node) => {
+    const runtimeDevice = snapshot?.devices.find((device) =>
+      matchesApprovedNodeIdentity(node, {
+        peripheralId: device.peripheralId,
+        address: null,
+        localName: device.advertisedName,
+        knownDeviceId: device.id,
+      }),
+    );
+
+    return {
+      id: node.id,
+      name: runtimeDevice ? displayNodeName(runtimeDevice) : node.label,
+      macAddress:
+        runtimeDevice?.peripheralId ??
+        node.address ??
+        node.peripheralId ??
+        node.knownDeviceId ??
+        node.id,
+      signalStrength: runtimeDevice ? rssiToPercent(runtimeDevice.lastRssi) : null,
+      isPaired: true,
+      connectionState: runtimeDevice?.gatewayConnectionState ?? "disconnected",
+    };
+  });
 }
 
 export function buildSignalHistory(
