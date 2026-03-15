@@ -23,7 +23,7 @@ import {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "./legacy-server-deps";
+} from "../../backend/data";
 import {
   createPresignedReadUrl,
   hasBucketConfig,
