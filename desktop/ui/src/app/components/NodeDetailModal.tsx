@@ -11,8 +11,44 @@ interface NodeDetailModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function connectionStatus(node: BluetoothNodeData) {
+  switch (node.connectionState) {
+    case 'connected':
+      return {
+        label: 'Online',
+        className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+      };
+    case 'connecting':
+      return {
+        label: 'Connecting',
+        className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+      };
+    case 'reconnecting':
+      return {
+        label: 'Reconnecting',
+        className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+      };
+    case 'discovered':
+      return {
+        label: 'Discovered',
+        className: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+      };
+    case 'unreachable':
+      return {
+        label: 'Unreachable',
+        className: 'bg-red-500/10 text-red-400 border-red-500/20',
+      };
+    default:
+      return {
+        label: 'Disconnected',
+        className: 'bg-zinc-800 text-zinc-500 border-zinc-700',
+      };
+  }
+}
+
 export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalProps) {
   if (!node) return null;
+  const status = connectionStatus(node);
 
   const batteryColor =
     node.batteryLevel === null
@@ -62,13 +98,9 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
           </div>
           <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
             <Badge
-              className={`text-xs mx-auto ${
-                node.isConnected
-                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                  : 'bg-zinc-800 text-zinc-500 border-zinc-700'
-              }`}
+              className={`text-xs mx-auto ${status.className}`}
             >
-              {node.isConnected ? 'Online' : 'Offline'}
+              {status.label}
             </Badge>
             <div className="text-xs text-zinc-400 mt-1.5">Status</div>
           </div>

@@ -4,7 +4,9 @@ import type {
   DesktopSnapshot,
   DeviceActivitySummary,
   DiscoveredNodeSummary,
+  GatewayConnectionState,
   GatewayRuntimeDeviceSummary,
+  HealthStatus,
   MotionEventSummary,
 } from "@core/contracts";
 
@@ -20,6 +22,8 @@ export type BluetoothNodeData = {
   name: string;
   macAddress: string | null;
   isConnected: boolean;
+  connectionState: GatewayConnectionState;
+  healthStatus: HealthStatus;
   isMoving: boolean;
   signalStrength: number | null;
   batteryLevel: number | null;
@@ -86,7 +90,13 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     name: displayNodeName(device),
     macAddress: displayNodeAddress(device),
     isConnected: device.gatewayConnectionState === "connected",
-    isMoving: device.lastState === "moving" && device.gatewayConnectionState === "connected",
+    connectionState: device.gatewayConnectionState,
+    healthStatus: device.healthStatus,
+    isMoving:
+      device.lastState === "moving" &&
+      (device.gatewayConnectionState === "connected" ||
+        device.gatewayConnectionState === "connecting" ||
+        device.gatewayConnectionState === "reconnecting"),
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
     logs: buildNodeLogs(device, snapshot.activities),

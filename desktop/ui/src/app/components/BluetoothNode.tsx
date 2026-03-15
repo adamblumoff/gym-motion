@@ -13,9 +13,45 @@ interface BluetoothNodeProps {
   onForget?: (nodeId: string) => void;
 }
 
+function connectionBadge(node: BluetoothNodeData) {
+  switch (node.connectionState) {
+    case 'connected':
+      return {
+        label: 'Connected',
+        className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+      };
+    case 'connecting':
+      return {
+        label: 'Connecting',
+        className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+      };
+    case 'reconnecting':
+      return {
+        label: 'Reconnecting',
+        className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+      };
+    case 'discovered':
+      return {
+        label: 'Discovered',
+        className: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+      };
+    case 'unreachable':
+      return {
+        label: 'Unreachable',
+        className: 'bg-red-500/10 text-red-400 border-red-500/20',
+      };
+    default:
+      return {
+        label: 'Disconnected',
+        className: 'bg-zinc-800 text-zinc-500 border-zinc-700',
+      };
+  }
+}
+
 export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
   const [confirmForget, setConfirmForget] = useState(false);
+  const statusBadge = connectionBadge(node);
 
   useEffect(() => {
     if (node.isMoving) {
@@ -70,13 +106,9 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
           <div className="flex flex-col items-end gap-2">
             <Badge
               variant={node.isConnected ? 'default' : 'secondary'}
-              className={`text-xs ${
-                node.isConnected
-                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                  : 'bg-zinc-800 text-zinc-500 border-zinc-700'
-              }`}
+              className={`text-xs ${statusBadge.className}`}
             >
-              {node.isConnected ? 'Connected' : 'Offline'}
+              {statusBadge.label}
             </Badge>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
