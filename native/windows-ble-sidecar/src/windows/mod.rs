@@ -578,6 +578,14 @@ async fn run_session(
     if scanning {
         let _ = adapter.stop_scan().await;
     }
+    if let Ok(peripherals) = adapter.peripherals().await {
+        for peripheral in peripherals {
+            if peripheral.is_connected().await.unwrap_or(false) {
+                let _ = peripheral.disconnect().await;
+            }
+        }
+    }
+    let _ = adapter.clear_peripherals().await;
     writer
         .send(&Event::GatewayState {
             gateway: GatewayStatePayload {

@@ -1,4 +1,4 @@
-/* global Buffer, console, fetch */
+/* global Buffer, console, fetch, setTimeout */
 
 import path from "node:path";
 import process from "node:process";
@@ -570,8 +570,21 @@ async function shutdown() {
   shuttingDown = true;
 
   if (sidecar) {
+    const exitingSidecar = sidecar;
     sendCommand("shutdown");
-    sidecar.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => {
+        exitingSidecar.once("exit", resolve);
+      }),
+      new Promise((resolve) => {
+        setTimeout(resolve, 1500);
+      }),
+    ]);
+
+    if (!exitingSidecar.killed && exitingSidecar.exitCode === null) {
+      exitingSidecar.kill("SIGTERM");
+    }
+
     sidecar = null;
   }
 
