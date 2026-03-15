@@ -283,6 +283,48 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.reconnectingNodeCount).toBe(1);
   });
 
+  it("marks cached approved nodes as reconnecting when startup scan begins", async () => {
+    const runtimePort = 50310 + Math.floor(Math.random() * 1000);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+    runtimeTempDirs.push(tempDir);
+    const knownNodesPath = path.join(tempDir, "gateway-known-nodes.json");
+    await fs.writeFile(
+      knownNodesPath,
+      JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        nodes: [
+          {
+            deviceId: "stack-001",
+            peripheralId: "peripheral-1",
+            lastAdvertisedName: "GymMotion-f4e9d4",
+            lastKnownAddress: "AA:BB:CC:DD",
+            lastSeenAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+      knownNodesPath,
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("reconnecting");
+    expect(payload.gateway?.reconnectingNodeCount).toBe(1);
+  });
+
   it("marks disconnects as disconnected immediately even while scanning", async () => {
     const runtimePort = 50610 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({
