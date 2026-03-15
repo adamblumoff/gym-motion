@@ -80,6 +80,13 @@ function createEmptySnapshot(): DesktopSnapshot {
   };
 }
 
+function offlineGatewaySnapshot() {
+  return {
+    ...EMPTY_GATEWAY,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function mergeRepositoryDeviceIntoGatewaySnapshot(
   currentDevices: GatewayRuntimeDeviceSummary[],
   partialDevice: {
@@ -813,9 +820,7 @@ export function createManagedGatewayRuntime(
 
     if (startIssue) {
       updateGatewayStatus(
-        preserveSnapshot
-          ? { ...snapshot.gateway, updatedAt: new Date().toISOString() }
-          : { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
+        offlineGatewaySnapshot(),
         "degraded",
         startIssue,
       );
@@ -835,9 +840,7 @@ export function createManagedGatewayRuntime(
     } catch (error) {
       windowsScanRequested = false;
       updateGatewayStatus(
-        preserveSnapshot
-          ? { ...snapshot.gateway, updatedAt: new Date().toISOString() }
-          : { ...EMPTY_GATEWAY, updatedAt: new Date().toISOString() },
+        offlineGatewaySnapshot(),
         "degraded",
         error instanceof Error ? error.message : "Gateway runtime failed to start.",
       );

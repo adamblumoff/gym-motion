@@ -34,6 +34,22 @@ function formatSseEvent(event, payload) {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
+function latestTimestamp(...timestamps) {
+  let latestValue = null;
+  let latestTime = 0;
+
+  for (const timestamp of timestamps) {
+    const parsed = parseIsoTime(timestamp);
+
+    if (parsed > latestTime) {
+      latestTime = parsed;
+      latestValue = timestamp;
+    }
+  }
+
+  return latestValue;
+}
+
 function telemetryFreshnessFromTimestamp(timestamp) {
   if (!timestamp) {
     return "missing";
@@ -273,8 +289,13 @@ export function createGatewayRuntimeServer({
     const connectionState =
       runtime?.gatewayConnectionState ??
       (known ? "disconnected" : "unreachable");
-    const telemetryFreshness = telemetryFreshnessFromTimestamp(
+    const freshnessTimestamp = latestTimestamp(
       runtime?.gatewayLastTelemetryAt ?? null,
+      metadata?.lastHeartbeatAt ?? null,
+      metadata?.lastEventReceivedAt ?? null,
+    );
+    const telemetryFreshness = telemetryFreshnessFromTimestamp(
+      freshnessTimestamp,
     );
 
     return {

@@ -200,7 +200,7 @@ export function buildMovementData(events: MotionEventSummary[]) {
   const byHour = new Map<string, number>();
 
   for (const event of events) {
-    const hour = new Date(event.receivedAt).toLocaleTimeString("en-US", {
+    const hour = new Date(event.eventTimestamp).toLocaleTimeString("en-US", {
       hour12: false,
       hour: "2-digit",
     });
