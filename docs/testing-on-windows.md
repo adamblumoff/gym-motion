@@ -80,4 +80,5 @@ Validate the same Setup and reconnect flow in the packaged app.
 - When an approved node loses power or the BLE link drops, the dashboard should move to `Disconnected` immediately instead of waiting for telemetry freshness to age out.
 - While an approved node stays disconnected, the Windows app now sends silent reconnect nudges every 10 seconds. For this test pass, the forget-device prompt appears after 20 seconds per disconnected device; raise that back to 10 minutes once the flow is validated.
 - After the gateway reconnects to a managed node, it sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for fresh motion.
+- Managed firmware now tracks a Windows app-session lease. The sidecar refreshes that lease every 5 seconds, and the node expires it after 15 seconds so it can drop a stale BLE session, restart advertising, and recover from app restarts that do not produce a clean OS-level disconnect.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.

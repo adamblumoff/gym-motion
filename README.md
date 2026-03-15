@@ -60,6 +60,7 @@ Windows-side testing guide:
 - On Windows, approved nodes now reconnect automatically in the background after app restarts or BLE link loss; operators should only need manual scan for discovery and setup work.
 - On Windows, disconnected approved nodes now trigger silent reconnect nudges from the desktop app every 10 seconds. If a node stays disconnected for long enough, the app can prompt the operator to forget it. The current test timeout is 20 seconds and should go back to 10 minutes after validation.
 - On Windows, when a managed node reconnects, the gateway sends an explicit runtime `sync-now` control command so the node immediately republishes its current telemetry snapshot after gateway restarts or link recovery.
+- Firmware now also expects a Windows app-session lease over BLE. The sidecar renews that lease every 5 seconds, and the node expires it after 15 seconds so it can drop stale Windows sessions, restart advertising, and become reconnectable again if the app disappears without a clean BLE disconnect.
 - On Windows, the desktop app uses the native Rust WinRT BLE sidecar so it can see built-in Bluetooth adapters. The legacy noble gateway stays in place for non-Windows hosts.
 - Real BLE validation should happen from a Windows-side clone at `C:\Users\adamb\Code\gym-motion`, with `.env.local` copied into that repo after cloning.
 - Windows-side local development now requires the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build the native BLE sidecar before launching or packaging.
