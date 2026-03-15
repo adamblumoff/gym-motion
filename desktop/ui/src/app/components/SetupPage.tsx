@@ -10,7 +10,9 @@ import { Card } from './ui/card';
 
 export function SetupPage() {
   const { setup, snapshot, rescanAdapters, setAllowedNodes } = useDesktopRuntime();
-  const discoveredDevices = setup ? buildSetupVisibleDevices(setup, setup.approvedNodes) : [];
+  const discoveredDevices = setup
+    ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
+    : [];
   const pairedDevices = setup ? buildPairedDevices(setup) : [];
   const isScanning = snapshot?.gateway.scanState === 'scanning';
 
