@@ -283,7 +283,7 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.reconnectingNodeCount).toBe(1);
   });
 
-  it("marks cached approved nodes as reconnecting when startup scan begins", async () => {
+  it("keeps cached approved nodes disconnected while startup scan is still silent", async () => {
     const runtimePort = 50310 + Math.floor(Math.random() * 1000);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
     runtimeTempDirs.push(tempDir);
@@ -321,8 +321,8 @@ describe("gateway runtime server", () => {
     const payload = await response.json();
     const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
 
-    expect(device?.gatewayConnectionState).toBe("reconnecting");
-    expect(payload.gateway?.reconnectingNodeCount).toBe(1);
+    expect(device?.gatewayConnectionState).toBe("disconnected");
+    expect(payload.gateway?.reconnectingNodeCount).toBe(0);
   });
 
   it("marks disconnects as disconnected immediately even while scanning", async () => {

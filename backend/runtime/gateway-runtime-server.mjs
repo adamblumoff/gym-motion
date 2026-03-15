@@ -491,27 +491,6 @@ export function createGatewayRuntimeServer({
     }
   }
 
-  function promoteKnownNodesToReconnecting() {
-    for (const deviceId of knownNodesByDeviceId.keys()) {
-      const runtime = runtimeByDeviceId.get(deviceId) ?? null;
-
-      if (
-        runtime?.gatewayConnectionState === "connected" ||
-        runtime?.gatewayConnectionState === "connecting" ||
-        runtime?.gatewayConnectionState === "reconnecting"
-      ) {
-        continue;
-      }
-
-      updateRuntimeNode(deviceId, {
-        gatewayConnectionState: gatewayState.adapterState === "poweredOn"
-          ? "reconnecting"
-          : "unreachable",
-      });
-      emitDevice(deviceId);
-    }
-  }
-
   function inspectNodeConnection({
     deviceId = null,
     knownDeviceId = null,
@@ -769,8 +748,7 @@ export function createGatewayRuntimeServer({
       if (state === "poweredOn") {
         for (const deviceId of knownNodesByDeviceId.keys()) {
           updateRuntimeNode(deviceId, {
-            gatewayConnectionState:
-              gatewayState.scanState === "scanning" ? "reconnecting" : "disconnected",
+            gatewayConnectionState: "disconnected",
           });
           emitDevice(deviceId);
         }
@@ -804,9 +782,7 @@ export function createGatewayRuntimeServer({
     setScanState(scanState) {
       touchGatewayState({ scanState });
 
-      if (scanState === "scanning") {
-        promoteKnownNodesToReconnecting();
-      } else {
+      if (scanState !== "scanning") {
         normalizeIdleConnectionStates();
       }
 
