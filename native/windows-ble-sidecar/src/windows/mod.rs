@@ -3,7 +3,7 @@ use std::{
     env,
     future::pending,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -103,6 +103,96 @@ struct SessionHandle {
 
 enum SessionCommand {
     StartScan,
+    RefreshScanPolicy,
+}
+
+fn approved_nodes_pending_connection(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+) -> bool {
+    !rules.is_empty() && !all_approved_nodes_connected(rules, connected_nodes)
+}
+
+fn should_scan(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+) -> bool {
+    approved_nodes_pending_connection(rules, connected_nodes)
+        || manual_scan_deadline
+            .map(|deadline| deadline > now)
+            .unwrap_or(false)
+}
+
+async fn emit_gateway_state(
+    writer: &EventWriter,
+    adapter: &Adapter,
+    selected_adapter_id: &str,
+    scan_state: &str,
+    last_advertisement_at: &Option<String>,
+) -> Result<()> {
+    writer
+        .send(&Event::GatewayState {
+            gateway: GatewayStatePayload {
+                adapter_state: normalize_adapter_state(
+                    adapter
+                        .adapter_state()
+                        .await
+                        .unwrap_or(CentralState::Unknown),
+                ),
+                scan_state: scan_state.to_string(),
+                selected_adapter_id: Some(selected_adapter_id.to_string()),
+                last_advertisement_at: last_advertisement_at.clone(),
+                issue: None,
+            },
+        })
+        .await?;
+
+    Ok(())
+}
+
+async fn sync_scan_state(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    selected_adapter_id: &str,
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    scanning: &mut bool,
+    manual_scan_deadline: Option<Instant>,
+    last_advertisement_at: &Option<String>,
+) -> Result<()> {
+    let now = Instant::now();
+    let should_scan_now = should_scan(allowed, connected_nodes, manual_scan_deadline, now);
+
+    if should_scan_now && !*scanning {
+        adapter.start_scan(ScanFilter::default()).await?;
+        *scanning = true;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "scanning",
+            last_advertisement_at,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if !should_scan_now && *scanning {
+        let _ = adapter.stop_scan().await;
+        *scanning = false;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "stopped",
+            last_advertisement_at,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 fn node_key(node: &DiscoveredNode) -> String {
@@ -238,6 +328,9 @@ impl Sidecar {
             }
             Command::SetAllowedNodes { nodes } => {
                 *self.allowed_nodes.write().await = nodes;
+                if let Some(session) = &self.session {
+                    let _ = session.commands.send(SessionCommand::RefreshScanPolicy);
+                }
             }
             Command::Start => {
                 self.start_session().await?;
@@ -402,7 +495,22 @@ async fn run_session(
     let mut connected_nodes = HashMap::<String, DiscoveredNode>::new();
     let mut last_advertisement_at = None;
     let mut scanning = false;
-    let mut scan_deadline = None;
+    let mut manual_scan_deadline = None;
+
+    {
+        let allowed = allowed_nodes.read().await.clone();
+        sync_scan_state(
+            &adapter,
+            &writer,
+            &selected_adapter_id,
+            &allowed,
+            &connected_nodes,
+            &mut scanning,
+            manual_scan_deadline,
+            &last_advertisement_at,
+        )
+        .await?;
+    }
 
     loop {
         tokio::select! {
@@ -416,55 +524,46 @@ async fn run_session(
                     break;
                 };
 
-                if matches!(command, SessionCommand::StartScan) && !scanning {
-                    adapter.start_scan(ScanFilter::default()).await?;
-                    scanning = true;
-                    scan_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
-                    writer
-                        .send(&Event::GatewayState {
-                            gateway: GatewayStatePayload {
-                                adapter_state: normalize_adapter_state(
-                                    adapter
-                                        .adapter_state()
-                                        .await
-                                        .unwrap_or(CentralState::Unknown),
-                                ),
-                                scan_state: "scanning".to_string(),
-                                selected_adapter_id: Some(selected_adapter_id.clone()),
-                                last_advertisement_at: last_advertisement_at.clone(),
-                                issue: None,
-                            },
-                        })
-                        .await?;
+                match command {
+                    SessionCommand::StartScan => {
+                        manual_scan_deadline = Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                    }
+                    SessionCommand::RefreshScanPolicy => {}
                 }
+
+                let allowed = allowed_nodes.read().await.clone();
+                sync_scan_state(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &mut scanning,
+                    manual_scan_deadline,
+                    &last_advertisement_at,
+                )
+                .await?;
             }
             _ = async {
-                if let Some(deadline) = scan_deadline {
-                    tokio::time::sleep_until(deadline).await;
+                if let Some(deadline) = manual_scan_deadline {
+                    tokio::time::sleep_until(deadline.into()).await;
                 } else {
                     pending::<()>().await;
                 }
             } => {
-                if scanning {
-                    let _ = adapter.stop_scan().await;
-                    scanning = false;
-                    scan_deadline = None;
-                    writer
-                        .send(&Event::GatewayState {
-                            gateway: GatewayStatePayload {
-                                adapter_state: normalize_adapter_state(
-                                    adapter
-                                        .adapter_state()
-                                        .await
-                                        .unwrap_or(CentralState::Unknown),
-                                ),
-                                scan_state: "stopped".to_string(),
-                                selected_adapter_id: Some(selected_adapter_id.clone()),
-                                last_advertisement_at: last_advertisement_at.clone(),
-                                issue: None,
-                            }
-                        }).await?;
-                }
+                manual_scan_deadline = None;
+                let allowed = allowed_nodes.read().await.clone();
+                sync_scan_state(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &mut scanning,
+                    manual_scan_deadline,
+                    &last_advertisement_at,
+                )
+                .await?;
             }
             event = events.next() => {
                 let Some(event) = event else {
@@ -535,27 +634,17 @@ async fn run_session(
                         let allowed = allowed_nodes.read().await.clone();
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
                             connected_nodes.insert(node_key(&node), node.clone());
-                            if scanning {
-                                if all_approved_nodes_connected(&allowed, &connected_nodes) {
-                                    let _ = adapter.stop_scan().await;
-                                    scanning = false;
-                                    scan_deadline = None;
-                                    writer.send(&Event::GatewayState {
-                                        gateway: GatewayStatePayload {
-                                            adapter_state: normalize_adapter_state(
-                                                adapter
-                                                    .adapter_state()
-                                                    .await
-                                                    .unwrap_or(CentralState::Unknown),
-                                            ),
-                                            scan_state: "stopped".to_string(),
-                                            selected_adapter_id: Some(selected_adapter_id.clone()),
-                                            last_advertisement_at: last_advertisement_at.clone(),
-                                            issue: None,
-                                        }
-                                    }).await?;
-                                }
-                            }
+                            sync_scan_state(
+                                &adapter,
+                                &writer,
+                                &selected_adapter_id,
+                                &allowed,
+                                &connected_nodes,
+                                &mut scanning,
+                                manual_scan_deadline,
+                                &last_advertisement_at,
+                            )
+                            .await?;
                             writer.send(&Event::NodeConnectionState {
                                 node,
                                 gateway_connection_state: "connected".to_string(),
@@ -585,16 +674,22 @@ async fn run_session(
                             }
 
                             connected_nodes.remove(&node_key(&node));
-                            let state = if is_approved(&node, &allowed) {
-                                "reconnecting"
-                            } else {
-                                "disconnected"
-                            };
                             writer.send(&Event::NodeConnectionState {
                                 node,
-                                gateway_connection_state: state.to_string(),
+                                gateway_connection_state: "disconnected".to_string(),
                                 reason: Some("Device disconnected.".to_string()),
                             }).await?;
+                            sync_scan_state(
+                                &adapter,
+                                &writer,
+                                &selected_adapter_id,
+                                &allowed,
+                                &connected_nodes,
+                                &mut scanning,
+                                manual_scan_deadline,
+                                &last_advertisement_at,
+                            )
+                            .await?;
                         }
                     }
                     _ => {}
@@ -721,8 +816,12 @@ async fn connect_and_stream(
         }
     }
 
+    if peripheral.is_connected().await.unwrap_or(false) {
+        let _ = peripheral.disconnect().await;
+    }
+
     sleep(Duration::from_millis(100)).await;
-    Ok(())
+    Err(anyhow!("Telemetry stream ended for {}.", node.label))
 }
 
 async fn write_chunked_json_command(
@@ -910,5 +1009,50 @@ mod tests {
             Some(&br#"{"type":"sync-now"}"#[..])
         );
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn scan_policy_stays_active_while_approved_nodes_are_missing() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::new();
+
+        assert!(approved_nodes_pending_connection(&rules, &connected));
+        assert!(should_scan(&rules, &connected, None, Instant::now()));
+    }
+
+    #[test]
+    fn scan_policy_stops_once_all_approved_nodes_are_connected_without_manual_scan() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let mut connected = HashMap::new();
+        connected.insert(
+            "peripheral-1".to_string(),
+            DiscoveredNode {
+                id: "peripheral:peripheral-1".to_string(),
+                label: "Bench".to_string(),
+                peripheral_id: Some("peripheral-1".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+                last_rssi: None,
+                last_seen_at: None,
+            },
+        );
+
+        assert!(!approved_nodes_pending_connection(&rules, &connected));
+        assert!(!should_scan(&rules, &connected, None, Instant::now()));
     }
 }
