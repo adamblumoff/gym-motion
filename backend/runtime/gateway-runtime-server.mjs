@@ -738,6 +738,17 @@ export function createGatewayRuntimeServer({
           });
           emitDevice(deviceId);
         }
+      } else {
+        for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
+          runtimeByDeviceId.set(deviceId, {
+            ...runtime,
+            gatewayConnectionState: "unreachable",
+            gatewayLastDisconnectedAt: nowIso(),
+            gatewayDisconnectReason: `adapter-${state}`,
+            updatedAt: nowIso(),
+          });
+          emitDevice(deviceId);
+        }
       }
 
       broadcastGatewayStatus();

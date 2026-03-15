@@ -772,13 +772,34 @@ export function createManagedGatewayRuntime(
         void refreshSetupNodes();
         break;
         }
-      case "device-log":
+      case "device-log": {
+        const activity: DeviceActivitySummary = {
+          id: `log-${event.payload.id}`,
+          deviceId: event.payload.deviceId,
+          sequence: event.payload.sequence,
+          kind: "lifecycle",
+          title: event.payload.code ?? event.payload.level.toUpperCase(),
+          message: event.payload.message,
+          state: null,
+          level: event.payload.level,
+          code: event.payload.code,
+          delta: null,
+          eventTimestamp: event.payload.deviceTimestamp,
+          receivedAt: event.payload.receivedAt,
+          bootId: event.payload.bootId,
+          firmwareVersion: event.payload.firmwareVersion,
+          hardwareId: event.payload.hardwareId,
+          metadata: event.payload.metadata,
+        };
         snapshot = {
           ...snapshot,
           logs: mergeLogUpdate(snapshot.logs, event.payload, 18),
+          activities: mergeActivityUpdate(snapshot.activities, activity, 30),
         };
         emit({ type: "log-recorded", log: event.payload });
+        emit({ type: "activity-recorded", activity });
         break;
+      }
       case "device-updated":
         void refreshGatewayState().then(() => {
           emit({ type: "snapshot", snapshot });

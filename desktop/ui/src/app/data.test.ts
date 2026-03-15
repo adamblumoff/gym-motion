@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { DesktopSnapshot } from "@core/contracts";
 
-import { buildBluetoothNodes, buildMovementData } from "./data";
+import { buildBluetoothNodes, buildMovementData, calculateAverageSignal } from "./data";
 
 describe("buildBluetoothNodes", () => {
   it("preserves non-connected gateway states instead of flattening them to offline", () => {
@@ -100,5 +100,19 @@ describe("buildMovementData", () => {
     ]);
 
     expect(chart).toEqual([{ hour: expectedHour, movements: 1 }]);
+  });
+});
+
+describe("calculateAverageSignal", () => {
+  it("averages only populated signal slots", () => {
+    expect(
+      calculateAverageSignal({
+        sensorA: 80,
+        sensorB: 0,
+        sensorC: 0,
+        sensorD: 0,
+        sensorE: 0,
+      }),
+    ).toBe(80);
   });
 });

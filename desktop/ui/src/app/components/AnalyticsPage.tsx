@@ -22,6 +22,7 @@ import {
   buildMovementData,
   buildSignalHistory,
   buildUptimeData,
+  calculateAverageSignal,
 } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
 import { Button } from './ui/button';
@@ -70,16 +71,7 @@ export function AnalyticsPage() {
 
   const totalMovements = movementData.reduce((sum, item) => sum + item.movements, 0);
   const latestSignal = signalHistory[signalHistory.length - 1] ?? null;
-  const avgSignal = Math.round(
-    latestSignal
-      ? (latestSignal.sensorA +
-          latestSignal.sensorB +
-          latestSignal.sensorC +
-          latestSignal.sensorD +
-          latestSignal.sensorE) /
-          5
-      : 0,
-  );
+  const avgSignal = calculateAverageSignal(latestSignal);
   const avgUptime =
     uptimeData.filter((item) => item.uptime > 0).reduce((sum, item) => sum + item.uptime, 0) /
     Math.max(1, uptimeData.filter((item) => item.uptime > 0).length);

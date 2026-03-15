@@ -183,4 +183,33 @@ describe("gateway runtime server", () => {
     expect(device?.telemetryFreshness).toBe("fresh");
     expect(device?.healthStatus).toBe("online");
   });
+
+  it("marks devices unreachable when the adapter goes offline", async () => {
+    const runtimePort = 49110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.setAdapterState("poweredOff");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("unreachable");
+    expect(device?.gatewayDisconnectReason).toBe("adapter-poweredOff");
+  });
 });

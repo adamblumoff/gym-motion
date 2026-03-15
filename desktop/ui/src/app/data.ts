@@ -228,3 +228,27 @@ export function buildBatteryData(nodes: BluetoothNodeData[]) {
     fill: ["#3b82f6", "#06b6d4", "#8b5cf6", "#f59e0b", "#06b6d4"][index % 5] ?? "#3b82f6",
   }));
 }
+
+export function calculateAverageSignal(latestSignal: {
+  sensorA: number;
+  sensorB: number;
+  sensorC: number;
+  sensorD: number;
+  sensorE: number;
+} | null) {
+  const signalValues = latestSignal
+    ? [
+        latestSignal.sensorA,
+        latestSignal.sensorB,
+        latestSignal.sensorC,
+        latestSignal.sensorD,
+        latestSignal.sensorE,
+      ].filter((value) => value > 0)
+    : [];
+
+  return Math.round(
+    signalValues.length > 0
+      ? signalValues.reduce((sum, value) => sum + value, 0) / signalValues.length
+      : 0,
+  );
+}
