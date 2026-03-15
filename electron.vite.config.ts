@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 export default defineConfig({
@@ -41,7 +42,7 @@ export default defineConfig({
         "@ui": path.resolve(__dirname, "desktop/ui/src"),
       },
     },
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     build: {
       rollupOptions: {
         input: path.resolve(__dirname, "desktop/ui/index.html"),
