@@ -534,6 +534,11 @@ function attachControlReader() {
 
       if (command.type === "rescan") {
         sendCommand("rescan");
+        return;
+      }
+
+      if (command.type === "request_silent_reconnect") {
+        sendCommand("refresh_scan_policy");
       }
     } catch (error) {
       console.error("[gateway-winrt] failed to parse control command", error);

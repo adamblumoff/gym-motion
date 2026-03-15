@@ -75,6 +75,7 @@ pub enum Command {
     Start,
     Stop,
     Rescan,
+    RefreshScanPolicy,
     Shutdown,
 }
 
@@ -128,6 +129,14 @@ mod tests {
 
         assert_eq!(value["type"], "select_adapter");
         assert_eq!(value["adapter_id"], "winrt:0");
+    }
+
+    #[test]
+    fn serializes_refresh_scan_policy_command() {
+        let value =
+            serde_json::to_value(Command::RefreshScanPolicy).expect("command should serialize");
+
+        assert_eq!(value["type"], "refresh_scan_policy");
     }
 
     #[test]

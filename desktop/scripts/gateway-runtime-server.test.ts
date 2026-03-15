@@ -342,6 +342,56 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.reconnectingNodeCount).toBe(0);
   });
 
+  it("resolves address-only known nodes case-insensitively during rediscovery", async () => {
+    const runtimePort = 50360 + Math.floor(Math.random() * 1000);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
+    runtimeTempDirs.push(tempDir);
+    const knownNodesPath = path.join(tempDir, "gateway-known-nodes.json");
+    await fs.writeFile(
+      knownNodesPath,
+      JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        nodes: [
+          {
+            deviceId: "stack-001",
+            peripheralId: null,
+            lastAdvertisedName: null,
+            lastKnownAddress: "AA:BB:CC:DD",
+            lastSeenAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const runtimeServer = createGatewayRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+      knownNodesPath,
+    });
+    runtimeServers.push(runtimeServer);
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: null,
+      peripheralId: "peripheral-1",
+      address: "aa:bb:cc:dd",
+      localName: null,
+      rssi: -58,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.id).toBe("stack-001");
+    expect(payload.devices.map((item: { id: string }) => item.id)).toEqual(["stack-001"]);
+    expect(device?.gatewayConnectionState).toBe("disconnected");
+  });
+
   it("reports manual scan reason separately from silent reconnect search", async () => {
     const runtimePort = 50410 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({

@@ -958,11 +958,10 @@ export function createManagedGatewayRuntime(
     async requestSilentReconnect() {
       if (usesWindowsNativeGateway(process.platform)) {
         if (child) {
-          sendWindowsGatewayCommand({ type: "rescan" });
+          sendWindowsGatewayCommand({ type: "request_silent_reconnect" });
           return;
         }
 
-        windowsScanRequested = true;
         await restartRuntime();
         return;
       }

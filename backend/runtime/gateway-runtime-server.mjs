@@ -409,6 +409,10 @@ export function createGatewayRuntimeServer({
     return deviceIdByPeripheralId.get(peripheralId) ?? null;
   }
 
+  function normalizeBleAddress(address) {
+    return typeof address === "string" ? address.toLowerCase() : null;
+  }
+
   function resolveKnownDeviceIdByDiscovery({
     deviceId = null,
     knownDeviceId = null,
@@ -441,8 +445,9 @@ export function createGatewayRuntimeServer({
     }
 
     if (address) {
+      const normalizedAddress = normalizeBleAddress(address);
       const addressMatches = Array.from(knownNodesByDeviceId.values()).filter(
-        (node) => node.lastKnownAddress === address,
+        (node) => normalizeBleAddress(node.lastKnownAddress) === normalizedAddress,
       );
 
       if (addressMatches.length === 1) {
