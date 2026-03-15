@@ -109,4 +109,17 @@ describe("setup-rules", () => {
       }),
     ).toBe(true);
   });
+
+  it("matches approved node addresses case-insensitively", () => {
+    const [rule] = createSetupState().approvedNodes;
+
+    expect(
+      matchesApprovedNodeIdentity(rule, {
+        peripheralId: null,
+        address: "aa:bb",
+        localName: null,
+        knownDeviceId: null,
+      }),
+    ).toBe(true);
+  });
 });

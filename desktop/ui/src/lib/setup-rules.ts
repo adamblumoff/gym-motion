@@ -11,6 +11,20 @@ type ForgetIdentity = DiscoveryIdentity & {
   id: string | null;
 };
 
+function exactIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left === right);
+}
+
+function addressIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
     ? setup.nodes
@@ -92,9 +106,9 @@ export function matchesApprovedNodeIdentity(
   identity: DiscoveryIdentity,
 ) {
   return Boolean(
-    (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
-      (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
-      (rule.address && identity.address === rule.address) ||
-      (rule.localName && identity.localName === rule.localName),
+    exactIdentityMatch(rule.knownDeviceId, identity.knownDeviceId) ||
+      exactIdentityMatch(rule.peripheralId, identity.peripheralId) ||
+      addressIdentityMatch(rule.address, identity.address) ||
+      exactIdentityMatch(rule.localName, identity.localName),
   );
 }

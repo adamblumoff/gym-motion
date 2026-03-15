@@ -1510,18 +1510,8 @@ async fn connect_and_stream(
     )
     .await?;
     send_app_session_lease(&peripheral, &control_characteristic, &app_session_id).await?;
-    let _ = command_sender.send(SessionCommand::ConnectionHealthy {
-        node: node.clone(),
-    });
-    writer
-        .send(&Event::NodeConnectionState {
-            node: node.clone(),
-            gateway_connection_state: "connected".to_string(),
-            reason: None,
-            reconnect: reconnect.clone(),
-        })
-        .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
+    let mut session_healthy_reported = false;
     let mut connected_identity_confirmed = node.known_device_id.is_some();
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
     let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
@@ -1577,8 +1567,11 @@ async fn connect_and_stream(
                             }
                             let mut enriched = node.clone();
                             enriched.known_device_id = Some(payload.device_id.clone());
-                            if !connected_identity_confirmed {
-                                connected_identity_confirmed = true;
+                            if !session_healthy_reported {
+                                session_healthy_reported = true;
+                                let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+                                    node: enriched.clone(),
+                                });
                                 writer
                                     .send(&Event::NodeConnectionState {
                                         node: enriched.clone(),
@@ -1587,6 +1580,9 @@ async fn connect_and_stream(
                                         reconnect: reconnect.clone(),
                                     })
                                     .await?;
+                            }
+                            if !connected_identity_confirmed {
+                                connected_identity_confirmed = true;
                             }
                             writer
                                 .send(&Event::Telemetry {
