@@ -798,8 +798,18 @@ export function createGatewayRuntimeServer({
         return;
       }
 
+      const existingRuntime = runtimeByDeviceId.get(resolvedDeviceId) ?? null;
+      const shouldMarkReconnecting =
+        gatewayState.adapterState === "poweredOn" &&
+        gatewayState.scanState === "scanning" &&
+        (existingRuntime?.gatewayConnectionState === "disconnected" ||
+          existingRuntime?.gatewayConnectionState === "unreachable");
+
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        gatewayConnectionState: shouldMarkReconnecting
+          ? "reconnecting"
+          : existingRuntime?.gatewayConnectionState,
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
