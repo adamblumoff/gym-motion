@@ -5,7 +5,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-import { createGatewayRuntimeServer } from "../../legacy/scripts/gateway-runtime-server.mjs";
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 
 const config = {
   apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),

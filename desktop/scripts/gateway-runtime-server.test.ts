@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { createGatewayRuntimeServer } from "../../legacy/scripts/gateway-runtime-server.mjs";
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 
 const runtimeServers: Array<ReturnType<typeof createGatewayRuntimeServer>> = [];
 

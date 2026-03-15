@@ -3,7 +3,7 @@ import process from "node:process";
 
 import noble from "@abandonware/noble";
 import { createJsonObjectDecoder } from "./ble-json-decoder.mjs";
-import { createGatewayRuntimeServer } from "./gateway-runtime-server.mjs";
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 
 const SERVICE_UUID = normalizeUuid(
   process.env.BLE_RUNTIME_SERVICE_UUID ??
