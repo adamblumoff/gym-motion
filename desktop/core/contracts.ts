@@ -25,6 +25,7 @@ export const gatewayConnectionStateSchema = z.enum([
   "disconnected",
   "unreachable",
 ]);
+export const telemetryFreshnessSchema = z.enum(["fresh", "stale", "missing"]);
 export const otaRuntimeStatusSchema = z.enum([
   "idle",
   "available",
@@ -106,6 +107,7 @@ export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
 export type DeviceLogLevel = z.infer<typeof deviceLogLevelSchema>;
 export type GatewayConnectionState = z.infer<typeof gatewayConnectionStateSchema>;
+export type TelemetryFreshness = z.infer<typeof telemetryFreshnessSchema>;
 export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>;
@@ -189,6 +191,7 @@ export type DesktopSetupState = {
 
 export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayConnectionState: GatewayConnectionState;
+  telemetryFreshness: TelemetryFreshness;
   peripheralId: string | null;
   gatewayLastAdvertisementAt: string | null;
   gatewayLastConnectedAt: string | null;
@@ -257,7 +260,7 @@ export type DeviceActivitySummary = {
 export type DesktopSnapshot = {
   liveStatus: string;
   trayHint: string;
-  runtimeState: "starting" | "running" | "degraded";
+  runtimeState: "starting" | "running" | "restarting" | "degraded";
   gatewayIssue: string | null;
   gateway: GatewayStatusSummary;
   devices: GatewayRuntimeDeviceSummary[];

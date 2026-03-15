@@ -6,10 +6,7 @@ import path from "node:path";
 
 const METADATA_REFRESH_MS = 15_000;
 const STREAM_PING_MS = 15_000;
-// The firmware emits a keepalive telemetry update roughly every 15 seconds when idle.
-// WinRT can report a transient disconnect between those notifications, so keep the
-// node connected until it misses at least one full keepalive window.
-const TRANSIENT_DISCONNECT_GRACE_MS = 20_000;
+const TELEMETRY_FRESH_MS = 20_000;
 const DEFAULT_KNOWN_NODE_DIR = path.join(process.cwd(), "data");
 
 function nowIso() {
@@ -37,12 +34,21 @@ function formatSseEvent(event, payload) {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function healthStatusFromConnectionState(connectionState) {
-  if (connectionState === "connected") {
+function telemetryFreshnessFromTimestamp(timestamp) {
+  if (!timestamp) {
+    return "missing";
+  }
+
+  return Date.now() - parseIsoTime(timestamp) <= TELEMETRY_FRESH_MS ? "fresh" : "stale";
+}
+
+function healthStatusFromRuntime(connectionState, telemetryFreshness) {
+  if (connectionState === "connected" && telemetryFreshness === "fresh") {
     return "online";
   }
 
   if (
+    (connectionState === "connected" && telemetryFreshness !== "fresh") ||
     connectionState === "connecting" ||
     connectionState === "reconnecting" ||
     connectionState === "discovered"
@@ -267,6 +273,9 @@ export function createGatewayRuntimeServer({
     const connectionState =
       runtime?.gatewayConnectionState ??
       (known ? "disconnected" : "unreachable");
+    const telemetryFreshness = telemetryFreshnessFromTimestamp(
+      runtime?.gatewayLastTelemetryAt ?? null,
+    );
 
     return {
       id: deviceId,
@@ -287,8 +296,9 @@ export function createGatewayRuntimeServer({
       updateTargetVersion: metadata?.updateTargetVersion ?? null,
       updateDetail: metadata?.updateDetail ?? null,
       updateUpdatedAt: metadata?.updateUpdatedAt ?? null,
-      healthStatus: healthStatusFromConnectionState(connectionState),
+      healthStatus: healthStatusFromRuntime(connectionState, telemetryFreshness),
       gatewayConnectionState: connectionState,
+      telemetryFreshness,
       peripheralId: runtime?.peripheralId ?? known?.peripheralId ?? null,
       gatewayLastAdvertisementAt:
         runtime?.gatewayLastAdvertisementAt ?? known?.lastSeenAt ?? null,
@@ -432,18 +442,25 @@ export function createGatewayRuntimeServer({
     }
   }
 
-  function shouldIgnoreTransientDisconnect(deviceId) {
-    const runtime = runtimeByDeviceId.get(deviceId);
-    if (!runtime) {
-      return false;
+  function inspectNodeConnection({ deviceId = null, peripheralId, localName, address }) {
+    const resolvedDeviceId =
+      deviceId ?? resolveKnownDeviceIdByDiscovery({ peripheralId, localName, address });
+
+    if (!resolvedDeviceId) {
+      return null;
     }
 
-    const lastTelemetryAt = parseIsoTime(runtime.gatewayLastTelemetryAt);
-    if (lastTelemetryAt === 0) {
-      return false;
-    }
-
-    return Date.now() - lastTelemetryAt < TRANSIENT_DISCONNECT_GRACE_MS;
+    const runtime = runtimeByDeviceId.get(resolvedDeviceId) ?? null;
+    const merged = mergeDevice(resolvedDeviceId);
+    return {
+      deviceId: resolvedDeviceId,
+      gatewayConnectionState: merged.gatewayConnectionState,
+      telemetryFreshness: merged.telemetryFreshness,
+      lastTelemetryAt: runtime?.gatewayLastTelemetryAt ?? null,
+      lastConnectedAt: runtime?.gatewayLastConnectedAt ?? null,
+      lastDisconnectedAt: runtime?.gatewayLastDisconnectedAt ?? null,
+      disconnectReason: runtime?.gatewayDisconnectReason ?? null,
+    };
   }
 
   function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }) {
@@ -728,7 +745,6 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(knownDeviceId, {
         peripheralId,
-        gatewayConnectionState: "reconnecting",
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
@@ -745,6 +761,7 @@ export function createGatewayRuntimeServer({
     },
 
     noteConnecting({ peripheralId, address, localName, rssi }) {
+      const previous = inspectNodeConnection({ peripheralId, localName, address });
       const knownDeviceId = resolveKnownDeviceIdByDiscovery({
         peripheralId,
         localName,
@@ -776,9 +793,14 @@ export function createGatewayRuntimeServer({
       });
       emitDevice(knownDeviceId);
       broadcastGatewayStatus();
+      return {
+        before: previous,
+        after: inspectNodeConnection({ deviceId: knownDeviceId }),
+      };
     },
 
     noteConnected({ peripheralId, address, localName, rssi }) {
+      const previous = inspectNodeConnection({ peripheralId, localName, address });
       const knownDeviceId = resolveKnownDeviceIdByDiscovery({
         peripheralId,
         localName,
@@ -812,9 +834,14 @@ export function createGatewayRuntimeServer({
       });
       emitDevice(knownDeviceId);
       broadcastGatewayStatus();
+      return {
+        before: previous,
+        after: inspectNodeConnection({ deviceId: knownDeviceId }),
+      };
     },
 
     async noteTelemetry(payload, peripheralInfo = {}) {
+      const previous = inspectNodeConnection({ deviceId: payload.deviceId });
       const telemetryAt = nowIso();
 
       updateRuntimeNode(payload.deviceId, {
@@ -823,13 +850,9 @@ export function createGatewayRuntimeServer({
           runtimeByDeviceId.get(payload.deviceId)?.peripheralId ??
           knownNodesByDeviceId.get(payload.deviceId)?.peripheralId ??
           null,
-        gatewayConnectionState: "connected",
-        gatewayLastConnectedAt:
-          runtimeByDeviceId.get(payload.deviceId)?.gatewayLastConnectedAt ?? telemetryAt,
         gatewayLastTelemetryAt: telemetryAt,
         gatewayLastAdvertisementAt:
           runtimeByDeviceId.get(payload.deviceId)?.gatewayLastAdvertisementAt ?? telemetryAt,
-        gatewayDisconnectReason: null,
         advertisedName: peripheralInfo.localName ?? null,
         lastRssi: peripheralInfo.rssi ?? null,
         lastState: payload.state,
@@ -868,9 +891,14 @@ export function createGatewayRuntimeServer({
       await refreshMetadata(!metadataByDeviceId.has(payload.deviceId));
       emitDevice(payload.deviceId);
       broadcastGatewayStatus();
+      return {
+        before: previous,
+        after: inspectNodeConnection({ deviceId: payload.deviceId }),
+      };
     },
 
     noteDisconnected({ peripheralId, localName, address, reason }) {
+      const previous = inspectNodeConnection({ peripheralId, localName, address });
       const deviceId = resolveKnownDeviceIdByDiscovery({
         peripheralId,
         localName,
@@ -878,11 +906,11 @@ export function createGatewayRuntimeServer({
       });
 
       if (!deviceId) {
-        return false;
-      }
-
-      if (shouldIgnoreTransientDisconnect(deviceId)) {
-        return false;
+        return {
+          applied: false,
+          before: previous,
+          after: null,
+        };
       }
 
       updateRuntimeNode(deviceId, {
@@ -896,7 +924,11 @@ export function createGatewayRuntimeServer({
       });
       emitDevice(deviceId);
       broadcastGatewayStatus();
-      return true;
+      return {
+        applied: true,
+        before: previous,
+        after: inspectNodeConnection({ deviceId }),
+      };
     },
 
     noteOtaStatus(deviceId, patch) {
@@ -941,5 +973,6 @@ export function createGatewayRuntimeServer({
     resolveKnownDeviceId(input) {
       return resolveKnownDeviceIdByDiscovery(input);
     },
+    inspectNodeConnection,
   };
 }

@@ -35,6 +35,7 @@ const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
+const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -560,6 +561,23 @@ async fn run_session(
                     CentralEvent::DeviceDisconnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                            sleep(Duration::from_millis(DISCONNECT_CONFIRM_MS)).await;
+                            if peripheral.is_connected().await.unwrap_or(false) {
+                                writer.send(&Event::Log {
+                                    level: "warn".to_string(),
+                                    message: format!(
+                                        "Ignoring transient disconnect for {} after transport re-check.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                    })),
+                                }).await?;
+                                continue;
+                            }
+
                             connected_nodes.remove(&node_key(&node));
                             let state = if is_approved(&node, &allowed_nodes.read().await) {
                                 "reconnecting"

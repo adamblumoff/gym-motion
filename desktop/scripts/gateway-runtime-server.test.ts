@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("gateway runtime server", () => {
-  it("ignores transient disconnects immediately after telemetry", async () => {
+  it("keeps telemetry from changing transport connection state", async () => {
     const runtimePort = 46110 + Math.floor(Math.random() * 1000);
     const runtimeServer = createGatewayRuntimeServer({
       apiBaseUrl: "http://127.0.0.1:9",
@@ -24,8 +24,14 @@ describe("gateway runtime server", () => {
     await runtimeServer.start();
     runtimeServer.setAdapterState("poweredOn");
     runtimeServer.setScanState("stopped");
+    runtimeServer.noteDisconnected({
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      reason: "Initial state.",
+    });
 
-    await runtimeServer.noteTelemetry(
+    const telemetryResult = await runtimeServer.noteTelemetry(
       {
         deviceId: "stack-001",
         state: "moving",
@@ -44,18 +50,12 @@ describe("gateway runtime server", () => {
       },
     );
 
-    const applied = runtimeServer.noteDisconnected({
-      peripheralId: "peripheral-1",
-      address: "AA:BB:CC:DD",
-      localName: "GymMotion-f4e9d4",
-      reason: "Device disconnected.",
-    });
-
     const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
     const payload = await response.json();
     const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
 
-    expect(applied).toBe(false);
-    expect(device?.gatewayConnectionState).toBe("connected");
+    expect(telemetryResult?.before?.gatewayConnectionState).toBe("unreachable");
+    expect(device?.gatewayConnectionState).toBe("discovered");
+    expect(device?.telemetryFreshness).toBe("fresh");
   });
 });
