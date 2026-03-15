@@ -596,7 +596,8 @@ export function createManagedGatewayRuntime(
 
     if (usesWindowsNativeGateway(process.platform)) {
       env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
-      env.GATEWAY_START_SCAN_ON_BOOT = windowsScanRequested ? "1" : "0";
+      env.GATEWAY_START_SCAN_ON_BOOT =
+        windowsScanRequested || readApprovedNodes().length > 0 ? "1" : "0";
       env.GATEWAY_SIDECAR_PATH = resolveWindowsSidecarPath({
         isPackaged: app.isPackaged,
         cwd: process.cwd(),

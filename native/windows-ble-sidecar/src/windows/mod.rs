@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
+    future::pending,
     sync::Arc,
     time::Duration,
 };
@@ -32,6 +33,7 @@ const PROTOCOL_VERSION: u32 = 1;
 const SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001";
 const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
+const SCAN_WINDOW_SECS: u64 = 15;
 
 #[derive(Clone)]
 struct Config {
@@ -94,6 +96,49 @@ struct SessionHandle {
 
 enum SessionCommand {
     StartScan,
+}
+
+fn node_key(node: &DiscoveredNode) -> String {
+    node.peripheral_id
+        .clone()
+        .or_else(|| node.known_device_id.clone())
+        .unwrap_or_else(|| node.id.clone())
+}
+
+fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
+    rule.known_device_id
+        .as_ref()
+        .zip(node.known_device_id.as_ref())
+        .map(|(left, right)| left == right)
+        .unwrap_or(false)
+        || rule
+            .peripheral_id
+            .as_ref()
+            .zip(node.peripheral_id.as_ref())
+            .map(|(left, right)| left == right)
+            .unwrap_or(false)
+        || rule
+            .address
+            .as_ref()
+            .zip(node.address.as_ref())
+            .map(|(left, right)| left.eq_ignore_ascii_case(right))
+            .unwrap_or(false)
+        || rule
+            .local_name
+            .as_ref()
+            .zip(node.local_name.as_ref())
+            .map(|(left, right)| left == right)
+            .unwrap_or(false)
+}
+
+fn all_approved_nodes_connected(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+) -> bool {
+    !rules.is_empty()
+        && rules
+            .iter()
+            .all(|rule| connected_nodes.values().any(|node| rule_matches_node(rule, node)))
 }
 
 struct Sidecar {
@@ -345,8 +390,10 @@ async fn run_session(
     let mut events = adapter.events().await?;
     let active_connections = Arc::new(Mutex::new(HashSet::<String>::new()));
     let known_device_ids = Arc::new(RwLock::new(HashMap::<String, String>::new()));
+    let mut connected_nodes = HashMap::<String, DiscoveredNode>::new();
     let mut last_advertisement_at = None;
     let mut scanning = false;
+    let mut scan_deadline = None;
 
     loop {
         tokio::select! {
@@ -363,6 +410,7 @@ async fn run_session(
                 if matches!(command, SessionCommand::StartScan) && !scanning {
                     adapter.start_scan(ScanFilter::default()).await?;
                     scanning = true;
+                    scan_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
                     writer
                         .send(&Event::GatewayState {
                             gateway: GatewayStatePayload {
@@ -379,6 +427,34 @@ async fn run_session(
                             },
                         })
                         .await?;
+                }
+            }
+            _ = async {
+                if let Some(deadline) = scan_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    pending::<()>().await;
+                }
+            } => {
+                if scanning {
+                    let _ = adapter.stop_scan().await;
+                    scanning = false;
+                    scan_deadline = None;
+                    writer
+                        .send(&Event::GatewayState {
+                            gateway: GatewayStatePayload {
+                                adapter_state: normalize_adapter_state(
+                                    adapter
+                                        .adapter_state()
+                                        .await
+                                        .unwrap_or(CentralState::Unknown),
+                                ),
+                                scan_state: "stopped".to_string(),
+                                selected_adapter_id: Some(selected_adapter_id.clone()),
+                                last_advertisement_at: last_advertisement_at.clone(),
+                                issue: None,
+                            }
+                        }).await?;
                 }
             }
             event = events.next() => {
@@ -447,23 +523,28 @@ async fn run_session(
                     CentralEvent::DeviceConnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                            connected_nodes.insert(node_key(&node), node.clone());
                             if scanning {
-                                let _ = adapter.stop_scan().await;
-                                scanning = false;
-                                writer.send(&Event::GatewayState {
-                                    gateway: GatewayStatePayload {
-                                        adapter_state: normalize_adapter_state(
-                                            adapter
-                                                .adapter_state()
-                                                .await
-                                                .unwrap_or(CentralState::Unknown),
-                                        ),
-                                        scan_state: "stopped".to_string(),
-                                        selected_adapter_id: Some(selected_adapter_id.clone()),
-                                        last_advertisement_at: last_advertisement_at.clone(),
-                                        issue: None,
-                                    }
-                                }).await?;
+                                let allowed = allowed_nodes.read().await;
+                                if all_approved_nodes_connected(&allowed, &connected_nodes) {
+                                    let _ = adapter.stop_scan().await;
+                                    scanning = false;
+                                    scan_deadline = None;
+                                    writer.send(&Event::GatewayState {
+                                        gateway: GatewayStatePayload {
+                                            adapter_state: normalize_adapter_state(
+                                                adapter
+                                                    .adapter_state()
+                                                    .await
+                                                    .unwrap_or(CentralState::Unknown),
+                                            ),
+                                            scan_state: "stopped".to_string(),
+                                            selected_adapter_id: Some(selected_adapter_id.clone()),
+                                            last_advertisement_at: last_advertisement_at.clone(),
+                                            issue: None,
+                                        }
+                                    }).await?;
+                                }
                             }
                             writer.send(&Event::NodeConnectionState {
                                 node,
@@ -475,6 +556,7 @@ async fn run_session(
                     CentralEvent::DeviceDisconnected(id) => {
                         let peripheral = adapter.peripheral(&id).await?;
                         if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &known_device_ids).await? {
+                            connected_nodes.remove(&node_key(&node));
                             let state = if is_approved(&node, &allowed_nodes.read().await) {
                                 "reconnecting"
                             } else {
