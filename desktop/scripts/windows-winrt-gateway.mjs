@@ -522,7 +522,10 @@ function handleSidecarEvent(event) {
       runtimeServer.setAdapterState(
         event.gateway?.adapter_state ?? event.adapterState ?? "unknown",
       );
-      runtimeServer.setScanState(event.gateway?.scan_state ?? event.scanState ?? "stopped");
+      runtimeServer.setScanState(
+        event.gateway?.scan_state ?? event.scanState ?? "stopped",
+        event.gateway?.scan_reason ?? event.scanReason ?? null,
+      );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       break;
     case "node_discovered":
@@ -616,7 +619,7 @@ async function startSidecar() {
   sidecar.once("exit", (code, signal) => {
     sidecar = null;
     runtimeServer.setAdapterState("unknown");
-    runtimeServer.setScanState("stopped");
+    runtimeServer.setScanState("stopped", null);
 
     if (!shuttingDown) {
       setRuntimeIssue(`Windows BLE sidecar exited (${signal ?? code ?? "unknown"}).`);

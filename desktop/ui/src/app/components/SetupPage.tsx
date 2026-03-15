@@ -14,7 +14,8 @@ export function SetupPage() {
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
   const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
-  const isScanning = snapshot?.gateway.scanState === 'scanning';
+  const isScanning =
+    snapshot?.gateway.scanState === 'scanning' && snapshot?.gateway.scanReason === 'manual';
 
   function pairedBadge(device: (typeof pairedDevices)[number]) {
     switch (device.connectionState) {

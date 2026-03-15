@@ -325,6 +325,25 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.reconnectingNodeCount).toBe(0);
   });
 
+  it("reports manual scan reason separately from silent reconnect search", async () => {
+    const runtimePort = 50410 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("scanning", "manual");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/health`);
+    const payload = await response.json();
+
+    expect(payload.gateway?.scanState).toBe("scanning");
+    expect(payload.gateway?.scanReason).toBe("manual");
+  });
+
   it("marks disconnects as disconnected immediately even while scanning", async () => {
     const runtimePort = 50610 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({

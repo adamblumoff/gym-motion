@@ -122,6 +122,7 @@ export function createGatewayRuntimeServer({
     sessionId,
     adapterState: "unknown",
     scanState: "idle",
+    scanReason: null,
     connectedNodeCount: 0,
     reconnectingNodeCount: 0,
     knownNodeCount: 0,
@@ -779,8 +780,11 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    setScanState(scanState) {
-      touchGatewayState({ scanState });
+    setScanState(scanState, scanReason = null) {
+      touchGatewayState({
+        scanState,
+        scanReason: scanState === "scanning" ? scanReason : null,
+      });
 
       if (scanState !== "scanning") {
         normalizeIdleConnectionStates();

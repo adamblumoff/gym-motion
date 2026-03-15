@@ -132,11 +132,32 @@ fn should_scan(
             .unwrap_or(false)
 }
 
+fn scan_reason(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+) -> Option<&'static str> {
+    if manual_scan_deadline
+        .map(|deadline| deadline > now)
+        .unwrap_or(false)
+    {
+        return Some("manual");
+    }
+
+    if approved_nodes_pending_connection(rules, connected_nodes) {
+        return Some("approved-reconnect");
+    }
+
+    None
+}
+
 async fn emit_gateway_state(
     writer: &EventWriter,
     adapter: &Adapter,
     selected_adapter_id: &str,
     scan_state: &str,
+    scan_reason: Option<&str>,
     last_advertisement_at: &Option<String>,
 ) -> Result<()> {
     writer
@@ -149,6 +170,7 @@ async fn emit_gateway_state(
                         .unwrap_or(CentralState::Unknown),
                 ),
                 scan_state: scan_state.to_string(),
+                scan_reason: scan_reason.map(str::to_string),
                 selected_adapter_id: Some(selected_adapter_id.to_string()),
                 last_advertisement_at: last_advertisement_at.clone(),
                 issue: None,
@@ -172,6 +194,7 @@ async fn sync_scan_state(
     let now = Instant::now();
     let should_scan_now = should_scan(allowed, connected_nodes, manual_scan_deadline, now);
     let approved_pending = approved_nodes_pending_connection(allowed, connected_nodes);
+    let next_scan_reason = scan_reason(allowed, connected_nodes, manual_scan_deadline, now);
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
@@ -200,6 +223,7 @@ async fn sync_scan_state(
             adapter,
             selected_adapter_id,
             "scanning",
+            next_scan_reason,
             last_advertisement_at,
         )
         .await?;
@@ -226,6 +250,7 @@ async fn sync_scan_state(
             adapter,
             selected_adapter_id,
             "stopped",
+            None,
             last_advertisement_at,
         )
         .await?;
@@ -395,6 +420,7 @@ impl Sidecar {
                     gateway: GatewayStatePayload {
                         adapter_state: "unknown".to_string(),
                         scan_state: "stopped".to_string(),
+                        scan_reason: None,
                         selected_adapter_id: None,
                         last_advertisement_at: None,
                         issue: Some(
@@ -525,6 +551,7 @@ async fn run_session(
             gateway: GatewayStatePayload {
                 adapter_state,
                 scan_state: "stopped".to_string(),
+                scan_reason: None,
                 selected_adapter_id: Some(selected_adapter_id.clone()),
                 last_advertisement_at: None,
                 issue: None,
@@ -642,6 +669,17 @@ async fn run_session(
                             gateway: GatewayStatePayload {
                                 adapter_state: normalize_adapter_state(state),
                                 scan_state: if scanning { "scanning" } else { "stopped" }.to_string(),
+                                scan_reason: if scanning {
+                                    scan_reason(
+                                        &allowed_nodes.read().await,
+                                        &connected_nodes,
+                                        manual_scan_deadline,
+                                        Instant::now(),
+                                    )
+                                    .map(str::to_string)
+                                } else {
+                                    None
+                                },
                                 selected_adapter_id: Some(selected_adapter_id.clone()),
                                 last_advertisement_at: last_advertisement_at.clone(),
                                 issue: None,
@@ -675,6 +713,12 @@ async fn run_session(
                                 gateway: GatewayStatePayload {
                                     adapter_state: normalize_adapter_state(adapter.adapter_state().await.unwrap_or(CentralState::Unknown)),
                                     scan_state: "scanning".to_string(),
+                                    scan_reason: scan_reason(
+                                        &allowed,
+                                        &connected_nodes,
+                                        manual_scan_deadline,
+                                        Instant::now(),
+                                    ).map(str::to_string),
                                     selected_adapter_id: Some(selected_adapter_id.clone()),
                                     last_advertisement_at: last_advertisement_at.clone(),
                                     issue: None,
@@ -881,6 +925,7 @@ async fn run_session(
                         .unwrap_or(CentralState::Unknown),
                 ),
                 scan_state: "stopped".to_string(),
+                scan_reason: None,
                 selected_adapter_id: Some(selected_adapter_id),
                 last_advertisement_at,
                 issue: None,

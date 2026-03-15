@@ -25,6 +25,7 @@ pub struct AdapterSummary {
 pub struct GatewayStatePayload {
     pub adapter_state: String,
     pub scan_state: String,
+    pub scan_reason: Option<String>,
     pub selected_adapter_id: Option<String>,
     pub last_advertisement_at: Option<String>,
     pub issue: Option<String>,

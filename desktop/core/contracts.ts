@@ -141,6 +141,7 @@ export type GatewayStatusSummary = {
   sessionId: string;
   adapterState: string;
   scanState: string;
+  scanReason?: string | null;
   connectedNodeCount: number;
   reconnectingNodeCount: number;
   knownNodeCount: number;

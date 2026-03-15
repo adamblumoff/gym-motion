@@ -64,6 +64,7 @@ const EMPTY_GATEWAY: GatewayStatusSummary = {
   sessionId: "unavailable",
   adapterState: "unknown",
   scanState: "stopped",
+  scanReason: null,
   connectedNodeCount: 0,
   reconnectingNodeCount: 0,
   knownNodeCount: 0,
@@ -207,15 +208,16 @@ export function createManagedGatewayRuntime(
       return "Gateway live";
     }
 
+    if (snapshotState.gateway.scanState === "scanning" &&
+      snapshotState.gateway.scanReason === "manual") {
+      return "Scanning for BLE nodes";
+    }
+
     if (
       snapshotState.gateway.scanState === "scanning" &&
       snapshotState.gateway.reconnectingNodeCount > 0
     ) {
       return "Reconnecting approved nodes";
-    }
-
-    if (snapshotState.gateway.scanState === "scanning") {
-      return "Scanning for BLE nodes";
     }
 
     if (snapshotState.gateway.adapterState !== "poweredOn") {
