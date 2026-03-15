@@ -28,18 +28,30 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
   const existing = currentDevices.find((device) => device.id === partialDevice.id) ?? null;
   const inferredTelemetryTimestamp =
     partialDevice.lastEventReceivedAt ?? partialDevice.lastHeartbeatAt ?? null;
+  const existingTelemetryTime = existing?.gatewayLastTelemetryAt
+    ? Date.parse(existing.gatewayLastTelemetryAt)
+    : Number.NEGATIVE_INFINITY;
+  const inferredTelemetryTime = inferredTelemetryTimestamp
+    ? Date.parse(inferredTelemetryTimestamp)
+    : Number.NEGATIVE_INFINITY;
+  const hasNewerTelemetry = Number.isFinite(inferredTelemetryTime)
+    ? inferredTelemetryTime >= existingTelemetryTime
+    : false;
 
   return {
     gatewayConnectionState:
       existing?.gatewayConnectionState ??
       (inferredTelemetryTimestamp ? "discovered" : "unreachable"),
-    telemetryFreshness:
-      existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),
+    telemetryFreshness: hasNewerTelemetry
+      ? "fresh"
+      : existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),
     peripheralId: existing?.peripheralId ?? null,
     gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,
     gatewayLastConnectedAt: existing?.gatewayLastConnectedAt ?? null,
     gatewayLastDisconnectedAt: existing?.gatewayLastDisconnectedAt ?? null,
-    gatewayLastTelemetryAt: existing?.gatewayLastTelemetryAt ?? inferredTelemetryTimestamp,
+    gatewayLastTelemetryAt: hasNewerTelemetry
+      ? inferredTelemetryTimestamp
+      : existing?.gatewayLastTelemetryAt ?? inferredTelemetryTimestamp,
     gatewayDisconnectReason: existing?.gatewayDisconnectReason ?? null,
     advertisedName: existing?.advertisedName ?? null,
     lastRssi: existing?.lastRssi ?? null,

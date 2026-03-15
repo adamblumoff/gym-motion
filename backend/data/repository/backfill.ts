@@ -81,7 +81,7 @@ export async function recordBackfillBatch(
          update_status,
          last_event_received_at
        )
-       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', null)
+       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
        on conflict (id) do update
        set last_state = case
              when $2::text is null then devices.last_state
@@ -102,7 +102,7 @@ export async function recordBackfillBatch(
              when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
              else devices.provisioning_state
            end,
-           last_event_received_at = devices.last_event_received_at
+           last_event_received_at = now()
        returning
          ${DEVICE_SELECT_COLUMNS}`,
       [
