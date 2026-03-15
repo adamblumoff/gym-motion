@@ -873,6 +873,7 @@ export function createManagedGatewayRuntime(
       snapshot = degradedEmptySnapshot(
         error instanceof Error ? error.message : "Gateway runtime failed to start.",
       );
+      emit({ type: "snapshot", snapshot });
       throw error;
     }
   }

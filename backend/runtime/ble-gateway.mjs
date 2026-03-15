@@ -290,6 +290,22 @@ function isApprovedDiscovery(peripheralInfo) {
   ));
 }
 
+function resolveApprovedKnownDeviceId(peripheralInfo) {
+  const resolvedDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
+
+  if (resolvedDeviceId) {
+    return resolvedDeviceId;
+  }
+
+  const matchingRule = approvedNodeRules.find((rule) => (
+    (rule.peripheralId && peripheralInfo.peripheralId === rule.peripheralId) ||
+    (rule.address && peripheralInfo.address === rule.address) ||
+    (rule.localName && peripheralInfo.localName === rule.localName)
+  ));
+
+  return matchingRule?.knownDeviceId ?? null;
+}
+
 async function ensureScanning(reason) {
   if (shuttingDown || adapterState !== "poweredOn" || scanningStarted) {
     return;
@@ -1285,8 +1301,10 @@ async function registerPeripheral(peripheral) {
   };
   peripherals.set(peripheral.id, peripheralContext);
   const peripheralInfo = describePeripheral(peripheral, advertisedName);
+  const knownDeviceId = resolveApprovedKnownDeviceId(peripheralInfo);
   runtimeServer.noteDiscovery({
     ...peripheralInfo,
+    knownDeviceId,
   });
   queueNodeLog(peripheralInfo, {
     code: "node.discovered",
@@ -1346,6 +1364,7 @@ async function registerPeripheral(peripheral) {
     log(`disconnected from ${advertisedName || peripheral.id}`);
     runtimeServer.noteDisconnected({
       ...peripheralInfo,
+      knownDeviceId,
       reason: shuttingDown ? "gateway-shutdown" : "ble-disconnected",
     });
     queueNodeLog(peripheralInfo, {
@@ -1367,6 +1386,7 @@ async function registerPeripheral(peripheral) {
     debug(`connecting to ${advertisedName || peripheral.id}`);
     runtimeServer.noteConnecting({
       ...peripheralInfo,
+      knownDeviceId,
     });
     queueNodeLog(peripheralInfo, {
       code: "node.connecting",
@@ -1512,6 +1532,7 @@ async function registerPeripheral(peripheral) {
     peripheralContext.connected = true;
     runtimeServer.noteConnected({
       ...peripheralInfo,
+      knownDeviceId,
     });
     queueNodeLog(peripheralInfo, {
       code: "node.connected",
