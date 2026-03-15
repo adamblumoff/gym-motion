@@ -79,7 +79,79 @@ describe("buildBluetoothNodes", () => {
 
     expect(node?.connectionState).toBe("reconnecting");
     expect(node?.isConnected).toBe(false);
-    expect(node?.isMoving).toBe(true);
+    expect(node?.isMoving).toBe(false);
+  });
+
+  it("does not show disconnected nodes as moving just because their last telemetry was fresh", () => {
+    const snapshot: DesktopSnapshot = {
+      liveStatus: "Gateway live",
+      trayHint: "Waiting",
+      runtimeState: "running",
+      gatewayIssue: null,
+      gateway: {
+        hostname: "test-host",
+        mode: "reference-ble-node-gateway",
+        sessionId: "session-1",
+        adapterState: "poweredOn",
+        scanState: "scanning",
+        connectedNodeCount: 0,
+        reconnectingNodeCount: 0,
+        knownNodeCount: 1,
+        startedAt: new Date("2026-03-14T20:00:00.000Z").toISOString(),
+        updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+        lastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+      },
+      devices: [
+        {
+          id: "stack-001",
+          lastState: "moving",
+          lastSeenAt: Date.parse("2026-03-14T20:05:00.000Z"),
+          lastDelta: 12,
+          updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          hardwareId: "hw-1",
+          bootId: "boot-1",
+          firmwareVersion: "0.5.0",
+          machineLabel: "Leg Press",
+          siteId: "Dallas",
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          updateTargetVersion: null,
+          updateDetail: null,
+          updateUpdatedAt: null,
+          lastHeartbeatAt: null,
+          lastEventReceivedAt: null,
+          healthStatus: "offline",
+          gatewayConnectionState: "disconnected",
+          telemetryFreshness: "fresh",
+          peripheralId: "peripheral-1",
+          gatewayLastAdvertisementAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          gatewayLastConnectedAt: new Date("2026-03-14T20:04:00.000Z").toISOString(),
+          gatewayLastDisconnectedAt: new Date("2026-03-14T20:05:05.000Z").toISOString(),
+          gatewayLastTelemetryAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          gatewayDisconnectReason: "link lost",
+          advertisedName: "GymMotion-f4e9d4",
+          lastRssi: -62,
+          otaStatus: "idle",
+          otaTargetVersion: null,
+          otaProgressBytesSent: null,
+          otaTotalBytes: null,
+          otaLastPhase: null,
+          otaFailureDetail: null,
+          otaLastStatusMessage: null,
+          otaUpdatedAt: null,
+        },
+      ],
+      events: [],
+      logs: [],
+      activities: [],
+    };
+
+    const [node] = buildBluetoothNodes(snapshot);
+
+    expect(node?.connectionState).toBe("disconnected");
+    expect(node?.telemetryFreshness).toBe("fresh");
+    expect(node?.isConnected).toBe(false);
+    expect(node?.isMoving).toBe(false);
   });
 });
 

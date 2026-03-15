@@ -97,7 +97,9 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     healthStatus: device.healthStatus,
     telemetryFreshness: device.telemetryFreshness,
     isMoving:
-      device.lastState === "moving" && device.telemetryFreshness === "fresh",
+      device.gatewayConnectionState === "connected" &&
+      device.lastState === "moving" &&
+      device.telemetryFreshness === "fresh",
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
     logs: buildNodeLogs(device, snapshot.activities),
