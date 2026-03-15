@@ -653,9 +653,22 @@ async fn run_session(
                             continue;
                         }
 
-                        let peripheral = adapter.peripheral(&id).await?;
+                        let Some(peripheral) =
+                            peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_discovered",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                        )
+                        .await
+                        {
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered { node: node.clone() }).await?;
                             writer.send(&Event::GatewayState {
@@ -748,9 +761,22 @@ async fn run_session(
                         }
                     }
                     CentralEvent::DeviceConnected(id) => {
-                        let peripheral = adapter.peripheral(&id).await?;
+                        let Some(peripheral) =
+                            peripheral_for_event(&adapter, &writer, "device_connected", &id).await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_connected",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                        )
+                        .await
+                        {
                             connected_nodes.insert(node_key(&node), node.clone());
                             sync_scan_state(
                                 &adapter,
@@ -771,9 +797,27 @@ async fn run_session(
                         }
                     }
                     CentralEvent::DeviceDisconnected(id) => {
-                        let peripheral = adapter.peripheral(&id).await?;
+                        let Some(peripheral) = peripheral_for_event(
+                            &adapter,
+                            &writer,
+                            "device_disconnected",
+                            &id,
+                        )
+                        .await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_disconnected",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                        )
+                        .await
+                        {
                             sleep(Duration::from_millis(DISCONNECT_CONFIRM_MS)).await;
                             if peripheral.is_connected().await.unwrap_or(false) {
                                 writer.send(&Event::Log {
@@ -844,6 +888,62 @@ async fn run_session(
         })
         .await?;
     Ok(())
+}
+
+async fn peripheral_for_event(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    event_name: &str,
+    id: &btleplug::platform::PeripheralId,
+) -> Option<Peripheral> {
+    match adapter.peripheral(id).await {
+        Ok(peripheral) => Some(peripheral),
+        Err(error) => {
+            writer
+                .send(&Event::Log {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Skipping {event_name} event because the BLE device is no longer available: {error}"
+                    ),
+                    details: Some(json!({
+                        "event": event_name,
+                        "peripheralId": id.to_string(),
+                    })),
+                })
+                .await
+                .ok();
+            None
+        }
+    }
+}
+
+async fn discovered_node_for_event(
+    peripheral: &Peripheral,
+    writer: &EventWriter,
+    event_name: &str,
+    config: &Config,
+    allowed: &[ApprovedNodeRule],
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+) -> Option<DiscoveredNode> {
+    match discovered_node_from_peripheral(peripheral, config, allowed, known_device_ids).await {
+        Ok(node) => node,
+        Err(error) => {
+            writer
+                .send(&Event::Log {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Skipping {event_name} event because discovery data could not be refreshed: {error}"
+                    ),
+                    details: Some(json!({
+                        "event": event_name,
+                        "peripheralId": peripheral.id().to_string(),
+                    })),
+                })
+                .await
+                .ok();
+            None
+        }
+    }
 }
 
 async fn connect_and_stream(
