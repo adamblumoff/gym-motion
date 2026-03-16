@@ -163,9 +163,10 @@ async fn sync_scan_state(
     last_advertisement_at: &Option<String>,
     last_scan_progress_at: &mut Option<Instant>,
     startup_burst_deadline: &mut Option<Instant>,
+    active_connection_count: usize,
 ) -> Result<()> {
     let now = Instant::now();
-    let should_scan_now = should_scan(
+    let should_scan_base = should_scan(
         allowed,
         connected_nodes,
         reconnect_states,
@@ -181,6 +182,14 @@ async fn sync_scan_state(
         manual_scan_deadline,
         now,
     );
+    let should_scan_now = if should_pause_approved_reconnect_scan(
+        next_scan_reason,
+        active_connection_count,
+    ) {
+        false
+    } else {
+        should_scan_base
+    };
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
@@ -273,6 +282,13 @@ async fn sync_scan_state(
     }
 
     Ok(())
+}
+
+fn should_pause_approved_reconnect_scan(
+    scan_reason: Option<&str>,
+    active_connection_count: usize,
+) -> bool {
+    scan_reason == Some("approved-reconnect") && active_connection_count > 0
 }
 
 async fn restart_approved_reconnect_scan(
@@ -697,6 +713,7 @@ async fn run_session(
             &last_advertisement_at,
             &mut last_scan_progress_at,
             &mut startup_burst_deadline,
+            0,
         )
         .await?;
     }
@@ -837,6 +854,7 @@ async fn run_session(
                             &last_advertisement_at,
                             &mut last_scan_progress_at,
                             &mut startup_burst_deadline,
+                            active_connections.lock().await.len(),
                         )
                         .await?;
                         continue;
@@ -892,6 +910,7 @@ async fn run_session(
                             &last_advertisement_at,
                             &mut last_scan_progress_at,
                             &mut startup_burst_deadline,
+                            active_connections.lock().await.len(),
                         )
                         .await?;
                         continue;
@@ -914,6 +933,7 @@ async fn run_session(
                     &last_advertisement_at,
                     &mut last_scan_progress_at,
                     &mut startup_burst_deadline,
+                    active_connections.lock().await.len(),
                 )
                 .await?;
             }
@@ -942,6 +962,7 @@ async fn run_session(
                     &last_advertisement_at,
                     &mut last_scan_progress_at,
                     &mut startup_burst_deadline,
+                    active_connections.lock().await.len(),
                 )
                 .await?;
             }
@@ -1399,6 +1420,7 @@ async fn run_session(
                                 &last_advertisement_at,
                                 &mut last_scan_progress_at,
                                 &mut startup_burst_deadline,
+                                active_connections.lock().await.len(),
                             )
                             .await?;
                         }
@@ -2886,6 +2908,19 @@ mod tests {
             None,
             0,
         ));
+    }
+
+    #[test]
+    fn sync_scan_state_does_not_restart_approved_reconnect_while_connection_is_active() {
+        assert!(should_pause_approved_reconnect_scan(
+            Some("approved-reconnect"),
+            1,
+        ));
+        assert!(!should_pause_approved_reconnect_scan(
+            Some("approved-reconnect"),
+            0,
+        ));
+        assert!(!should_pause_approved_reconnect_scan(Some("manual"), 1));
     }
 
     #[test]
