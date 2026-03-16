@@ -1868,6 +1868,7 @@ async fn connect_and_stream(
         if !was_connected {
             writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
             if let Err(error) = active_peripheral.connect().await {
+                let formatted_error = error.to_string();
                 writer
                     .send(&Event::Log {
                         level: "warn".to_string(),
@@ -1880,14 +1881,56 @@ async fn connect_and_stream(
                             "address": node.address,
                             "reconnect": reconnect,
                             "attempt": attempt,
-                            "error": error.to_string(),
+                            "error": formatted_error,
                         })),
                     })
                     .await?;
-                last_gatt_error = Some(anyhow!(error).context(format!(
+                let connect_error = anyhow!(error).context(format!(
                     "connect step failed for {}",
                     node.label
-                )));
+                ));
+                if active_peripheral.is_connected().await.unwrap_or(false) {
+                    writer
+                        .send(&Event::Log {
+                            level: "warn".to_string(),
+                            message: "WinRT reported a transient BLE transport after connect() failed; disconnecting before retry.".to_string(),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "address": node.address,
+                                "reconnect": reconnect,
+                                "attempt": attempt,
+                            })),
+                        })
+                        .await?;
+                    let _ = active_peripheral.disconnect().await;
+                    sleep(Duration::from_millis(100)).await;
+                }
+                last_gatt_error = Some(connect_error);
+                if attempt == GATT_SETUP_RETRY_ATTEMPTS {
+                    return Err(last_gatt_error
+                        .take()
+                        .unwrap_or_else(|| anyhow!("connect step failed for {}", node.label)));
+                }
+                writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: format!(
+                            "Reconnect handshake GATT setup attempt {attempt} failed before transport became connected; retrying."
+                        ),
+                        details: Some(json!({
+                            "peripheralId": node.peripheral_id,
+                            "knownDeviceId": node.known_device_id,
+                            "address": node.address,
+                            "reconnect": reconnect,
+                            "error": last_gatt_error
+                                .as_ref()
+                                .map(ToString::to_string),
+                        })),
+                    })
+                    .await?;
+                sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
+                continue;
             }
             sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
         }
