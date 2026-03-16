@@ -1,6 +1,11 @@
+mod approval;
+mod config;
+mod discovery;
+mod handshake;
+mod writer;
+
 use std::{
-    collections::{HashMap, HashSet},
-    env,
+    collections::HashMap,
     future::pending,
     sync::Arc,
     time::{Duration, Instant},
@@ -8,20 +13,32 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use btleplug::{
-    api::{
-        Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter, WriteType,
-    },
+    api::{Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter},
     platform::{Adapter, Manager, Peripheral},
 };
 use futures::StreamExt;
 use serde_json::json;
 use tokio::{
-    io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{self, AsyncBufReadExt, BufReader},
     sync::{mpsc, watch, Mutex, RwLock},
     task::JoinHandle,
     time::sleep,
 };
 use uuid::Uuid;
+
+use self::{
+    approval::{
+        allow_approved_identity_fallback, approved_nodes_pending_connection,
+        approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, is_approved,
+        mark_node_connected, next_reconnect_attempt, node_key, prune_reconnect_states,
+        reconnect_status_for_rule, scan_reason, should_clear_reconnect_peripherals,
+        should_restart_approved_reconnect_scan, should_scan, ApprovedReconnectState,
+    },
+    config::Config,
+    discovery::discovered_node_from_peripheral,
+    handshake::{send_app_session_bootstrap, send_app_session_lease, write_chunked_json_command},
+    writer::EventWriter,
+};
 
 use crate::{
     json_decoder::JsonObjectDecoder,
@@ -32,84 +49,19 @@ use crate::{
 };
 
 const PROTOCOL_VERSION: u32 = 1;
-const SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001";
-const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
-const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
-const STATUS_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004";
-const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
 const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
-const APPROVED_RECONNECT_STALL_MS: u64 = 15_000;
 const APPROVED_RECONNECT_STARTUP_BURST_MS: u64 = 12_000;
 const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
-const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 2_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
-const CONTROL_CHUNK_SIZE: usize = 120;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
 const GATT_SETUP_RETRY_DELAY_MS: u64 = 750;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 3;
-
-#[derive(Clone)]
-struct Config {
-    service_uuid: Uuid,
-    telemetry_uuid: Uuid,
-    control_uuid: Uuid,
-    status_uuid: Uuid,
-    device_name_prefix: String,
-}
-
-impl Config {
-    fn from_env() -> Result<Self> {
-        Ok(Self {
-            service_uuid: parse_uuid("BLE_RUNTIME_SERVICE_UUID", SERVICE_UUID_FALLBACK)?,
-            telemetry_uuid: parse_uuid("BLE_TELEMETRY_UUID", TELEMETRY_UUID_FALLBACK)?,
-            control_uuid: parse_uuid("BLE_CONTROL_UUID", CONTROL_UUID_FALLBACK)?,
-            status_uuid: parse_uuid("BLE_STATUS_UUID", STATUS_UUID_FALLBACK)?,
-            device_name_prefix: env::var("BLE_DEVICE_NAME_PREFIX")
-                .unwrap_or_else(|_| DEVICE_PREFIX_FALLBACK.to_string()),
-        })
-    }
-}
-
-fn parse_uuid(name: &str, fallback: &str) -> Result<Uuid> {
-    let raw = env::var(name).unwrap_or_else(|_| fallback.to_string());
-    Ok(Uuid::parse_str(&raw).with_context(|| format!("invalid {name}: {raw}"))?)
-}
-
-#[derive(Clone)]
-struct EventWriter {
-    inner: Arc<Mutex<io::Stdout>>,
-}
-
-impl EventWriter {
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(io::stdout())),
-        }
-    }
-
-    async fn send(&self, event: &Event) -> Result<()> {
-        let encoded = serde_json::to_string(event)?;
-        let mut stdout = self.inner.lock().await;
-        stdout.write_all(encoded.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
-        Ok(())
-    }
-    async fn error(&self, message: impl Into<String>, details: Option<serde_json::Value>) {
-        let _ = self
-            .send(&Event::Error {
-                message: message.into(),
-                details,
-            })
-            .await;
-    }
-}
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
@@ -133,234 +85,6 @@ enum SessionCommand {
         node: DiscoveredNode,
         reason: String,
     },
-}
-
-#[derive(Clone, Debug, Default)]
-struct ApprovedReconnectState {
-    attempt: u32,
-    retry_exhausted: bool,
-}
-
-#[derive(Clone, Debug)]
-struct DiscoveryClassification {
-    runtime_service_matched: bool,
-    name_prefix_matched: bool,
-    approved_identity_matched: bool,
-    matched_known_device_id: Option<String>,
-}
-
-fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> Option<String> {
-    rules.iter()
-        .find(|rule| rule_matches_node(rule, node, rules))
-        .map(|rule| rule.id.clone())
-}
-
-fn disconnected_nodes_removed_from_allowed(
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    allowed: &[ApprovedNodeRule],
-) -> Vec<DiscoveredNode> {
-    connected_nodes
-        .values()
-        .filter(|node| !is_approved(node, allowed))
-        .cloned()
-        .collect()
-}
-
-fn reconnect_status_for_rule(
-    rule_id: Option<&str>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-) -> Option<ReconnectStatus> {
-    rule_id.map(|id| {
-        let state = reconnect_states.get(id).cloned().unwrap_or_default();
-        ReconnectStatus {
-            attempt: state.attempt,
-            attempt_limit: RECONNECT_ATTEMPT_LIMIT,
-            retry_exhausted: state.retry_exhausted,
-        }
-    })
-}
-
-fn mark_node_connected(
-    connected_nodes: &mut HashMap<String, DiscoveredNode>,
-    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
-    node: &DiscoveredNode,
-    allowed: &[ApprovedNodeRule],
-) {
-    connected_nodes.insert(node_key(node), node.clone());
-
-    if let Some(rule_id) = approved_rule_id_for_node(node, allowed) {
-        reconnect_states.insert(rule_id, ApprovedReconnectState::default());
-    }
-}
-
-fn prune_reconnect_states(
-    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
-    allowed: &[ApprovedNodeRule],
-) {
-    let allowed_rule_ids = allowed
-        .iter()
-        .map(|rule| rule.id.as_str())
-        .collect::<HashSet<_>>();
-    reconnect_states.retain(|rule_id, _| allowed_rule_ids.contains(rule_id.as_str()));
-}
-
-fn should_clear_reconnect_peripherals(
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    active_connection_count: usize,
-) -> bool {
-    connected_nodes.is_empty() && active_connection_count == 0
-}
-
-fn classify_discovery_candidate(
-    peripheral_id: &str,
-    address: Option<&str>,
-    local_name: Option<&str>,
-    has_runtime_service: bool,
-    config: &Config,
-    allowed_nodes: &[ApprovedNodeRule],
-    known_device_ids: &HashMap<String, String>,
-) -> DiscoveryClassification {
-    let name_prefix_matched = local_name
-        .map(|name| !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix))
-        .unwrap_or(false);
-    let unique_local_name_rule = local_name.and_then(|candidate_name| {
-        let mut matches = allowed_nodes.iter().filter(|rule| {
-            rule.known_device_id.is_none()
-                && rule.peripheral_id.is_none()
-                && rule.address.is_none()
-                && rule
-                    .local_name
-                    .as_ref()
-                    .map(|value| value == candidate_name)
-                    .unwrap_or(false)
-        });
-        let first = matches.next()?;
-        if matches.next().is_some() {
-            return None;
-        }
-        Some(first)
-    });
-    let matched_known_device_id = known_device_ids.get(peripheral_id).cloned().or_else(|| {
-        allowed_nodes.iter().find_map(|rule| {
-            if rule
-                .peripheral_id
-                .as_ref()
-                .map(|value| value == peripheral_id)
-                .unwrap_or(false)
-            {
-                return rule.known_device_id.clone();
-            }
-
-            if rule
-                .address
-                .as_ref()
-                .zip(address)
-                .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                .unwrap_or(false)
-            {
-                return rule.known_device_id.clone();
-            }
-
-            if unique_local_name_rule
-                .map(|unique_rule| unique_rule.id == rule.id)
-                .unwrap_or(false)
-            {
-                return rule.known_device_id.clone();
-            }
-
-            None
-        })
-    });
-
-    DiscoveryClassification {
-        runtime_service_matched: has_runtime_service,
-        name_prefix_matched,
-        approved_identity_matched: matched_known_device_id.is_some()
-            || allowed_nodes.iter().any(|rule| {
-                rule.peripheral_id
-                    .as_ref()
-                    .map(|value| value == peripheral_id)
-                    .unwrap_or(false)
-                    || rule
-                        .address
-                        .as_ref()
-                        .zip(address)
-                        .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                        .unwrap_or(false)
-                    || unique_local_name_rule
-                        .map(|unique_rule| unique_rule.id == rule.id)
-                        .unwrap_or(false)
-            }),
-        matched_known_device_id,
-    }
-}
-
-fn approved_nodes_pending_connection(
-    rules: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-) -> bool {
-    !rules.is_empty() && !all_approved_nodes_connected(rules, connected_nodes, reconnect_states)
-}
-
-fn should_scan(
-    rules: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-    manual_scan_deadline: Option<Instant>,
-    now: Instant,
-) -> bool {
-    approved_nodes_pending_connection(rules, connected_nodes, reconnect_states)
-        || manual_scan_deadline
-            .map(|deadline| deadline > now)
-            .unwrap_or(false)
-}
-
-fn scan_reason(
-    rules: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-    manual_scan_deadline: Option<Instant>,
-    now: Instant,
-) -> Option<&'static str> {
-    if manual_scan_deadline
-        .map(|deadline| deadline > now)
-        .unwrap_or(false)
-    {
-        return Some("manual");
-    }
-
-    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
-        return Some("approved-reconnect");
-    }
-
-    None
-}
-
-fn allow_approved_identity_fallback(
-    rules: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-    manual_scan_deadline: Option<Instant>,
-    now: Instant,
-) -> bool {
-    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
-        return true;
-    }
-
-    let manual_scan_active = manual_scan_deadline
-        .map(|deadline| deadline > now)
-        .unwrap_or(false);
-    if !manual_scan_active {
-        return false;
-    }
-
-    rules.iter().any(|rule| {
-        reconnect_states
-            .get(&rule.id)
-            .map(|state| state.retry_exhausted)
-            .unwrap_or(false)
-    })
 }
 
 async fn emit_gateway_state(
@@ -407,12 +131,22 @@ async fn sync_scan_state(
     startup_burst_deadline: &mut Option<Instant>,
 ) -> Result<()> {
     let now = Instant::now();
-    let should_scan_now =
-        should_scan(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
+    let should_scan_now = should_scan(
+        allowed,
+        connected_nodes,
+        reconnect_states,
+        manual_scan_deadline,
+        now,
+    );
     let approved_pending =
         approved_nodes_pending_connection(allowed, connected_nodes, reconnect_states);
-    let next_scan_reason =
-        scan_reason(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
+    let next_scan_reason = scan_reason(
+        allowed,
+        connected_nodes,
+        reconnect_states,
+        manual_scan_deadline,
+        now,
+    );
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
@@ -580,133 +314,6 @@ async fn restart_approved_reconnect_scan(
     Ok(())
 }
 
-fn should_restart_approved_reconnect_scan(
-    allowed: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-    manual_scan_deadline: Option<Instant>,
-    now: Instant,
-    last_scan_progress_at: Option<Instant>,
-    startup_burst_deadline: Option<Instant>,
-    active_connection_count: usize,
-) -> bool {
-    if active_connection_count > 0 {
-        return false;
-    }
-
-    if scan_reason(
-        allowed,
-        connected_nodes,
-        reconnect_states,
-        manual_scan_deadline,
-        now,
-    ) != Some("approved-reconnect")
-    {
-        return false;
-    }
-
-    let Some(last_progress) = last_scan_progress_at else {
-        return false;
-    };
-
-    let restart_after = if startup_burst_deadline
-        .map(|deadline| deadline > now)
-        .unwrap_or(false)
-    {
-        Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS)
-    } else {
-        Duration::from_millis(APPROVED_RECONNECT_STALL_MS)
-    };
-
-    now.duration_since(last_progress) >= restart_after
-}
-
-fn next_reconnect_attempt(state: &ApprovedReconnectState, active_for_node: bool) -> Option<u32> {
-    if active_for_node || state.retry_exhausted || state.attempt >= RECONNECT_ATTEMPT_LIMIT {
-        return None;
-    }
-
-    Some(state.attempt + 1)
-}
-
-fn node_key(node: &DiscoveredNode) -> String {
-    node.peripheral_id
-        .clone()
-        .or_else(|| node.known_device_id.clone())
-        .unwrap_or_else(|| node.id.clone())
-}
-
-fn unique_name_only_rule_id<'a>(
-    local_name: Option<&str>,
-    rules: &'a [ApprovedNodeRule],
-) -> Option<&'a str> {
-    let candidate_name = local_name?;
-    let mut matches = rules.iter().filter(|rule| {
-        rule.known_device_id.is_none()
-            && rule.peripheral_id.is_none()
-            && rule.address.is_none()
-            && rule
-                .local_name
-                .as_ref()
-                .map(|value| value == candidate_name)
-                .unwrap_or(false)
-    });
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(first.id.as_str())
-}
-
-fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
-    let strong_identity_match = rule.known_device_id
-        .as_ref()
-        .zip(node.known_device_id.as_ref())
-        .map(|(left, right)| left == right)
-        .unwrap_or(false)
-        || rule
-            .peripheral_id
-            .as_ref()
-            .zip(node.peripheral_id.as_ref())
-            .map(|(left, right)| left == right)
-            .unwrap_or(false)
-        || rule
-            .address
-            .as_ref()
-            .zip(node.address.as_ref())
-            .map(|(left, right)| left.eq_ignore_ascii_case(right))
-            .unwrap_or(false);
-
-    if strong_identity_match {
-        return true;
-    }
-
-    unique_name_only_rule_id(node.local_name.as_deref(), rules)
-        .map(|rule_id| rule_id == rule.id.as_str())
-        .unwrap_or(false)
-}
-
-fn all_approved_nodes_connected(
-    rules: &[ApprovedNodeRule],
-    connected_nodes: &HashMap<String, DiscoveredNode>,
-    reconnect_states: &HashMap<String, ApprovedReconnectState>,
-) -> bool {
-    !rules.is_empty()
-        && rules.iter().all(|rule| {
-            if reconnect_states
-                .get(&rule.id)
-                .map(|state| state.retry_exhausted)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-
-            connected_nodes
-                .values()
-                .any(|node| rule_matches_node(rule, node, rules))
-        })
-}
-
 struct Sidecar {
     manager: Manager,
     writer: EventWriter,
@@ -815,11 +422,9 @@ impl Sidecar {
             Command::SetAllowedNodes { nodes } => {
                 *self.allowed_nodes.write().await = nodes;
                 if let Some(session) = &self.session {
-                    let _ = session
-                        .commands
-                        .send(SessionCommand::AllowedNodesUpdated {
-                            nodes: self.allowed_nodes.read().await.clone(),
-                        });
+                    let _ = session.commands.send(SessionCommand::AllowedNodesUpdated {
+                        nodes: self.allowed_nodes.read().await.clone(),
+                    });
                 }
             }
             Command::Start => {
@@ -1835,10 +1440,14 @@ async fn connect_and_stream(
             })
             .await?;
 
-        writer.send(&log_handshake_step("checking transport connection")).await?;
+        writer
+            .send(&log_handshake_step("checking transport connection"))
+            .await?;
         let was_connected = active_peripheral.is_connected().await.unwrap_or(false);
         if !was_connected {
-            writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
+            writer
+                .send(&log_handshake_step("calling peripheral.connect()"))
+                .await?;
             if let Err(error) = active_peripheral.connect().await {
                 let formatted_error = error.to_string();
                 writer
@@ -1857,10 +1466,8 @@ async fn connect_and_stream(
                         })),
                     })
                     .await?;
-                let connect_error = anyhow!(error).context(format!(
-                    "connect step failed for {}",
-                    node.label
-                ));
+                let connect_error =
+                    anyhow!(error).context(format!("connect step failed for {}", node.label));
                 if active_peripheral.is_connected().await.unwrap_or(false) {
                     writer
                         .send(&Event::Log {
@@ -1941,7 +1548,9 @@ async fn connect_and_stream(
         }
 
         for discovery_attempt in 1..=SERVICE_DISCOVERY_RETRY_ATTEMPTS {
-            writer.send(&log_handshake_step("discovering services")).await?;
+            writer
+                .send(&log_handshake_step("discovering services"))
+                .await?;
             match active_peripheral.discover_services().await {
                 Ok(()) => {
                     gatt_ready = true;
@@ -1965,10 +1574,10 @@ async fn connect_and_stream(
                             })),
                         })
                         .await?;
-                    last_gatt_error = Some(anyhow!(error).context(format!(
-                        "discover_services step failed for {}",
-                        node.label
-                    )));
+                    last_gatt_error = Some(
+                        anyhow!(error)
+                            .context(format!("discover_services step failed for {}", node.label)),
+                    );
                     if discovery_attempt < SERVICE_DISCOVERY_RETRY_ATTEMPTS {
                         sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
                     }
@@ -2034,7 +1643,9 @@ async fn connect_and_stream(
             .find(|candidate| candidate.uuid == config.control_uuid)
             .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
         writer
-            .send(&log_handshake_step("resolving runtime status characteristic"))
+            .send(&log_handshake_step(
+                "resolving runtime status characteristic",
+            ))
             .await?;
         let status_characteristic = peripheral
             .characteristics()
@@ -2042,7 +1653,9 @@ async fn connect_and_stream(
             .find(|candidate| candidate.uuid == config.status_uuid)
             .ok_or_else(|| anyhow!("runtime status characteristic not found"))?;
 
-        writer.send(&log_handshake_step("opening notifications stream")).await?;
+        writer
+            .send(&log_handshake_step("opening notifications stream"))
+            .await?;
         let notifications = peripheral
             .notifications()
             .await
@@ -2054,16 +1667,22 @@ async fn connect_and_stream(
             .subscribe(&status_characteristic)
             .await
             .with_context(|| format!("status subscribe step failed for {}", node.label))?;
-        writer.send(&log_handshake_step("subscribing to telemetry")).await?;
+        writer
+            .send(&log_handshake_step("subscribing to telemetry"))
+            .await?;
         peripheral
             .subscribe(&characteristic)
             .await
             .with_context(|| format!("subscribe step failed for {}", node.label))?;
-        writer.send(&log_handshake_step("sending app-session bootstrap")).await?;
+        writer
+            .send(&log_handshake_step("sending app-session bootstrap"))
+            .await?;
         send_app_session_bootstrap(&peripheral, &control_characteristic)
             .await
             .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
-        writer.send(&log_handshake_step("sending app-session lease")).await?;
+        writer
+            .send(&log_handshake_step("sending app-session lease"))
+            .await?;
         send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
             .await
             .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
@@ -2102,7 +1721,8 @@ async fn connect_and_stream(
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut status_decoder = JsonObjectDecoder::new(format!("status:{}", node.label));
     let mut session_healthy_reported = false;
-    let session_health_deadline = Instant::now() + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS);
+    let session_health_deadline =
+        Instant::now() + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS);
     let session_health_sleep = tokio::time::sleep_until(session_health_deadline.into());
     tokio::pin!(session_health_sleep);
     let mut telemetry_fallback_node: Option<DiscoveredNode> = None;
@@ -2362,118 +1982,6 @@ async fn connect_and_stream(
     Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
 }
 
-async fn send_app_session_lease(
-    peripheral: &Peripheral,
-    characteristic: &btleplug::api::Characteristic,
-    session_id: &str,
-) -> Result<()> {
-    let payload = json!({
-        "type": "app-session-lease",
-        "sessionId": session_id,
-        "expiresInMs": APP_SESSION_LEASE_TIMEOUT_MS,
-    })
-    .to_string();
-    write_chunked_json_command(peripheral, characteristic, &payload).await
-}
-
-async fn send_app_session_bootstrap(
-    peripheral: &Peripheral,
-    characteristic: &btleplug::api::Characteristic,
-) -> Result<()> {
-    write_chunked_json_command(
-        peripheral,
-        characteristic,
-        r#"{"type":"app-session-bootstrap"}"#,
-    )
-    .await
-}
-
-async fn write_chunked_json_command(
-    peripheral: &Peripheral,
-    characteristic: &btleplug::api::Characteristic,
-    payload: &str,
-) -> Result<()> {
-    for chunk in control_command_frames(payload) {
-        peripheral
-            .write(characteristic, &chunk, WriteType::WithResponse)
-            .await?;
-    }
-
-    Ok(())
-}
-
-fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {
-    let mut frames = Vec::with_capacity((payload.len() / CONTROL_CHUNK_SIZE) + 2);
-    frames.push(format!("BEGIN:{}", payload.len()).into_bytes());
-
-    for chunk in payload.as_bytes().chunks(CONTROL_CHUNK_SIZE) {
-        frames.push(chunk.to_vec());
-    }
-
-    frames.push(b"END".to_vec());
-    frames
-}
-
-async fn discovered_node_from_peripheral(
-    peripheral: &Peripheral,
-    config: &Config,
-    allowed_nodes: &[ApprovedNodeRule],
-    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
-    allow_approved_identity_fallback: bool,
-) -> Result<Option<DiscoveredNode>> {
-    let Some(properties) = peripheral.properties().await? else {
-        return Ok(None);
-    };
-
-    let local_name = properties.local_name.or(properties.advertisement_name);
-    let has_runtime_service = properties
-        .services
-        .iter()
-        .any(|uuid| *uuid == config.service_uuid);
-    let address = Some(properties.address.to_string());
-    let peripheral_id = peripheral.id().to_string();
-    let known_device_ids_guard = known_device_ids.read().await;
-    let classification = classify_discovery_candidate(
-        &peripheral_id,
-        address.as_deref(),
-        local_name.as_deref(),
-        has_runtime_service,
-        config,
-        allowed_nodes,
-        &known_device_ids_guard,
-    );
-    drop(known_device_ids_guard);
-
-    let accepted = classification.runtime_service_matched
-        || classification.name_prefix_matched
-        || (allow_approved_identity_fallback && classification.approved_identity_matched);
-
-    if !accepted {
-        return Ok(None);
-    }
-
-    let known_device_id = classification.matched_known_device_id;
-    let label = local_name
-        .clone()
-        .or_else(|| known_device_id.clone())
-        .unwrap_or_else(|| peripheral_id.clone());
-
-    Ok(Some(DiscoveredNode {
-        id: format!("peripheral:{peripheral_id}"),
-        label,
-        peripheral_id: Some(peripheral_id),
-        address,
-        local_name,
-        known_device_id,
-        last_rssi: properties.rssi,
-        last_seen_at: Some(iso_now()),
-    }))
-}
-
-fn is_approved(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
-    approved_rule_id_for_node(node, rules).is_some()
-}
-
 fn normalize_adapter_state(state: CentralState) -> String {
     match state {
         CentralState::PoweredOn => "poweredOn",
@@ -2483,44 +1991,23 @@ fn normalize_adapter_state(state: CentralState) -> String {
     .to_string()
 }
 
-fn iso_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!(
-        "{}.{}Z",
-        chrono_like_seconds(now.as_secs()),
-        format!("{:03}", now.subsec_millis())
-    )
-}
-
-fn chrono_like_seconds(seconds: u64) -> String {
-    // RFC3339-ish UTC without adding another dependency.
-    let datetime = time::OffsetDateTime::from_unix_timestamp(seconds as i64)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    datetime
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
-        .trim_end_matches('Z')
-        .trim_end_matches(".000")
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
+    use super::approval::{all_approved_nodes_connected, classify_discovery_candidate};
+    use super::handshake::control_command_frames;
     use super::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
-        approved_rule_id_for_node, all_approved_nodes_connected, classify_discovery_candidate,
-        control_command_frames, disconnected_nodes_removed_from_allowed, mark_node_connected,
-        is_approved, node_key, prune_reconnect_states, scan_reason,
-        should_clear_reconnect_peripherals, should_restart_approved_reconnect_scan,
-        should_scan, next_reconnect_attempt, ApprovedReconnectState, Config,
-        APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
+        approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, is_approved,
+        mark_node_connected, next_reconnect_attempt, node_key, prune_reconnect_states, scan_reason,
+        should_clear_reconnect_peripherals, should_restart_approved_reconnect_scan, should_scan,
+        ApprovedReconnectState, Config, RECONNECT_ATTEMPT_LIMIT,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
-    use std::{collections::HashMap, time::{Duration, Instant}};
     use serde_json::Value;
+    use std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    };
     use uuid::Uuid;
 
     #[test]
@@ -2551,7 +2038,7 @@ mod tests {
     fn frames_app_session_lease_commands_for_firmware_parser() {
         let payload = format!(
             r#"{{"type":"app-session-lease","sessionId":"session-1","expiresInMs":{}}}"#,
-            APP_SESSION_LEASE_TIMEOUT_MS
+            15_000
         );
         let frames = control_command_frames(&payload);
 
@@ -2569,7 +2056,7 @@ mod tests {
 
         assert_eq!(decoded["type"], "app-session-lease");
         assert_eq!(decoded["sessionId"], "session-1");
-        assert_eq!(decoded["expiresInMs"], APP_SESSION_LEASE_TIMEOUT_MS);
+        assert_eq!(decoded["expiresInMs"], 15_000);
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
     }
 
@@ -2586,7 +2073,11 @@ mod tests {
         let connected = HashMap::new();
         let reconnect_states = HashMap::new();
 
-        assert!(approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(approved_nodes_pending_connection(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
         assert!(should_scan(
             &rules,
             &connected,
@@ -2622,7 +2113,11 @@ mod tests {
             },
         );
 
-        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!approved_nodes_pending_connection(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
         assert!(!should_scan(
             &rules,
             &connected,
@@ -2651,7 +2146,11 @@ mod tests {
             },
         )]);
 
-        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!approved_nodes_pending_connection(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
         assert!(!should_scan(
             &rules,
             &connected,
@@ -2961,7 +2460,13 @@ mod tests {
         }];
 
         assert_eq!(
-            scan_reason(&rules, &HashMap::new(), &HashMap::new(), None, Instant::now()),
+            scan_reason(
+                &rules,
+                &HashMap::new(),
+                &HashMap::new(),
+                None,
+                Instant::now()
+            ),
             Some("approved-reconnect")
         );
     }
@@ -3128,7 +2633,10 @@ mod tests {
         );
 
         assert!(classification.approved_identity_matched);
-        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+        assert_eq!(
+            classification.matched_known_device_id.as_deref(),
+            Some("stack-001")
+        );
         assert!(!classification.runtime_service_matched);
         assert!(!classification.name_prefix_matched);
     }
@@ -3162,7 +2670,10 @@ mod tests {
         );
 
         assert!(classification.approved_identity_matched);
-        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+        assert_eq!(
+            classification.matched_known_device_id.as_deref(),
+            Some("stack-001")
+        );
     }
 
     #[test]
