@@ -10,8 +10,10 @@ import { ScrollArea } from './ui/scroll-area';
 interface BluetoothNodeProps {
   node: BluetoothNodeData;
   onClick?: () => void;
-  onForget?: (nodeId: string) => void;
+  onRequestForget?: (nodeId: string) => void;
   onKeepDevice?: (nodeId: string) => void;
+  forgetPending?: boolean;
+  keepPending?: boolean;
 }
 
 function connectionBadge(node: BluetoothNodeData) {
@@ -35,9 +37,15 @@ function connectionBadge(node: BluetoothNodeData) {
   }
 }
 
-export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: BluetoothNodeProps) {
+export function BluetoothNode({
+  node,
+  onClick,
+  onRequestForget,
+  onKeepDevice,
+  forgetPending = false,
+  keepPending = false,
+}: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
-  const [confirmForget, setConfirmForget] = useState(false);
   const statusBadge = connectionBadge(node);
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
@@ -177,6 +185,7 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
               variant="ghost"
               size="sm"
               type="button"
+              disabled={keepPending || forgetPending}
               className="h-6 px-2 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               onClick={(event) => {
                 event.preventDefault();
@@ -184,72 +193,42 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
                 void onKeepDevice?.(node.id);
               }}
             >
-              Keep Device
+              {keepPending ? 'Keeping...' : 'Keep Device'}
             </Button>
             <Button
               variant="destructive"
               size="sm"
               type="button"
+              disabled={forgetPending || keepPending}
               className="h-6 px-2 text-[11px]"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                void onForget?.(node.id);
+                void onRequestForget?.(node.id);
               }}
             >
-              Forget Device
+              {forgetPending ? 'Forgetting...' : 'Forget Device'}
             </Button>
           </div>
         </div>
       )}
 
       <div className="px-4 pb-4" onClick={(event) => event.stopPropagation()}>
-        {confirmForget ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-red-400">Remove this sensor?</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 h-7 text-xs px-2"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void onForget?.(node.id);
-              }}
-            >
-              Confirm
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              className="text-zinc-500 hover:text-zinc-300 h-7 text-xs px-2"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setConfirmForget(false);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            className="text-zinc-600 hover:text-red-400 hover:bg-red-500/10 h-7 text-xs px-2 -ml-2"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setConfirmForget(true);
-            }}
-          >
-            <Trash2 className="size-3 mr-1.5" />
-            Forget Device
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          disabled={forgetPending || keepPending}
+          className="text-zinc-600 hover:text-red-400 hover:bg-red-500/10 h-7 text-xs px-2 -ml-2"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void onRequestForget?.(node.id);
+          }}
+        >
+          <Trash2 className="size-3 mr-1.5" />
+          {forgetPending ? 'Forgetting...' : 'Forget Device'}
+        </Button>
       </div>
     </Card>
   );

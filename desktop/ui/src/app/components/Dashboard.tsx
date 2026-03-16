@@ -7,24 +7,27 @@ import {
   forgetApprovedNodeRules,
   resolveApprovedNodeRuleId,
 } from '../../lib/setup-rules';
-import { matchesApprovedNodeIdentity } from '@core/approved-node-runtime-match';
 import { CommandPalette } from './CommandPalette';
+import { ConfirmationDialog } from './ConfirmationDialog';
 import { DashboardHeader } from './DashboardHeader';
 import { BluetoothNode } from './BluetoothNode';
 import { NodeDetailModal } from './NodeDetailModal';
 
-function sameStringSet(left: Set<string>, right: Set<string>) {
-  if (left.size !== right.size) {
-    return false;
-  }
+type ForgetTarget = {
+  id: string;
+  name: string;
+};
 
-  for (const value of left) {
-    if (!right.has(value)) {
-      return false;
-    }
-  }
+function addToSet(current: Set<string>, value: string) {
+  const next = new Set(current);
+  next.add(value);
+  return next;
+}
 
-  return true;
+function removeFromSet(current: Set<string>, value: string) {
+  const next = new Set(current);
+  next.delete(value);
+  return next;
 }
 
 export function Dashboard() {
@@ -36,77 +39,46 @@ export function Dashboard() {
     setAllowedNodes,
   } = useDesktopRuntime();
   const [pendingResumeNodeIds, setPendingResumeNodeIds] = useState<Set<string>>(new Set());
-  const [pendingForgottenNodeIds, setPendingForgottenNodeIds] = useState<Set<string>>(new Set());
-  const nodes = useMemo(() => {
-    if (!snapshot) {
-      return [];
-    }
-
-    let nextNodes = buildBluetoothNodes(snapshot);
-
-    if (pendingResumeNodeIds.size > 0) {
-      nextNodes = nextNodes.map((node) =>
-        pendingResumeNodeIds.has(node.id)
-          ? {
-              ...node,
-              reconnectAwaitingDecision: false,
-              reconnectRetryExhausted: false,
-            }
-          : node,
-      );
-    }
-
-    if (pendingForgottenNodeIds.size > 0) {
-      nextNodes = nextNodes.filter((node) => !pendingForgottenNodeIds.has(node.id));
-    }
-
-    return nextNodes;
-  }, [pendingForgottenNodeIds, pendingResumeNodeIds, snapshot]);
+  const [pendingForgetNodeIds, setPendingForgetNodeIds] = useState<Set<string>>(new Set());
+  const [forgetTarget, setForgetTarget] = useState<ForgetTarget | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+
+  const nodes = useMemo(
+    () => (snapshot ? buildBluetoothNodes(snapshot, setup?.approvedNodes ?? []) : []),
+    [setup?.approvedNodes, snapshot],
+  );
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
 
   useEffect(() => {
-    if (!snapshot) {
+    if (!forgetTarget) {
       return;
     }
 
+    if (!nodes.some((node) => node.id === forgetTarget.id)) {
+      setForgetTarget(null);
+    }
+  }, [forgetTarget, nodes]);
+
+  useEffect(() => {
     setPendingResumeNodeIds((current) => {
       const next = new Set(
         Array.from(current).filter((nodeId) => {
-          const node = buildBluetoothNodes(snapshot).find((item) => item.id === nodeId);
+          const node = nodes.find((item) => item.id === nodeId);
           return node?.reconnectAwaitingDecision === true;
         }),
       );
-      return sameStringSet(current, next) ? current : next;
+      return next.size === current.size ? current : next;
     });
 
-    if (!setup) {
-      return;
-    }
-
-    setPendingForgottenNodeIds((current) => {
+    setPendingForgetNodeIds((current) => {
       const next = new Set(
-        Array.from(current).filter((nodeId) => {
-          const runtimeDevice = snapshot.devices.find((device) => device.id === nodeId) ?? null;
-          return setup.approvedNodes.some((rule) =>
-            matchesApprovedNodeIdentity(
-              rule,
-              {
-                knownDeviceId: runtimeDevice?.id ?? nodeId,
-                peripheralId: runtimeDevice?.peripheralId ?? null,
-                address: runtimeDevice?.address ?? null,
-                localName: runtimeDevice?.advertisedName ?? null,
-              },
-              setup.approvedNodes,
-            ),
-          );
-        }),
+        Array.from(current).filter((nodeId) => nodes.some((item) => item.id === nodeId)),
       );
-      return sameStringSet(current, next) ? current : next;
+      return next.size === current.size ? current : next;
     });
-  }, [setup, snapshot]);
+  }, [nodes]);
 
   const handleSelectNode = useCallback(
     (nodeId: string) => {
@@ -119,12 +91,25 @@ export function Dashboard() {
     [nodes],
   );
 
-  async function handleForgetNode(nodeId: string) {
-    if (!setup) {
+  function requestForgetNode(nodeId: string) {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (!node) {
       return;
     }
 
-    setPendingForgottenNodeIds((current) => new Set(current).add(nodeId));
+    setForgetTarget({
+      id: node.id,
+      name: node.name,
+    });
+  }
+
+  async function confirmForgetNode() {
+    if (!forgetTarget || !setup) {
+      return;
+    }
+
+    const nodeId = forgetTarget.id;
+    setPendingForgetNodeIds((current) => addToSet(current, nodeId));
 
     const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId);
     const nextRules = forgetApprovedNodeRules(setup.approvedNodes, {
@@ -134,8 +119,10 @@ export function Dashboard() {
       address: runtimeDevice?.address ?? null,
       localName: runtimeDevice?.advertisedName ?? null,
     });
+
     try {
       await setAllowedNodes(nextRules);
+      setForgetTarget(null);
       toast.success('Device forgotten.');
 
       if (selectedNodeId === nodeId) {
@@ -143,11 +130,7 @@ export function Dashboard() {
         setSelectedNodeId(null);
       }
     } catch (error) {
-      setPendingForgottenNodeIds((current) => {
-        const next = new Set(current);
-        next.delete(nodeId);
-        return next;
-      });
+      setPendingForgetNodeIds((current) => removeFromSet(current, nodeId));
       toast.error(error instanceof Error ? error.message : 'Failed to forget device.');
     }
   }
@@ -158,7 +141,7 @@ export function Dashboard() {
     }
 
     const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId) ?? null;
-    setPendingResumeNodeIds((current) => new Set(current).add(nodeId));
+    setPendingResumeNodeIds((current) => addToSet(current, nodeId));
 
     try {
       await resumeApprovedNodeReconnect(
@@ -172,17 +155,14 @@ export function Dashboard() {
       );
       toast.success('Resuming reconnect scan.');
     } catch (error) {
-      setPendingResumeNodeIds((current) => {
-        const next = new Set(current);
-        next.delete(nodeId);
-        return next;
-      });
+      setPendingResumeNodeIds((current) => removeFromSet(current, nodeId));
       toast.error(error instanceof Error ? error.message : 'Failed to resume reconnect scan.');
     }
   }
 
   const activeNodes = nodes.filter((node) => node.isConnected).length;
   const movingNodes = nodes.filter((node) => node.isMoving && node.isConnected).length;
+  const forgetPending = forgetTarget ? pendingForgetNodeIds.has(forgetTarget.id) : false;
 
   return (
     <div className="size-full flex flex-col bg-black">
@@ -203,6 +183,19 @@ export function Dashboard() {
         onSelectNode={handleSelectNode}
       />
       <NodeDetailModal node={selectedNode} open={modalOpen} onOpenChange={setModalOpen} />
+      <ConfirmationDialog
+        open={forgetTarget !== null}
+        title="Forget this device?"
+        description={`This removes ${forgetTarget?.name ?? 'this sensor'} from approved devices and stops automatic reconnect attempts until you pair it again.`}
+        confirmLabel="Forget Device"
+        pending={forgetPending}
+        onOpenChange={(open) => {
+          if (!open && !forgetPending) {
+            setForgetTarget(null);
+          }
+        }}
+        onConfirm={() => void confirmForgetNode()}
+      />
 
       <DashboardHeader
         totalNodes={nodes.length}
@@ -238,8 +231,10 @@ export function Dashboard() {
               key={node.id}
               node={node}
               onClick={() => handleSelectNode(node.id)}
-              onForget={handleForgetNode}
+              onRequestForget={requestForgetNode}
               onKeepDevice={handleKeepNode}
+              forgetPending={pendingForgetNodeIds.has(node.id)}
+              keepPending={pendingResumeNodeIds.has(node.id)}
             />
           ))}
         </div>

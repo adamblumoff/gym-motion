@@ -8,7 +8,10 @@ import type {
   GatewayRuntimeDeviceSummary,
   MotionEventSummary,
 } from "@core/contracts";
-import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
+import {
+  findMatchingGatewayDeviceForApprovedNode,
+  matchesApprovedNodeIdentity as matchesApprovedNodeIdentityFromCore,
+} from "@core/approved-node-runtime-match";
 import { matchesApprovedNodeIdentity } from "../lib/setup-rules";
 
 export type NodeLog = {
@@ -94,8 +97,39 @@ function buildNodeLogs(
     }));
 }
 
-export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeData[] {
-  return snapshot.devices.map((device) => ({
+export function shouldDisplayDashboardDevice(
+  device: GatewayRuntimeDeviceSummary,
+  approvedNodes?: ApprovedNodeRule[],
+) {
+  if (device.gatewayConnectionState === "connected") {
+    return true;
+  }
+
+  if (approvedNodes === undefined) {
+    return true;
+  }
+
+  return approvedNodes.some((approvedNode) =>
+    matchesApprovedNodeIdentityFromCore(
+      approvedNode,
+      {
+        knownDeviceId: device.id,
+        peripheralId: device.peripheralId ?? null,
+        address: device.address ?? null,
+        localName: device.advertisedName ?? null,
+      },
+      approvedNodes,
+    ),
+  );
+}
+
+export function buildBluetoothNodes(
+  snapshot: DesktopSnapshot,
+  approvedNodes?: ApprovedNodeRule[],
+): BluetoothNodeData[] {
+  return snapshot.devices
+    .filter((device) => shouldDisplayDashboardDevice(device, approvedNodes))
+    .map((device) => ({
     id: device.id,
     name: displayNodeName(device),
     macAddress: displayNodeAddress(device),
