@@ -67,6 +67,7 @@ const GATT_SETUP_RETRY_DELAY_MS: u64 = 300;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 2;
 const PRE_SESSION_SETUP_RETRY_DELAY_MS: u64 = 350;
 const PRE_SESSION_SETUP_ATTEMPTS: u32 = 2;
+const SESSION_BOOTSTRAP_RETRY_LIMIT: u32 = 1;
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
@@ -1873,6 +1874,7 @@ async fn connect_and_stream(
     let mut telemetry_fallback_node: Option<DiscoveredNode> = None;
     let mut ack_session_id: Option<String> = None;
     let mut ack_received = false;
+    let mut session_bootstrap_retry_count = 0_u32;
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
     let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
     let lease_peripheral = peripheral.clone();
@@ -2074,6 +2076,37 @@ async fn connect_and_stream(
                 }
             }
             _ = &mut session_health_sleep, if !session_healthy_reported && !ack_received => {
+                if session_bootstrap_retry_count < SESSION_BOOTSTRAP_RETRY_LIMIT
+                    && peripheral.is_connected().await.unwrap_or(false)
+                {
+                    session_bootstrap_retry_count = session_bootstrap_retry_count.saturating_add(1);
+                    writer
+                        .send(&Event::Log {
+                            level: "warn".to_string(),
+                            message: "Session health ack did not arrive yet; retrying app-session bootstrap on the same connection.".to_string(),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "address": node.address,
+                                "expectedSessionId": app_session_id,
+                                "retryCount": session_bootstrap_retry_count,
+                                "retryLimit": SESSION_BOOTSTRAP_RETRY_LIMIT,
+                                "timeoutMs": SESSION_HEALTH_ACK_TIMEOUT_MS,
+                            })),
+                        })
+                        .await?;
+                    send_app_session_bootstrap(&peripheral, &control_characteristic)
+                        .await
+                        .with_context(|| format!("app-session-bootstrap retry failed for {}", node.label))?;
+                    send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
+                        .await
+                        .with_context(|| format!("app-session-lease retry failed for {}", node.label))?;
+                    session_health_sleep
+                        .as_mut()
+                        .reset((Instant::now() + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS)).into());
+                    continue;
+                }
+
                 let Some(enriched) = telemetry_fallback_node.clone() else {
                     continue;
                 };
