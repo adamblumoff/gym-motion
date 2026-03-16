@@ -1875,7 +1875,7 @@ async fn connect_and_stream(
         };
 
         if setup_attempt == PRE_SESSION_SETUP_ATTEMPTS
-            || !is_subscription_setup_error(error)
+            || !is_retryable_pre_session_setup_error(error)
             || !peripheral.is_connected().await.unwrap_or(false)
         {
             break;
@@ -1884,7 +1884,7 @@ async fn connect_and_stream(
         writer
             .send(&Event::Log {
                 level: "warn".to_string(),
-                message: "Runtime characteristic subscribe was not ready; retrying setup once before disconnecting.".to_string(),
+                message: "Runtime pre-session setup hit a transient WinRT handle failure; refreshing services and retrying on the same connection.".to_string(),
                 details: Some(json!({
                     "peripheralId": node.peripheral_id,
                     "knownDeviceId": node.known_device_id,
@@ -2353,9 +2353,14 @@ async fn connect_and_stream(
     Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
 }
 
-fn is_subscription_setup_error(error: &anyhow::Error) -> bool {
+fn is_retryable_pre_session_setup_error(error: &anyhow::Error) -> bool {
     let message = format_error_chain(error);
-    message.contains("status subscribe step failed") || message.contains("subscribe step failed")
+    message.contains("status subscribe step failed")
+        || message.contains("subscribe step failed")
+        || (message.contains("app-session-bootstrap step failed")
+            && message.contains("object has been closed"))
+        || (message.contains("app-session-lease step failed")
+            && message.contains("object has been closed"))
 }
 
 fn format_error_chain(error: &anyhow::Error) -> String {
@@ -3070,12 +3075,20 @@ mod tests {
     }
 
     #[test]
-    fn only_subscription_setup_failures_use_the_inline_setup_retry() {
+    fn retryable_pre_session_setup_failures_use_the_inline_setup_retry() {
         let subscribe_error = anyhow!("status subscribe step failed for Bench");
         let bootstrap_error = anyhow!("app-session-bootstrap step failed for Bench");
+        let closed_bootstrap_error = anyhow!(
+            "app-session-bootstrap step failed for Bench: Error { code: HRESULT(0x80000013), message: \"The object has been closed.\" }"
+        );
+        let closed_lease_error = anyhow!(
+            "app-session-lease step failed for Bench: Error { code: HRESULT(0x80000013), message: \"The object has been closed.\" }"
+        );
 
-        assert!(is_subscription_setup_error(&subscribe_error));
-        assert!(!is_subscription_setup_error(&bootstrap_error));
+        assert!(is_retryable_pre_session_setup_error(&subscribe_error));
+        assert!(!is_retryable_pre_session_setup_error(&bootstrap_error));
+        assert!(is_retryable_pre_session_setup_error(&closed_bootstrap_error));
+        assert!(is_retryable_pre_session_setup_error(&closed_lease_error));
     }
 
     #[test]
