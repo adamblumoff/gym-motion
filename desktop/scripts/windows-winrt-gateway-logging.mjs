@@ -13,7 +13,6 @@ export function shouldWriteSidecarLog(level, message, verbose) {
 
   return !(
     message.startsWith("Reconnect handshake step:") ||
-    message.startsWith("Reconnect handshake GATT setup attempt ") ||
-    message === "Pausing BLE scan while reconnect handshake is in flight."
+    message.startsWith("Reconnect handshake GATT setup attempt ")
   );
 }

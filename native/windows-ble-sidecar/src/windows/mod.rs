@@ -1475,6 +1475,9 @@ async fn run_session(
                                     last_scan_progress_at = None;
                                     startup_burst_deadline = None;
                                 }
+                                sleep(Duration::from_millis(150)).await;
+                                let reconnect_peripheral =
+                                    peripheral_for_node(&adapter, &node).await.unwrap_or(peripheral);
                                 let manual_recover_rule_id_for_log = manual_recover_rule_id
                                     .as_ref()
                                     .map(|target| target == &rule_id)
@@ -1491,7 +1494,7 @@ async fn run_session(
                                 let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
-                                        peripheral,
+                                        reconnect_peripheral,
                                         node.clone(),
                                         writer_clone.clone(),
                                         config_clone,

@@ -29,13 +29,16 @@ describe("windows winrt gateway logging", () => {
         false,
       ),
     ).toBe(false);
+  });
+
+  it("keeps the scan-pause reconnect marker in normal logs", () => {
     expect(
       shouldWriteSidecarLog(
         "info",
         "Pausing BLE scan while reconnect handshake is in flight.",
         false,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("keeps reconnect trace info logs in verbose mode", () => {
