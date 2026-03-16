@@ -559,6 +559,38 @@ async fn restart_approved_reconnect_scan(
     Ok(())
 }
 
+fn should_restart_approved_reconnect_scan(
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+    active_connection_count: usize,
+) -> bool {
+    if active_connection_count > 0 {
+        return false;
+    }
+
+    scan_reason(
+        allowed,
+        connected_nodes,
+        reconnect_states,
+        manual_scan_deadline,
+        now,
+    ) == Some("approved-reconnect")
+}
+
+fn next_reconnect_attempt(
+    state: &ApprovedReconnectState,
+    active_for_node: bool,
+) -> Option<u32> {
+    if active_for_node || state.retry_exhausted || state.attempt >= RECONNECT_ATTEMPT_LIMIT {
+        return None;
+    }
+
+    Some(state.attempt + 1)
+}
+
 fn node_key(node: &DiscoveredNode) -> String {
     node.peripheral_id
         .clone()
@@ -1122,13 +1154,16 @@ async fn run_session(
                     continue;
                 }
 
-                if scan_reason(
+                let active_connection_count = active_connections.lock().await.len();
+
+                if !should_restart_approved_reconnect_scan(
                     &allowed,
                     &connected_nodes,
                     &reconnect_states,
                     manual_scan_deadline,
                     Instant::now(),
-                ) != Some("approved-reconnect") {
+                    active_connection_count,
+                ) {
                     continue;
                 }
 
@@ -1144,7 +1179,7 @@ async fn run_session(
                     advertisements_seen_this_burst,
                     rejected_candidates_this_burst,
                     classified_candidates_this_burst,
-                    active_connections.lock().await.len(),
+                    active_connection_count,
                 )
                 .await?;
                 reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
@@ -1241,11 +1276,28 @@ async fn run_session(
                                 let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) else {
                                     continue;
                                 };
+                                let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
+                                let mut active = active_connections.lock().await;
                                 let reconnect_state =
                                     reconnect_states.get(&rule_id).cloned().unwrap_or_default();
-                                if reconnect_state.retry_exhausted {
+                                let Some(next_attempt) = next_reconnect_attempt(
+                                    &reconnect_state,
+                                    active.contains(&key),
+                                ) else {
+                                    if reconnect_state.attempt >= RECONNECT_ATTEMPT_LIMIT
+                                        && !reconnect_state.retry_exhausted
+                                    {
+                                        reconnect_states.insert(
+                                            rule_id.clone(),
+                                            ApprovedReconnectState {
+                                                attempt: reconnect_state.attempt,
+                                                retry_exhausted: true,
+                                            },
+                                        );
+                                    }
+                                    drop(active);
                                     continue;
-                                }
+                                };
                                 writer.send(&Event::Log {
                                     level: "info".to_string(),
                                     message: format!(
@@ -1256,87 +1308,82 @@ async fn run_session(
                                         "peripheralId": node.peripheral_id,
                                         "knownDeviceId": node.known_device_id,
                                         "address": node.address,
-                                        "reconnectAttempt": reconnect_state.attempt + 1,
+                                        "reconnectAttempt": next_attempt,
                                         "reconnectAttemptLimit": RECONNECT_ATTEMPT_LIMIT,
                                     })),
                                 }).await?;
-                                let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
-                                let mut active = active_connections.lock().await;
-                                if !active.contains(&key) {
-                                    let next_attempt = reconnect_state.attempt + 1;
-                                    reconnect_states.insert(
-                                        rule_id.clone(),
-                                        ApprovedReconnectState {
+                                reconnect_states.insert(
+                                    rule_id.clone(),
+                                    ApprovedReconnectState {
+                                        attempt: next_attempt,
+                                        retry_exhausted: false,
+                                    },
+                                );
+                                active.insert(key.clone());
+                                drop(active);
+                                let writer_clone = writer.clone();
+                                let config_clone = config.clone();
+                                let allowed_nodes_clone = allowed_nodes.clone();
+                                let active_connections_clone = active_connections.clone();
+                                let known_device_ids_clone = known_device_ids.clone();
+                                let command_tx_clone = command_sender.clone();
+                                let app_session_id_clone = app_session_id.clone();
+                                tokio::spawn(async move {
+                                    let result = connect_and_stream(
+                                        peripheral,
+                                        node.clone(),
+                                        writer_clone.clone(),
+                                        config_clone,
+                                        allowed_nodes_clone,
+                                        known_device_ids_clone,
+                                        app_session_id_clone,
+                                        Some(ReconnectStatus {
                                             attempt: next_attempt,
+                                            attempt_limit: RECONNECT_ATTEMPT_LIMIT,
                                             retry_exhausted: false,
-                                        },
-                                    );
-                                    active.insert(key.clone());
-                                    drop(active);
-                                    let writer_clone = writer.clone();
-                                    let config_clone = config.clone();
-                                    let allowed_nodes_clone = allowed_nodes.clone();
-                                    let active_connections_clone = active_connections.clone();
-                                    let known_device_ids_clone = known_device_ids.clone();
-                                    let command_tx_clone = command_sender.clone();
-                                    let app_session_id_clone = app_session_id.clone();
-                                    tokio::spawn(async move {
-                                        let result = connect_and_stream(
-                                            peripheral,
-                                            node.clone(),
-                                            writer_clone.clone(),
-                                            config_clone,
-                                            allowed_nodes_clone,
-                                            known_device_ids_clone,
-                                            app_session_id_clone,
-                                            Some(ReconnectStatus {
-                                                attempt: next_attempt,
-                                                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
-                                                retry_exhausted: false,
-                                            }),
-                                            command_tx_clone.clone(),
-                                        )
-                                        .await;
-                                        match result {
-                                            Ok(Some(reason)) => {
-                                                let _ = writer_clone
-                                                    .send(&Event::Log {
-                                                        level: "warn".to_string(),
-                                                        message: reason.clone(),
-                                                        details: Some(json!({
-                                                            "peripheralId": node.peripheral_id,
-                                                            "knownDeviceId": node.known_device_id,
-                                                            "address": node.address,
-                                                        })),
-                                                    })
-                                                    .await;
-                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
-                                                    node,
-                                                    reason,
-                                                });
-                                            }
-                                            Ok(None) => {}
-                                            Err(error) => {
-                                                let _ = writer_clone
-                                                    .send(&Event::Log {
-                                                        level: "warn".to_string(),
-                                                        message: format!("BLE connect failed: {error}"),
-                                                        details: Some(json!({
-                                                            "peripheralId": node.peripheral_id,
-                                                            "knownDeviceId": node.known_device_id,
-                                                            "address": node.address,
-                                                        })),
-                                                    })
-                                                    .await;
-                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
-                                                    node,
-                                                    reason: error.to_string(),
-                                                });
-                                            }
+                                        }),
+                                        command_tx_clone.clone(),
+                                    )
+                                    .await;
+                                    match result {
+                                        Ok(Some(reason)) => {
+                                            let _ = writer_clone
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: reason.clone(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                    })),
+                                                })
+                                                .await;
+                                            let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                                                node,
+                                                reason,
+                                            });
                                         }
-                                        active_connections_clone.lock().await.remove(&key);
-                                    });
-                                }
+                                        Ok(None) => {}
+                                        Err(error) => {
+                                            let _ = writer_clone
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: format!("BLE connect failed: {error}"),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                    })),
+                                                })
+                                                .await;
+                                            let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                                                node,
+                                                reason: error.to_string(),
+                                            });
+                                        }
+                                    }
+                                    active_connections_clone.lock().await.remove(&key);
+                                });
                             }
                         } else {
                             rejected_candidates_this_burst =
@@ -1889,7 +1936,8 @@ mod tests {
         approved_rule_id_for_node, all_approved_nodes_connected, classify_discovery_candidate,
         control_command_frames, disconnected_nodes_removed_from_allowed, mark_node_connected,
         is_approved, node_key, prune_reconnect_states, scan_reason,
-        should_clear_reconnect_peripherals, should_scan, ApprovedReconnectState, Config,
+        should_clear_reconnect_peripherals, should_restart_approved_reconnect_scan,
+        should_scan, next_reconnect_attempt, ApprovedReconnectState, Config,
         APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
@@ -2119,6 +2167,57 @@ mod tests {
             reconnect_states.get("node-2").map(|state| state.attempt),
             Some(2)
         );
+    }
+
+    #[test]
+    fn next_reconnect_attempt_stops_when_limit_is_reached_or_connection_is_active() {
+        let state = ApprovedReconnectState {
+            attempt: RECONNECT_ATTEMPT_LIMIT,
+            retry_exhausted: false,
+        };
+
+        assert!(next_reconnect_attempt(&state, false).is_none());
+        assert!(next_reconnect_attempt(&ApprovedReconnectState::default(), true).is_none());
+        assert_eq!(
+            next_reconnect_attempt(
+                &ApprovedReconnectState {
+                    attempt: 3,
+                    retry_exhausted: false,
+                },
+                false,
+            ),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn approved_reconnect_scan_restart_pauses_while_a_handshake_is_active() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert!(!should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            Instant::now(),
+            1,
+        ));
+
+        assert!(should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            Instant::now(),
+            0,
+        ));
     }
 
     #[test]
