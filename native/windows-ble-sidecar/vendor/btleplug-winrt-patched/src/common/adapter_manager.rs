@@ -44,10 +44,11 @@ where
     PeripheralType: Peripheral + 'static,
 {
     pub fn emit(&self, event: CentralEvent) {
-        if let CentralEvent::DeviceDisconnected(ref id) = event {
-            self.peripherals.remove(id);
-        }
-
+        // Do not eagerly drop peripherals on disconnect. On WinRT a disconnect callback for an
+        // older transport can race with a fresh advertisement for the same address, and removing
+        // the peripheral here makes queued discovery events fail with DeviceNotFound before the
+        // higher layer can refresh properties or begin reconnect. Explicit cache resets still go
+        // through clear_peripherals() when we actually want to discard adapter state.
         if let Err(lost) = self.events_channel.send(event) {
             trace!("Lost central event, while nothing subscribed: {:?}", lost);
         }
