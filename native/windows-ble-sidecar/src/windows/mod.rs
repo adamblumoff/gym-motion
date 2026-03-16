@@ -1376,6 +1376,30 @@ async fn run_session(
                                         retry_exhausted: false,
                                     },
                                 );
+                                if scanning {
+                                    let _ = adapter.stop_scan().await;
+                                    scanning = false;
+                                    current_scan_reason = None;
+                                    writer.send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: "Pausing BLE scan while reconnect handshake is in flight.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "reconnectAttempt": next_attempt,
+                                        })),
+                                    }).await?;
+                                    emit_gateway_state(
+                                        &writer,
+                                        &adapter,
+                                        &selected_adapter_id,
+                                        "stopped",
+                                        None,
+                                        &last_advertisement_at,
+                                    )
+                                    .await?;
+                                }
                                 let manual_recover_rule_id_for_log = manual_recover_rule_id
                                     .as_ref()
                                     .map(|target| target == &rule_id)
