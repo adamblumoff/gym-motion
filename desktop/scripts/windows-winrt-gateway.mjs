@@ -6,7 +6,10 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
-import { shouldWriteDiscoveryLog } from "./windows-winrt-gateway-logging.mjs";
+import {
+  shouldWriteDiscoveryLog,
+  shouldWriteSidecarLog,
+} from "./windows-winrt-gateway-logging.mjs";
 
 const config = {
   apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -49,6 +52,7 @@ let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
 let scanRequestedFromBoot = config.startScanOnBoot;
 let currentScanReason = null;
+let lastLoggedAdapterSnapshot = null;
 
 function log(message, details) {
   if (details !== undefined) {
@@ -578,10 +582,14 @@ function handleSidecarEvent(event) {
               details: Array.isArray(adapter.details) ? adapter.details : [],
             }))
           : [];
-        log(
-          `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
-          adapters,
-        );
+        const adapterSnapshot = JSON.stringify(adapters);
+        if (adapterSnapshot !== lastLoggedAdapterSnapshot) {
+          lastLoggedAdapterSnapshot = adapterSnapshot;
+          log(
+            `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
+            adapters,
+          );
+        }
         if (!selectedAdapterId) {
           selectedAdapterId = selectPreferredAdapter(adapters);
 
@@ -650,7 +658,15 @@ function handleSidecarEvent(event) {
       }
       break;
     case "log":
-      log(event.message ?? "sidecar log", event.details);
+      if (
+        shouldWriteSidecarLog(
+          event.level ?? "info",
+          event.message ?? "sidecar log",
+          config.verbose,
+        )
+      ) {
+        log(event.message ?? "sidecar log", event.details);
+      }
       break;
     case "error":
       setRuntimeIssue(event.message ?? "Windows BLE sidecar failed.");
@@ -693,6 +709,7 @@ function attachJsonLineReader(stream, onEvent) {
 async function startSidecar() {
   sidecarSessionStarted = false;
   scanRequestedFromBoot = config.startScanOnBoot;
+  lastLoggedAdapterSnapshot = null;
   sidecar = spawn(config.sidecarPath, [], {
     cwd: process.cwd(),
     env: {

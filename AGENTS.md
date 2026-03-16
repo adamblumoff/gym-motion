@@ -33,6 +33,7 @@
 - Important reconnect regression note: do not keep WinRT scanning active while a reconnect handshake is in flight. That scan/connect overlap caused `connect()` and then `discover_services()` to report `Not connected` even though the ESP32 saw a BLE client, which prevented `app-session-bootstrap` and `app-session-lease` from ever being written and made the node drop the session as stale.
 - Approved-node identity policy note: keep one desktop-core source of truth for matching order (`knownDeviceId`, then `peripheralId`, then BLE address, then unique `localName`). Do not re-implement that policy separately in setup UI, setup merging, or other Electron helpers.
 - Ownership note: the WinRT sidecar owns BLE scan/reconnect/handshake truth, the firmware owns app-session lease truth, the runtime server owns projection/cache only, and Electron main owns persistence/app lifecycle.
+- Verbose logging note: use `GATEWAY_VERBOSE=1` when you need the full WinRT reconnect trace. Normal mode should suppress step-by-step reconnect handshake info logs and repeated unchanged adapter snapshots, while warnings and errors stay visible.
 - Windows desktop dev and packaging require the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build `native/windows-ble-sidecar` locally.
 - Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`
 - Quick connect command from the main dev machine: `ssh adam-blumoff@192.168.1.174`

@@ -47,6 +47,15 @@ Use this path for the first real validation because the Windows-native BLE sidec
 
 Treat this as the primary product validation path. The current desktop runtime should be considered Windows-only for operator use.
 
+If you need the full WinRT reconnect trace while debugging, set:
+
+```powershell
+$env:GATEWAY_VERBOSE="1"
+bun run dev
+```
+
+Normal mode now suppresses the step-by-step reconnect handshake chatter and repeated unchanged adapter snapshots. `GATEWAY_VERBOSE=1` turns those detailed sidecar logs back on.
+
 ## What To Check
 
 In the app:
