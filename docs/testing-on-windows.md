@@ -45,6 +45,8 @@ bun run dev
 
 Use this path for the first real validation because the Windows-native BLE sidecar and built-in Bluetooth behavior need to be exercised from Windows itself.
 
+Treat this as the primary product validation path. The current desktop runtime should be considered Windows-only for operator use.
+
 ## What To Check
 
 In the app:
@@ -52,10 +54,11 @@ In the app:
 1. Open the `Setup` tab.
 2. Confirm Bluetooth comes up automatically without any adapter picker.
 3. Click `Scan nodes`, then power the BLE node and confirm it appears in the visible node list.
-4. Click `Connect` on a visible node.
+4. Click `Pair` on a visible node.
 5. Confirm the gateway manages that node.
-6. Click `Remove` and confirm the node stops being managed.
-7. Confirm the restart control only exists in the header.
+6. If a paired node stays disconnected, use `Recover` and confirm the row shows the latest failure reason if recovery still fails.
+7. Click `Remove` and confirm the node stops being managed.
+8. Confirm the restart control only exists in the header.
 
 ## Packaged Build
 
@@ -75,6 +78,7 @@ Validate the same Setup and reconnect flow in the packaged app.
 - `.env.local` is required for meaningful desktop testing because the app reads database and storage config at startup.
 - The desktop runtime is real, not mock-backed.
 - Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
+- The current desktop product is Windows-only. Bench validation should target the Windows app, the WinRT sidecar, and the ESP32 firmware runtime protocol together.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
 - The `Setup` tab is node-only, and Bluetooth discovery is manual-only for discovery and pairing. Approved nodes should reconnect automatically in the background after app restarts or link loss.
 - When an approved node loses power or the BLE link drops, the dashboard should move to `Disconnected` immediately instead of waiting for telemetry freshness to age out.
@@ -87,6 +91,7 @@ Validate the same Setup and reconnect flow in the packaged app.
   That same silent-reconnect fallback must stay consistent across discovery, connect, and disconnect lifecycle events so a node recovered by saved identity is still tracked as connected and can stop the reconnect scan once the session is healthy.
   If a manual Setup scan overlaps that silent reconnect window, the reconnect fallback should still stay active for missing approved nodes; the manual scan label must not pause approved-node recovery.
   After the retry-exhausted cutoff, a manual Setup scan should still be able to rediscover that paired node by its saved identity so the operator can recover it without first forgetting the device.
+  A targeted `Recover` action for one paired node is allowed to reset that node's exhausted background retry state and should log the exact reconnect stage if it fails again.
 - Reconnect scan bursts must not clear WinRT peripherals while a reconnect handshake is already in flight. On slower links, a healthy reconnect attempt should be allowed to finish service discovery, subscriptions, and the first lease write without the cache-reset loop invalidating the peripheral underneath it.
   Those scan bursts should also pause entirely while a reconnect handshake is in flight, so the first reconnect attempt gets a stable shot without the scan restart loop churning underneath it.
 - If a reconnect handshake fails after the BLE link comes up but before the session is healthy, the sidecar must explicitly disconnect that stale client immediately instead of waiting for the node-side bootstrap timeout to clean it up.
@@ -106,6 +111,7 @@ Validate the same Setup and reconnect flow in the packaged app.
 - Setup discovery should follow that same rule when deciding whether a visible node is already paired. Pairing one duplicate-name node must not hide its siblings from the visible list as “already paired.”
 - Firmware advertising must continue to expose the provisioning service UUID for first-time web provisioning, even after reconnect-advertising changes. The runtime reconnect identity can be more explicit, but the provisioning web flow still filters by `PROVISIONING_SERVICE_UUID`.
 - Firmware now rebuilds its advertising payload on every reconnect restart so the `GymMotion-...` name stays in the primary advertisement and the runtime service stays in the scan response after lease expiry or forced disconnect. During bench testing, look for `[runtime] BLE client connected; runtime lease will arm after app-session lease traffic.`, `[runtime] Windows app session lease is active...`, `[runtime] Lease refreshed. ...`, `[runtime] Connected heartbeat. connected=1 leased=1 ...`, `[runtime] Lease expiry timeout fired. ...`, `[runtime] BLE runtime transport disconnected from the Windows app.`, `[runtime] Advertising for Windows app reconnect (...) as GymMotion-... with runtime scan response.`, and `[runtime] Still waiting for the Windows app; BLE advertising is active.` to distinguish a real app session from a stale or missing client.
+- When reconnect is flaky, treat failures as a protocol problem across all three layers: Windows app, WinRT sidecar, and firmware. The useful failure stages are discovery match, transport connect, service discovery, telemetry subscribe, `app-session-bootstrap`, `sync-now`, `app-session-lease`, and first telemetry.
 - Approved rebooting nodes should stay under `Paired Sensors`; their badge there should match the dashboard state (`Reconnecting`, `Connected`, `Disconnected`) instead of falling back to a generic `Paired` label.
 - Once a managed node reconnects and the gateway resolves its runtime `deviceId`, the desktop app now upgrades the saved approved-node rule to that stable identity so later reboots keep folding back into the same paired node instead of looking like a fresh setup candidate.
 - Those reconciled approved-node rules should be pushed into the running gateway immediately, not just saved in preferences, so both Windows and legacy non-Windows runtimes start using the upgraded identities without a manual restart.

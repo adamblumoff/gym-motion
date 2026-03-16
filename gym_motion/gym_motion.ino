@@ -10,7 +10,7 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
-const char* FIRMWARE_VERSION = "0.5.2";
+const char* FIRMWARE_VERSION = "0.5.3";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREF_DEVICE_ID = "device_id";
@@ -39,7 +39,10 @@ const int MOTION_THRESHOLD = 70;
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
-const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 8000;
+// The current desktop runtime talks to this node through the Windows WinRT
+// sidecar handshake. Allow a little extra time for service discovery and the
+// first bootstrap/control writes before we tear the client down as stale.
+const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 12000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;

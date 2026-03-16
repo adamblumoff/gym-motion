@@ -12,17 +12,19 @@ The desktop app is split into three layers:
 - `desktop/core`: shared domain models and service contracts
 - `backend/`: active gateway/runtime and data-access code shared by the desktop pipeline
 
+The current product target is Windows only. The runtime BLE contract should be treated as Windows app plus WinRT sidecar plus ESP32 firmware session handling, not as a cross-platform desktop abstraction.
+
 ## Boundary Rules
 
 - The renderer should not call localhost HTTP routes.
 - Live updates should cross the Electron boundary as typed events, not SSE.
-- Native BLE access must stay behind one adapter interface so we can swap between Node and a future Rust sidecar.
+- Native BLE access should be treated as a Windows WinRT sidecar boundary first. Non-Windows BLE paths still in the repo are legacy/dev-only and should not drive product behavior by default.
 - Shared Gym Motion types should live in `desktop/core`, not be duplicated between main and renderer.
 - Transport connection state and telemetry freshness are separate signals. Motion or heartbeat telemetry must not change BLE connection state on their own.
 
 ## Migration Defaults
 
-- Windows is the first-class target.
+- Windows is the only active desktop product target right now.
 - Tray-running behavior is part of the product, not an optional dev mode.
 - Remote Postgres remains the v1 system of record.
 - The legacy Next.js app is archived under `legacy/` and should not receive feature work; active desktop runtime and data-access code now belongs under `backend/`.

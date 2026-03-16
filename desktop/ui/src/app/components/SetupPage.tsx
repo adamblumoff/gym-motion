@@ -10,7 +10,7 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 
 export function SetupPage() {
-  const { setup, snapshot, rescanAdapters, setAllowedNodes } = useDesktopRuntime();
+  const { setup, snapshot, rescanAdapters, recoverApprovedNode, setAllowedNodes } = useDesktopRuntime();
   const discoveredDevices = setup
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
@@ -77,6 +77,10 @@ export function SetupPage() {
       setup.approvedNodes.map((node) => node.id).filter((id) => id !== deviceId),
     );
     void setAllowedNodes(buildApprovedNodeRules(setup, nextIds));
+  };
+
+  const handleRecoverDevice = (deviceId: string) => {
+    void recoverApprovedNode(deviceId);
   };
 
   return (
@@ -240,17 +244,34 @@ export function SetupPage() {
                             <div className="text-xs text-zinc-500 font-mono">
                               {device.macAddress ?? '--'}
                             </div>
+                            {device.lastDisconnectReason ? (
+                              <div className="mt-1 max-w-md text-xs text-amber-400">
+                                {device.lastDisconnectReason}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
 
-                        <Button
-                          onClick={() => handleUnpairDevice(device.id)}
-                          variant="ghost"
-                          size="sm"
-                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                        >
-                          Remove
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          {device.connectionState !== 'connected' ? (
+                            <Button
+                              onClick={() => handleRecoverDevice(device.id)}
+                              size="sm"
+                              variant="secondary"
+                              className="bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
+                            >
+                              Recover
+                            </Button>
+                          ) : null}
+                          <Button
+                            onClick={() => handleUnpairDevice(device.id)}
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       </div>
                     );
                   })()

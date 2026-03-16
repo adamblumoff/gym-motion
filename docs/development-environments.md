@@ -2,6 +2,8 @@
 
 read_when: you are trying to work on the local app while real production devices still exist, or you need to decide how local, staging, and production should relate.
 
+The current desktop product path is Windows-only. Environment decisions should assume the real operator flow is Windows desktop app + WinRT BLE sidecar + ESP32 firmware, even if parts of the repo still run elsewhere for development support.
+
 ## Problem
 
 Right now local development can look confusing because there are three independent pieces:

@@ -44,6 +44,10 @@ export type SetupDevice = {
   signalStrength: number | null;
   isPaired: boolean;
   connectionState: GatewayConnectionState | "visible";
+  reconnectAttempt: number;
+  reconnectAttemptLimit: number;
+  reconnectRetryExhausted: boolean;
+  lastDisconnectReason: string | null;
 };
 
 function rssiToPercent(rssi: number | null) {
@@ -150,6 +154,10 @@ export function buildSetupVisibleDevices(
       }, approvedNodes),
     ),
     connectionState: node.gatewayConnectionState,
+    reconnectAttempt: 0,
+    reconnectAttemptLimit: 20,
+    reconnectRetryExhausted: false,
+    lastDisconnectReason: null,
   }));
 }
 
@@ -175,6 +183,10 @@ export function buildPairedDevices(
       signalStrength: runtimeDevice ? rssiToPercent(runtimeDevice.lastRssi) : null,
       isPaired: true,
       connectionState: runtimeDevice?.gatewayConnectionState ?? "disconnected",
+      reconnectAttempt: runtimeDevice?.reconnectAttempt ?? 0,
+      reconnectAttemptLimit: runtimeDevice?.reconnectAttemptLimit ?? 20,
+      reconnectRetryExhausted: runtimeDevice?.reconnectRetryExhausted ?? false,
+      lastDisconnectReason: runtimeDevice?.gatewayDisconnectReason ?? null,
     };
   });
 }

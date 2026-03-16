@@ -24,9 +24,11 @@
 
 - Future environment strategy options and trade-offs are documented in `/home/adamblumoff/gym-motion/docs/development-environments.md`.
 - Read this before changing how local dev, staging, production DBs, or production devices interact.
+- The current desktop product should be treated as Windows-only. The supported BLE runtime path is Windows app + Rust WinRT sidecar + ESP32 firmware app-session lease protocol.
 - Preferred Windows desktop validation flow: commit and push the repo state to test, clone into `C:\Users\adamb\Code\gym-motion`, then copy `.env.local` into that Windows repo before running `bun install` / `bun run dev` / `bun run build:win`.
 - When working on the Windows desktop app, always commit and push before handing off so the Windows clone can pull the exact tested state.
 - Windows desktop BLE now uses the native Rust WinRT sidecar so the built-in Windows Bluetooth adapter works. Do not route Windows back through the legacy noble + WinUSB path unless the user explicitly asks for a fallback experiment.
+- Non-Windows gateway BLE code still exists in the repo for legacy/dev support, but it is not the active product target and should not drive product decisions by default.
 - On Windows, the app should auto-bind Bluetooth internally. The operator-facing `Setup` tab is for node connection and node management only, not adapter selection, and Bluetooth discovery should be manual-only rather than background scanning.
 - Windows desktop dev and packaging require the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build `native/windows-ble-sidecar` locally.
 - Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`

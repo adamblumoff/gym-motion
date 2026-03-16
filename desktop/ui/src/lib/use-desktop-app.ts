@@ -180,6 +180,9 @@ export function useDesktopApp() {
     async requestSilentReconnect() {
       await window.gymMotionDesktop.requestSilentReconnect();
     },
+    async recoverApprovedNode(ruleId: string) {
+      await window.gymMotionDesktop.recoverApprovedNode(ruleId);
+    },
     async setAllowedNodes(nodes: ApprovedNodeRule[]) {
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => ({

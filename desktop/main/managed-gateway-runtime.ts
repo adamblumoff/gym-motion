@@ -53,6 +53,7 @@ type ManagedGatewayRuntime = {
   getSetupState: () => Promise<DesktopSetupState>;
   rescanAdapters: () => Promise<DesktopSetupState>;
   requestSilentReconnect: () => Promise<void>;
+  recoverApprovedNode: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
@@ -960,6 +961,23 @@ export function createManagedGatewayRuntime(
       if (usesWindowsNativeGateway(process.platform)) {
         if (child) {
           sendGatewayCommand({ type: "request_silent_reconnect" });
+          return;
+        }
+
+        await restartRuntime();
+        return;
+      }
+
+      await refreshAdapters();
+    },
+    async recoverApprovedNode(ruleId) {
+      if (!ruleId) {
+        return;
+      }
+
+      if (usesWindowsNativeGateway(process.platform)) {
+        if (child) {
+          sendGatewayCommand({ type: "recover_approved_node", ruleId });
           return;
         }
 

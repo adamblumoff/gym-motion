@@ -111,6 +111,9 @@ struct SessionHandle {
 enum SessionCommand {
     StartScan,
     RefreshScanPolicy,
+    RecoverApprovedNode {
+        rule_id: String,
+    },
     AllowedNodesUpdated {
         nodes: Vec<ApprovedNodeRule>,
     },
@@ -580,10 +583,7 @@ fn should_restart_approved_reconnect_scan(
     ) == Some("approved-reconnect")
 }
 
-fn next_reconnect_attempt(
-    state: &ApprovedReconnectState,
-    active_for_node: bool,
-) -> Option<u32> {
+fn next_reconnect_attempt(state: &ApprovedReconnectState, active_for_node: bool) -> Option<u32> {
     if active_for_node || state.retry_exhausted || state.attempt >= RECONNECT_ATTEMPT_LIMIT {
         return None;
     }
@@ -758,6 +758,17 @@ impl Sidecar {
                     }
                 }
                 self.emit_adapters().await?;
+            }
+            Command::RecoverApprovedNode { rule_id } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::RecoverApprovedNode { rule_id });
+                }
             }
             Command::SelectAdapter { adapter_id } => {
                 self.selected_adapter_id = Some(adapter_id);
@@ -945,6 +956,7 @@ async fn run_session(
     let mut scanning = false;
     let mut current_scan_reason = None;
     let mut manual_scan_deadline = None;
+    let mut manual_recover_rule_id: Option<String> = None;
     let mut reconnect_diagnostic_tick =
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
     reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -995,8 +1007,37 @@ async fn run_session(
                         let allowed = allowed_nodes.read().await.clone();
                         prune_reconnect_states(&mut reconnect_states, &allowed);
                     }
+                    SessionCommand::RecoverApprovedNode { rule_id } => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        let label = allowed
+                            .iter()
+                            .find(|rule| rule.id == rule_id)
+                            .map(|rule| rule.label.clone())
+                            .unwrap_or_else(|| rule_id.clone());
+                        reconnect_states.insert(rule_id.clone(), ApprovedReconnectState::default());
+                        manual_recover_rule_id = Some(rule_id.clone());
+                        manual_scan_deadline =
+                            Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                        writer.send(&Event::Log {
+                            level: "info".to_string(),
+                            message: format!(
+                                "Manual Windows recovery requested for {label}; resetting retry exhaustion and starting a targeted scan."
+                            ),
+                            details: Some(json!({
+                                "ruleId": rule_id,
+                                "manualRecovery": true,
+                            })),
+                        }).await?;
+                    }
                     SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
                         prune_reconnect_states(&mut reconnect_states, &allowed);
+                        if manual_recover_rule_id
+                            .as_ref()
+                            .map(|rule_id| !allowed.iter().any(|rule| rule.id == *rule_id))
+                            .unwrap_or(false)
+                        {
+                            manual_recover_rule_id = None;
+                        }
                         for node in disconnected_nodes_removed_from_allowed(&connected_nodes, &allowed) {
                             if let Some(peripheral) = peripheral_for_node(&adapter, &node).await {
                                 writer.send(&Event::Log {
@@ -1017,6 +1058,14 @@ async fn run_session(
                     }
                     SessionCommand::ConnectionHealthy { node } => {
                         let allowed = allowed_nodes.read().await.clone();
+                        if approved_rule_id_for_node(&node, &allowed)
+                            .as_ref()
+                            .zip(manual_recover_rule_id.as_ref())
+                            .map(|(left, right)| left == right)
+                            .unwrap_or(false)
+                        {
+                            manual_recover_rule_id = None;
+                        }
                         mark_node_connected(
                             &mut connected_nodes,
                             &mut reconnect_states,
@@ -1112,6 +1161,7 @@ async fn run_session(
                 }
             } => {
                 manual_scan_deadline = None;
+                manual_recover_rule_id = None;
                 let allowed = allowed_nodes.read().await.clone();
                 sync_scan_state(
                     &adapter,
@@ -1310,6 +1360,10 @@ async fn run_session(
                                         "address": node.address,
                                         "reconnectAttempt": next_attempt,
                                         "reconnectAttemptLimit": RECONNECT_ATTEMPT_LIMIT,
+                                        "manualRecovery": manual_recover_rule_id
+                                            .as_ref()
+                                            .map(|target| target == &rule_id)
+                                            .unwrap_or(false),
                                     })),
                                 }).await?;
                                 reconnect_states.insert(
@@ -1360,7 +1414,11 @@ async fn run_session(
                                                 .await;
                                             let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
                                                 node,
-                                                reason,
+                                                reason: if manual_recover_rule_id_for_log {
+                                                    format!("manual recovery failed: {reason}")
+                                                } else {
+                                                    reason
+                                                },
                                             });
                                         }
                                         Ok(None) => {}
@@ -1378,7 +1436,11 @@ async fn run_session(
                                                 .await;
                                             let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
                                                 node,
-                                                reason: error.to_string(),
+                                                reason: if manual_recover_rule_id_for_log {
+                                                    format!("manual recovery failed: {}", error)
+                                                } else {
+                                                    error.to_string()
+                                                },
                                             });
                                         }
                                     }
