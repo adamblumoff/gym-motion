@@ -7,10 +7,11 @@ import type {
   BleAdapterSummary,
   DesktopSetupState,
   DesktopSnapshot,
-  DiscoveredNodeSummary,
   DeviceActivitySummary,
+  DeviceLogSummary,
   GatewayRuntimeDeviceSummary,
   GatewayStatusSummary,
+  MotionStreamPayload,
 } from "@core/contracts";
 import {
   mergeActivityUpdate,
@@ -18,32 +19,45 @@ import {
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
-import { liveStatusLabelForScan } from "@core/gateway-scan";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
 import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
-import { hasApprovedSetupNode } from "./setup-nodes";
-import { matchingApprovedSetupNodeId } from "./setup-nodes";
 import {
   resolveGatewayScriptPath,
   resolveWindowsSidecarPath,
   usesWindowsNativeGateway,
 } from "./gateway-runtime-target";
+import type { PreferencesStore } from "./preferences-store";
+import {
+  createApprovedNodeRule,
+  createNodeIdentity,
+  matchesApprovedNodeRule,
+  reconcileApprovedNodeRule,
+} from "./setup-selection";
+import {
+  applyAutoAdapterSelection,
+  deriveAdapterIssue,
+} from "./managed-gateway-runtime/adapters";
+import {
+  createEmptySetupState,
+  createEmptySnapshot,
+  degradedEmptySnapshot,
+  EMPTY_GATEWAY,
+  liveStatusFor,
+  normalizeGatewayHealth,
+} from "./managed-gateway-runtime/snapshot";
+import {
+  dedupeApprovedNodes,
+  mergeSetupNodes,
+  normalizeApprovedNodes,
+} from "./managed-gateway-runtime/setup-state";
 import {
   listDeviceActivity,
   listDeviceLogs,
   listRecentEvents,
 } from "../../backend/data";
-import type { PreferencesStore } from "./preferences-store";
-import {
-  createApprovedNodeRule,
-  createNodeIdentity,
-  findMatchingGatewayDeviceForApprovedNode,
-  matchesApprovedNodeRule,
-  reconcileApprovedNodeRule,
-} from "./setup-selection";
 
 type ManagedGatewayRuntime = {
   start: () => Promise<void>;
@@ -60,65 +74,6 @@ type ManagedGatewayRuntime = {
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
-const EMPTY_GATEWAY: GatewayStatusSummary = {
-  hostname: "unavailable",
-  mode: "reference-ble-node-gateway",
-  sessionId: "unavailable",
-  adapterState: "unknown",
-  scanState: "stopped",
-  scanReason: null,
-  connectedNodeCount: 0,
-  reconnectingNodeCount: 0,
-  knownNodeCount: 0,
-  startedAt: new Date(0).toISOString(),
-  updatedAt: new Date().toISOString(),
-  lastAdvertisementAt: null,
-};
-
-function createEmptySnapshot(): DesktopSnapshot {
-  return {
-    liveStatus: "Starting gateway runtime…",
-    trayHint: "Closes to tray. Runtime stays hot.",
-    runtimeState: "starting",
-    gatewayIssue: null,
-    gateway: { ...EMPTY_GATEWAY },
-    devices: [],
-    events: [],
-    logs: [],
-    activities: [],
-  };
-}
-
-function offlineGatewaySnapshot() {
-  return {
-    ...EMPTY_GATEWAY,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function degradedEmptySnapshot(issue: string): DesktopSnapshot {
-  return {
-    ...createEmptySnapshot(),
-    liveStatus: "Gateway degraded",
-    runtimeState: "degraded",
-    gatewayIssue: issue,
-    gateway: offlineGatewaySnapshot(),
-  };
-}
-
-function createEmptySetupState(): DesktopSetupState {
-  return {
-    adapterIssue: null,
-    approvedNodes: [],
-    nodes: [],
-  };
-}
-
-function normalizeGatewayHealth(payload: unknown) {
-  const gateway = (payload as { gateway?: GatewayStatusSummary })?.gateway;
-  return gateway ? { ...EMPTY_GATEWAY, ...gateway } : { ...EMPTY_GATEWAY };
-}
-
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     cache: "no-store",
@@ -132,26 +87,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 
   return (await response.json()) as T;
-}
-
-function normalizeApprovedNodes(store: PreferencesStore) {
-  const nodes = store.getJson<ApprovedNodeRule[]>(APPROVED_NODES_KEY);
-
-  if (!Array.isArray(nodes)) {
-    return [];
-  }
-
-  return nodes.filter((node) => typeof node?.id === "string");
-}
-
-function dedupeApprovedNodes(nodes: ApprovedNodeRule[]) {
-  const byId = new Map<string, ApprovedNodeRule>();
-
-  for (const node of nodes) {
-    byId.set(node.id, node);
-  }
-
-  return [...byId.values()];
 }
 
 export function createManagedGatewayRuntime(
@@ -193,39 +128,6 @@ export function createManagedGatewayRuntime(
     });
   }
 
-  function liveStatusFor(snapshotState: DesktopSnapshot) {
-    if (snapshotState.runtimeState === "starting") {
-      return "Starting gateway runtime…";
-    }
-
-    if (snapshotState.runtimeState === "restarting") {
-      return "Restarting gateway runtime…";
-    }
-
-    if (snapshotState.runtimeState === "degraded") {
-      return "Gateway degraded";
-    }
-
-    if (snapshotState.gateway.connectedNodeCount > 0) {
-      return "Gateway live";
-    }
-
-    const scanStatusLabel = liveStatusLabelForScan(
-      snapshotState.gateway.scanState,
-      snapshotState.gateway.scanReason,
-      snapshotState.gateway.reconnectingNodeCount,
-    );
-    if (scanStatusLabel) {
-      return scanStatusLabel;
-    }
-
-    if (snapshotState.gateway.adapterState !== "poweredOn") {
-      return "Waiting for BLE adapter";
-    }
-
-    return "Waiting for approved BLE nodes";
-  }
-
   function updateGatewayStatus(
     gateway: GatewayStatusSummary,
     runtimeState: DesktopSnapshot["runtimeState"],
@@ -254,7 +156,7 @@ export function createManagedGatewayRuntime(
   }
 
   function readApprovedNodes() {
-    return normalizeApprovedNodes(store);
+    return normalizeApprovedNodes(store, APPROVED_NODES_KEY);
   }
 
   function reconcileApprovedNodesWithSnapshot() {
@@ -285,29 +187,10 @@ export function createManagedGatewayRuntime(
     return discoveredAdapters.find((adapter) => adapter.id === autoSelectedAdapterId) ?? null;
   }
 
-  function applyAutoAdapterSelection(adapters: BleAdapterSummary[]) {
-    if (usesWindowsNativeGateway(process.platform)) {
-      return (
-        adapters.find((adapter) => adapter.isAvailable)?.id ??
-        adapters[0]?.id ??
-        null
-      );
-    }
-
-    const usableAdapters = adapters.filter(
-      (adapter) => adapter.isAvailable && adapter.runtimeDeviceId !== null,
-    );
-
-    if (usableAdapters.length === 1) {
-      return usableAdapters[0].id;
-    }
-
-    return null;
-  }
-
   async function refreshAdapters() {
+    const usingWindowsGateway = usesWindowsNativeGateway(process.platform);
     const adapterPayload =
-      usesWindowsNativeGateway(process.platform)
+      usingWindowsGateway
         ? child
           ? await fetchJson<{ adapters: BleAdapterSummary[]; error?: string }>(
               `http://127.0.0.1:${runtimePort}/adapters`,
@@ -321,21 +204,13 @@ export function createManagedGatewayRuntime(
             error: undefined,
           };
     const adapters = adapterPayload.adapters;
-    const selectedAdapterId = applyAutoAdapterSelection(adapters);
-    const adapterIssue = adapterPayload.error ??
-      (adapters[0]?.id === "adapter-error"
-      ? adapters[0].issue
-      : selectedAdapterId && !adapters.some((adapter) => adapter.id === selectedAdapterId)
-        ? "Bluetooth is unavailable on this machine."
-        : adapters.length === 0
-          ? usesWindowsNativeGateway(process.platform)
-            ? "Bluetooth is unavailable on this machine."
-            : "No compatible BLE adapters were detected."
-          : usesWindowsNativeGateway(process.platform)
-            ? null
-            : selectedAdapterId
-              ? null
-              : "No compatible BLE adapters were detected.");
+    const selectedAdapterId = applyAutoAdapterSelection(adapters, usingWindowsGateway);
+    const adapterIssue = deriveAdapterIssue({
+      adapters,
+      selectedAdapterId,
+      usesWindowsNativeGateway: usingWindowsGateway,
+      runtimeError: adapterPayload.error,
+    });
 
     discoveredAdapters = adapters;
     autoSelectedAdapterId = selectedAdapterId;
@@ -349,7 +224,7 @@ export function createManagedGatewayRuntime(
     emitSetup();
 
     if (
-      usesWindowsNativeGateway(process.platform) &&
+      usingWindowsGateway &&
       child &&
       adapters.length === 0 &&
       windowsAdapterRetryTimer === null
@@ -364,92 +239,20 @@ export function createManagedGatewayRuntime(
     }
   }
 
-  function mergeSetupNodes(nodes: DiscoveredNodeSummary[]) {
+  function applySetupNodes(nodes: Array<DesktopSetupState["nodes"][number]>) {
     const approvedNodes = reconcileApprovedNodesWithSnapshot();
-    const byId = new Map<string, DiscoveredNodeSummary>();
-
-    for (const node of nodes) {
-      byId.set(node.id, node);
-    }
-
-    for (const approvedNode of approvedNodes) {
-      const matchingDevice = findMatchingGatewayDeviceForApprovedNode(
-        approvedNode,
-        snapshot.devices,
-      );
-
-      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode, approvedNodes);
-
-      if (!alreadyPresent) {
-        byId.set(approvedNode.id, {
-          id: approvedNode.id,
-          label:
-            matchingDevice?.machineLabel ??
-            approvedNode.label ??
-            approvedNode.localName ??
-            approvedNode.knownDeviceId ??
-            approvedNode.peripheralId ??
-            "Approved node",
-          peripheralId: approvedNode.peripheralId,
-          address: approvedNode.address,
-          localName: approvedNode.localName,
-          knownDeviceId: approvedNode.knownDeviceId ?? matchingDevice?.id ?? null,
-          machineLabel: matchingDevice?.machineLabel ?? null,
-          siteId: matchingDevice?.siteId ?? null,
-          lastRssi: matchingDevice?.lastRssi ?? null,
-          lastSeenAt:
-            matchingDevice?.gatewayLastAdvertisementAt ??
-            matchingDevice?.gatewayLastTelemetryAt ??
-            null,
-          gatewayConnectionState: matchingDevice?.gatewayConnectionState ?? "visible",
-          isApproved: true,
-        });
-        continue;
-      }
-
-      const matchingNodeId = matchingApprovedSetupNodeId(byId, approvedNode, approvedNodes);
-      const matchingNode = matchingNodeId ? byId.get(matchingNodeId) ?? null : null;
-
-      if (!matchingNode || matchingNode.id === approvedNode.id) {
-        continue;
-      }
-
-      byId.delete(matchingNode.id);
-      byId.set(approvedNode.id, {
-        ...matchingNode,
-        id: approvedNode.id,
-        label:
-          matchingDevice?.machineLabel ??
-          matchingNode.machineLabel ??
-          approvedNode.label ??
-          matchingNode.label,
-        peripheralId: matchingDevice?.peripheralId ?? matchingNode.peripheralId,
-        localName: matchingDevice?.advertisedName ?? matchingNode.localName,
-        knownDeviceId: approvedNode.knownDeviceId ?? matchingNode.knownDeviceId,
-        machineLabel: matchingDevice?.machineLabel ?? matchingNode.machineLabel,
-        siteId: matchingDevice?.siteId ?? matchingNode.siteId,
-        gatewayConnectionState:
-          matchingDevice?.gatewayConnectionState ?? matchingNode.gatewayConnectionState,
-        isApproved: true,
-      });
-    }
-
-    setupState = {
-      ...setupState,
+    setupState = mergeSetupNodes({
+      nodes,
       approvedNodes,
-      nodes: [...byId.values()].toSorted((left, right) => {
-        const leftSeen = left.lastSeenAt ? new Date(left.lastSeenAt).getTime() : 0;
-        const rightSeen = right.lastSeenAt ? new Date(right.lastSeenAt).getTime() : 0;
-        return rightSeen - leftSeen;
-      }),
-    };
-
+      devices: snapshot.devices,
+      adapterIssue: setupState.adapterIssue,
+    });
     emitSetup();
   }
 
   async function refreshSetupNodes() {
     if (!child) {
-      mergeSetupNodes([]);
+      applySetupNodes([]);
       return;
     }
 
@@ -465,6 +268,7 @@ export function createManagedGatewayRuntime(
       }>;
     }>(`http://127.0.0.1:${runtimePort}/discoveries`);
 
+    const approvedNodes = readApprovedNodes();
     const nodes = discoveriesPayload.discoveries.map((node) => {
       const matchingDevice =
         (node.knownDeviceId
@@ -483,11 +287,11 @@ export function createManagedGatewayRuntime(
               ...createNodeIdentity(device),
               knownDeviceId: device.id,
             },
-            readApprovedNodes(),
+            approvedNodes,
           ),
         );
-      const isApproved = readApprovedNodes().some((approvedNode) =>
-        matchesApprovedNodeRule(approvedNode, node, readApprovedNodes()),
+      const isApproved = approvedNodes.some((approvedNode) =>
+        matchesApprovedNodeRule(approvedNode, node, approvedNodes),
       );
 
       return {
@@ -508,10 +312,10 @@ export function createManagedGatewayRuntime(
         lastSeenAt: node.lastSeenAt,
         gatewayConnectionState: matchingDevice?.gatewayConnectionState ?? "visible",
         isApproved,
-      } satisfies DiscoveredNodeSummary;
+      } satisfies DesktopSetupState["nodes"][number];
     });
 
-    mergeSetupNodes(nodes);
+    applySetupNodes(nodes);
   }
 
   async function refreshHistory() {
@@ -542,7 +346,7 @@ export function createManagedGatewayRuntime(
 
   async function refreshGatewayState() {
     if (!child) {
-      mergeSetupNodes([]);
+      applySetupNodes([]);
       return;
     }
 
@@ -697,9 +501,9 @@ export function createManagedGatewayRuntime(
         }),
       ],
       {
-      cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
+        cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
     child = spawnedChild;
@@ -742,12 +546,12 @@ export function createManagedGatewayRuntime(
 
   function applyDataEvent(event: DesktopDataEvent) {
     switch (event.type) {
-      case "motion-update":
-        {
-          const device = mergeRepositoryDeviceIntoGatewaySnapshot(
-            snapshot.devices,
-            event.payload.device,
-          );
+      case "motion-update": {
+        const payload: MotionStreamPayload = event.payload;
+        const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+          snapshot.devices,
+          payload.device,
+        );
         snapshot = {
           ...snapshot,
           devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
@@ -756,32 +560,32 @@ export function createManagedGatewayRuntime(
           type: "device-upserted",
           device,
         });
-        if (event.payload.event) {
+        if (payload.event) {
           snapshot = {
             ...snapshot,
-            events: mergeEventUpdate(snapshot.events, event.payload.event, 14),
+            events: mergeEventUpdate(snapshot.events, payload.event, 14),
           };
-          emit({ type: "event-recorded", event: event.payload.event });
+          emit({ type: "event-recorded", event: payload.event });
           const activity: DeviceActivitySummary = {
-            id: `motion-${event.payload.event.id}`,
-            deviceId: event.payload.event.deviceId,
-            sequence: event.payload.event.sequence,
+            id: `motion-${payload.event.id}`,
+            deviceId: payload.event.deviceId,
+            sequence: payload.event.sequence,
             kind: "motion",
-            title: event.payload.event.state.toUpperCase(),
-            message: `Gateway recorded ${event.payload.event.state} for ${event.payload.event.deviceId}.`,
-            state: event.payload.event.state,
+            title: payload.event.state.toUpperCase(),
+            message: `Gateway recorded ${payload.event.state} for ${payload.event.deviceId}.`,
+            state: payload.event.state,
             level: null,
             code: "motion.state",
-            delta: event.payload.event.delta,
-            eventTimestamp: event.payload.event.eventTimestamp,
-            receivedAt: event.payload.event.receivedAt,
-            bootId: event.payload.event.bootId,
-            firmwareVersion: event.payload.event.firmwareVersion,
-            hardwareId: event.payload.event.hardwareId,
+            delta: payload.event.delta,
+            eventTimestamp: payload.event.eventTimestamp,
+            receivedAt: payload.event.receivedAt,
+            bootId: payload.event.bootId,
+            firmwareVersion: payload.event.firmwareVersion,
+            hardwareId: payload.event.hardwareId,
             metadata:
-              event.payload.event.delta === null
+              payload.event.delta === null
                 ? null
-                : { delta: event.payload.event.delta },
+                : { delta: payload.event.delta },
           };
           snapshot = {
             ...snapshot,
@@ -791,32 +595,33 @@ export function createManagedGatewayRuntime(
         }
         void refreshSetupNodes();
         break;
-        }
+      }
       case "device-log": {
+        const payload: DeviceLogSummary = event.payload;
         const activity: DeviceActivitySummary = {
-          id: `log-${event.payload.id}`,
-          deviceId: event.payload.deviceId,
-          sequence: event.payload.sequence,
+          id: `log-${payload.id}`,
+          deviceId: payload.deviceId,
+          sequence: payload.sequence,
           kind: "lifecycle",
-          title: event.payload.code ?? event.payload.level.toUpperCase(),
-          message: event.payload.message,
+          title: payload.code ?? payload.level.toUpperCase(),
+          message: payload.message,
           state: null,
-          level: event.payload.level,
-          code: event.payload.code,
+          level: payload.level,
+          code: payload.code,
           delta: null,
-          eventTimestamp: event.payload.deviceTimestamp,
-          receivedAt: event.payload.receivedAt,
-          bootId: event.payload.bootId,
-          firmwareVersion: event.payload.firmwareVersion,
-          hardwareId: event.payload.hardwareId,
-          metadata: event.payload.metadata,
+          eventTimestamp: payload.deviceTimestamp,
+          receivedAt: payload.receivedAt,
+          bootId: payload.bootId,
+          firmwareVersion: payload.firmwareVersion,
+          hardwareId: payload.hardwareId,
+          metadata: payload.metadata,
         };
         snapshot = {
           ...snapshot,
-          logs: mergeLogUpdate(snapshot.logs, event.payload, 18),
+          logs: mergeLogUpdate(snapshot.logs, payload, 18),
           activities: mergeActivityUpdate(snapshot.activities, activity, 30),
         };
-        emit({ type: "log-recorded", log: event.payload });
+        emit({ type: "log-recorded", log: payload });
         emit({ type: "activity-recorded", activity });
         break;
       }
@@ -839,7 +644,7 @@ export function createManagedGatewayRuntime(
     if (!preserveSnapshot) {
       snapshot = createEmptySnapshot();
       emit({ type: "snapshot", snapshot });
-      mergeSetupNodes([]);
+      applySetupNodes([]);
     } else {
       snapshot = {
         ...snapshot,
@@ -996,7 +801,7 @@ export function createManagedGatewayRuntime(
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });
-        mergeSetupNodes(setupState.nodes);
+        applySetupNodes(setupState.nodes);
         return setupState;
       }
 

@@ -1,6 +1,5 @@
 /* global Buffer, console, fetch, setTimeout */
 
-import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
@@ -10,32 +9,22 @@ import {
   shouldWriteDiscoveryLog,
   shouldWriteSidecarLog,
 } from "./windows-winrt-gateway-logging.mjs";
+import {
+  createGatewayConfig,
+  parseApprovedNodeRules,
+  readSelectedAdapterId,
+  selectPreferredAdapter,
+} from "./windows-winrt-gateway-config.mjs";
+import {
+  createDeviceContext,
+  describeNode,
+  normalizeAllowedNodesPayload,
+} from "./windows-winrt-gateway-node.mjs";
 
-const config = {
-  apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
-  runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
-  runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
-  heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),
-  startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
-  sidecarPath:
-    process.env.GATEWAY_SIDECAR_PATH ??
-    path.join(
-      process.cwd(),
-      "native",
-      "windows-ble-sidecar",
-      "target",
-      "release",
-      "gym-motion-ble-winrt.exe",
-    ),
-  verbose: process.env.GATEWAY_VERBOSE === "1",
-};
+const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
-let selectedAdapterId =
-  typeof process.env.GATEWAY_SELECTED_ADAPTER_ID === "string" &&
-    process.env.GATEWAY_SELECTED_ADAPTER_ID.length > 0
-    ? process.env.GATEWAY_SELECTED_ADAPTER_ID
-    : null;
+let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
 
 const runtimeServer = createGatewayRuntimeServer({
   apiBaseUrl: config.apiBaseUrl,
@@ -71,30 +60,6 @@ function debug(message, details) {
   log(message, details);
 }
 
-function parseApprovedNodeRules(raw) {
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function describeNode(node = {}) {
-  return {
-    deviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-    knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-    peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-    address: node.address ?? null,
-    localName: node.localName ?? node.local_name ?? null,
-    rssi: node.lastRssi ?? node.last_rssi ?? node.rssi ?? null,
-  };
-}
-
 function setRuntimeIssue(issue) {
   latestGatewayIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
   runtimeServer.setGatewayIssue(latestGatewayIssue);
@@ -121,26 +86,6 @@ function refreshSelectionIssue(adapters) {
   if (latestGatewayIssue?.startsWith("Bluetooth is unavailable")) {
     setRuntimeIssue(null);
   }
-}
-
-function selectPreferredAdapter(adapters) {
-  return adapters.find((adapter) => adapter.isAvailable)?.id ?? adapters[0]?.id ?? null;
-}
-
-function createDeviceContext(deviceId) {
-  return {
-    deviceId,
-    lastState: null,
-    lastHeartbeatForwardedAt: 0,
-    firmwareVersion: "unknown",
-    bootId: null,
-    hardwareId: null,
-    peripheralId: null,
-    address: null,
-    advertisedName: null,
-    rssi: null,
-    lastTelemetryConnectionState: null,
-  };
 }
 
 async function postJson(targetPath, body) {
@@ -465,14 +410,7 @@ function sendCommand(type, payload = {}) {
 }
 
 function sidecarAllowedNodesPayload() {
-  return approvedNodeRules.map((node) => ({
-    id: node.id,
-    label: node.label,
-    peripheral_id: node.peripheralId ?? null,
-    address: node.address ?? null,
-    local_name: node.localName ?? null,
-    known_device_id: node.knownDeviceId ?? null,
-  }));
+  return normalizeAllowedNodesPayload(approvedNodeRules);
 }
 
 function syncAllowedNodes() {
