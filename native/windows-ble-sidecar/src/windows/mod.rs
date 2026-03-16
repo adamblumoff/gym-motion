@@ -68,6 +68,8 @@ const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 2;
 const PRE_SESSION_SETUP_RETRY_DELAY_MS: u64 = 350;
 const PRE_SESSION_SETUP_ATTEMPTS: u32 = 2;
 const SESSION_BOOTSTRAP_RETRY_LIMIT: u32 = 1;
+const SESSION_TELEMETRY_CONFIRM_RETRY_LIMIT: u32 = 1;
+const POST_GATT_READY_SETTLE_MS: u64 = 250;
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
@@ -1748,6 +1750,7 @@ async fn connect_and_stream(
     }
 
     let peripheral = active_peripheral;
+    sleep(Duration::from_millis(POST_GATT_READY_SETTLE_MS)).await;
     let mut setup_result = Err(anyhow!("pre-session setup did not run"));
     for setup_attempt in 1..=PRE_SESSION_SETUP_ATTEMPTS {
         setup_result = async {
@@ -1876,6 +1879,8 @@ async fn connect_and_stream(
     let mut ack_session_id: Option<String> = None;
     let mut ack_received = false;
     let mut session_bootstrap_retry_count = 0_u32;
+    let mut session_telemetry_confirm_retry_count = 0_u32;
+    let mut ack_confirmed_node: Option<DiscoveredNode> = None;
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
     let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
     let lease_peripheral = peripheral.clone();
@@ -1985,7 +1990,6 @@ async fn connect_and_stream(
                                     continue;
                                 }
                                 ack_session_id = Some(session_id);
-
                                 ack_received = true;
                                 let mut enriched = node.clone();
                                 if let Some(device_id) = status.device_id.clone() {
@@ -1997,66 +2001,38 @@ async fn connect_and_stream(
                                     }
                                     enriched.known_device_id = Some(device_id);
                                 }
-
-                                if !session_healthy_reported {
-                                    session_healthy_reported = true;
-                                    let _ = command_sender.send(SessionCommand::ConnectionHealthy {
-                                        node: enriched.clone(),
-                                    });
-                                    writer
-                                        .send(&Event::NodeConnectionState {
-                                            node: enriched.clone(),
-                                            gateway_connection_state: "connected".to_string(),
-                                            reason: None,
-                                            reconnect: reconnect.clone(),
-                                        })
-                                        .await?;
+                                ack_confirmed_node = Some(enriched.clone());
+                                let (message, details) = log_handshake_step("sending sync-now");
+                                emit_verbose_log(&writer, config.verbose_logging, message, details)
+                                    .await?;
+                                if let Err(error) = write_chunked_json_command(
+                                    &peripheral,
+                                    &control_characteristic,
+                                    r#"{"type":"sync-now"}"#,
+                                )
+                                .await
+                                {
                                     writer
                                         .send(&Event::Log {
-                                            level: "info".to_string(),
-                                            message: format!("Reconnect completed for {}.", enriched.label),
+                                            level: "warn".to_string(),
+                                            message: format!(
+                                                "sync-now step failed for {}",
+                                                node.label
+                                            ),
                                             details: Some(json!({
                                                 "peripheralId": enriched.peripheral_id,
                                                 "knownDeviceId": enriched.known_device_id,
                                                 "address": enriched.address,
-                                                "reconnect": reconnect,
-                                                "transportMs": transport_ready_at
-                                                    .map(|instant| instant.duration_since(reconnect_started_at).as_millis() as u64),
-                                                "gattMs": gatt_ready_at
-                                                    .map(|instant| instant.duration_since(reconnect_started_at).as_millis() as u64),
-                                                "sessionMs": Instant::now()
-                                                    .duration_since(reconnect_started_at)
-                                                    .as_millis() as u64,
-                                                "usedTelemetryFallback": false,
+                                                "error": format!("{:#}", error),
                                             })),
                                         })
                                         .await?;
-                                    let (message, details) = log_handshake_step("sending sync-now");
-                                    emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-                                    if let Err(error) = write_chunked_json_command(
-                                        &peripheral,
-                                        &control_characteristic,
-                                        r#"{"type":"sync-now"}"#,
-                                    )
-                                    .await
-                                    {
-                                        writer
-                                            .send(&Event::Log {
-                                                level: "warn".to_string(),
-                                                message: format!(
-                                                    "sync-now step failed for {}",
-                                                    node.label
-                                                ),
-                                                details: Some(json!({
-                                                    "peripheralId": enriched.peripheral_id,
-                                                    "knownDeviceId": enriched.known_device_id,
-                                                    "address": enriched.address,
-                                                    "error": format!("{:#}", error),
-                                                })),
-                                            })
-                                            .await?;
-                                    }
                                 }
+                                session_health_sleep
+                                    .as_mut()
+                                    .reset((Instant::now()
+                                        + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS))
+                                        .into());
                             }
                             Err(error) => {
                                 writer
@@ -2095,6 +2071,47 @@ async fn connect_and_stream(
                                     payload,
                                 })
                                 .await?;
+                            if ack_received && !session_healthy_reported {
+                                session_healthy_reported = true;
+                                let completed_node = ack_confirmed_node
+                                    .clone()
+                                    .or_else(|| telemetry_fallback_node.clone())
+                                    .unwrap_or_else(|| node.clone());
+                                let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+                                    node: completed_node.clone(),
+                                });
+                                writer
+                                    .send(&Event::NodeConnectionState {
+                                        node: completed_node.clone(),
+                                        gateway_connection_state: "connected".to_string(),
+                                        reason: None,
+                                        reconnect: reconnect.clone(),
+                                    })
+                                    .await?;
+                                writer
+                                    .send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: format!(
+                                            "Reconnect completed for {}.",
+                                            completed_node.label
+                                        ),
+                                        details: Some(json!({
+                                            "peripheralId": completed_node.peripheral_id,
+                                            "knownDeviceId": completed_node.known_device_id,
+                                            "address": completed_node.address,
+                                            "reconnect": reconnect,
+                                            "transportMs": transport_ready_at
+                                                .map(|instant| instant.duration_since(reconnect_started_at).as_millis() as u64),
+                                            "gattMs": gatt_ready_at
+                                                .map(|instant| instant.duration_since(reconnect_started_at).as_millis() as u64),
+                                            "sessionMs": Instant::now()
+                                                .duration_since(reconnect_started_at)
+                                                .as_millis() as u64,
+                                            "usedTelemetryFallback": false,
+                                        })),
+                                    })
+                                    .await?;
+                            }
                         }
                         Err(error) => {
                             writer
@@ -2107,7 +2124,47 @@ async fn connect_and_stream(
                     }
                 }
             }
-            _ = &mut session_health_sleep, if !session_healthy_reported && !ack_received => {
+            _ = &mut session_health_sleep, if !session_healthy_reported => {
+                if ack_received {
+                    if session_telemetry_confirm_retry_count < SESSION_TELEMETRY_CONFIRM_RETRY_LIMIT
+                        && peripheral.is_connected().await.unwrap_or(false)
+                    {
+                        session_telemetry_confirm_retry_count =
+                            session_telemetry_confirm_retry_count.saturating_add(1);
+                        writer
+                            .send(&Event::Log {
+                                level: "warn".to_string(),
+                                message: "App-session-online arrived but telemetry confirmation did not; retrying sync-now on the same connection.".to_string(),
+                                details: Some(json!({
+                                    "peripheralId": node.peripheral_id,
+                                    "knownDeviceId": node.known_device_id,
+                                    "address": node.address,
+                                    "expectedSessionId": app_session_id,
+                                    "retryCount": session_telemetry_confirm_retry_count,
+                                    "retryLimit": SESSION_TELEMETRY_CONFIRM_RETRY_LIMIT,
+                                    "timeoutMs": SESSION_HEALTH_ACK_TIMEOUT_MS,
+                                })),
+                            })
+                            .await?;
+                        write_chunked_json_command(
+                            &peripheral,
+                            &control_characteristic,
+                            r#"{"type":"sync-now"}"#,
+                        )
+                        .await
+                        .with_context(|| format!("sync-now retry failed for {}", node.label))?;
+                        session_health_sleep
+                            .as_mut()
+                            .reset((Instant::now() + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS)).into());
+                        continue;
+                    }
+
+                    return Err(anyhow!(
+                        "session confirmation telemetry did not arrive for {}",
+                        node.label
+                    ));
+                }
+
                 if session_bootstrap_retry_count < SESSION_BOOTSTRAP_RETRY_LIMIT
                     && peripheral.is_connected().await.unwrap_or(false)
                 {
