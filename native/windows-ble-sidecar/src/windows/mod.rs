@@ -1373,6 +1373,10 @@ async fn run_session(
                                         retry_exhausted: false,
                                     },
                                 );
+                                let manual_recover_rule_id_for_log = manual_recover_rule_id
+                                    .as_ref()
+                                    .map(|target| target == &rule_id)
+                                    .unwrap_or(false);
                                 active.insert(key.clone());
                                 drop(active);
                                 let writer_clone = writer.clone();
