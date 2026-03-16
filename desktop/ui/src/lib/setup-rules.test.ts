@@ -184,4 +184,38 @@ describe("setup-rules", () => {
       }),
     ).toBe(true);
   });
+
+  it("does not treat shared local names as proof a visible node is already paired", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "name:GymMotion-f4e9d4-a",
+        label: "Stack 001",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      {
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Stack 002",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      matchesApprovedNodeIdentity(
+        approvedNodes[0]!,
+        {
+          peripheralId: null,
+          address: null,
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: null,
+        },
+        approvedNodes,
+      ),
+    ).toBe(false);
+  });
 });

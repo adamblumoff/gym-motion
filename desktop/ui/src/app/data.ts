@@ -147,7 +147,7 @@ export function buildSetupVisibleDevices(
         address: node.address ?? null,
         localName: node.localName ?? null,
         knownDeviceId: node.knownDeviceId ?? null,
-      }),
+      }, approvedNodes),
     ),
     connectionState: node.gatewayConnectionState,
   }));

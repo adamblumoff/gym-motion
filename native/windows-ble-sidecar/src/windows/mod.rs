@@ -111,6 +111,9 @@ struct SessionHandle {
 enum SessionCommand {
     StartScan,
     RefreshScanPolicy,
+    AllowedNodesUpdated {
+        nodes: Vec<ApprovedNodeRule>,
+    },
     ConnectionHealthy {
         node: DiscoveredNode,
     },
@@ -138,6 +141,17 @@ fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) 
     rules.iter()
         .find(|rule| rule_matches_node(rule, node, rules))
         .map(|rule| rule.id.clone())
+}
+
+fn disconnected_nodes_removed_from_allowed(
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    allowed: &[ApprovedNodeRule],
+) -> Vec<DiscoveredNode> {
+    connected_nodes
+        .values()
+        .filter(|node| !is_approved(node, allowed))
+        .cloned()
+        .collect()
 }
 
 fn reconnect_status_for_rule(
@@ -720,7 +734,11 @@ impl Sidecar {
             Command::SetAllowedNodes { nodes } => {
                 *self.allowed_nodes.write().await = nodes;
                 if let Some(session) = &self.session {
-                    let _ = session.commands.send(SessionCommand::RefreshScanPolicy);
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::AllowedNodesUpdated {
+                            nodes: self.allowed_nodes.read().await.clone(),
+                        });
                 }
             }
             Command::Start => {
@@ -944,6 +962,26 @@ async fn run_session(
                     SessionCommand::RefreshScanPolicy => {
                         let allowed = allowed_nodes.read().await.clone();
                         prune_reconnect_states(&mut reconnect_states, &allowed);
+                    }
+                    SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
+                        prune_reconnect_states(&mut reconnect_states, &allowed);
+                        for node in disconnected_nodes_removed_from_allowed(&connected_nodes, &allowed) {
+                            if let Some(peripheral) = peripheral_for_node(&adapter, &node).await {
+                                writer.send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: format!(
+                                        "Disconnecting {} because it was removed from allowed nodes.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                    })),
+                                }).await?;
+                                let _ = peripheral.disconnect().await;
+                            }
+                        }
                     }
                     SessionCommand::ConnectionHealthy { node } => {
                         let allowed = allowed_nodes.read().await.clone();
@@ -1466,6 +1504,15 @@ async fn peripheral_for_event(
     }
 }
 
+async fn peripheral_for_node(adapter: &Adapter, node: &DiscoveredNode) -> Option<Peripheral> {
+    let target_id = node.peripheral_id.as_deref()?;
+    let peripherals = adapter.peripherals().await.ok()?;
+
+    peripherals
+        .into_iter()
+        .find(|peripheral| peripheral.id().to_string() == target_id)
+}
+
 async fn discovered_node_for_event(
     peripheral: &Peripheral,
     writer: &EventWriter,
@@ -1647,6 +1694,17 @@ async fn connect_and_stream(
                 }
             }
             _ = sleep(Duration::from_millis(CONNECTION_HEALTH_POLL_MS)) => {
+                if !is_approved(&node, &allowed_nodes.read().await) {
+                    let _ = lease_shutdown_tx.send(true);
+                    let _ = lease_task.await;
+                    if peripheral.is_connected().await.unwrap_or(false) {
+                        let _ = peripheral.disconnect().await;
+                    }
+                    return Ok(Some(format!(
+                        "{} was removed from allowed nodes.",
+                        node.label,
+                    )));
+                }
                 if !peripheral.is_connected().await.unwrap_or(false) {
                     let _ = lease_shutdown_tx.send(true);
                     let _ = lease_task.await;
@@ -1785,31 +1843,7 @@ async fn discovered_node_from_peripheral(
 }
 
 fn is_approved(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
-    rules.iter().any(|rule| {
-        rule.known_device_id
-            .as_ref()
-            .zip(node.known_device_id.as_ref())
-            .map(|(left, right)| left == right)
-            .unwrap_or(false)
-            || rule
-                .peripheral_id
-                .as_ref()
-                .zip(node.peripheral_id.as_ref())
-                .map(|(left, right)| left == right)
-                .unwrap_or(false)
-            || rule
-                .address
-                .as_ref()
-                .zip(node.address.as_ref())
-                .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                .unwrap_or(false)
-            || rule
-                .local_name
-                .as_ref()
-                .zip(node.local_name.as_ref())
-                .map(|(left, right)| left == right)
-                .unwrap_or(false)
-    })
+    approved_rule_id_for_node(node, rules).is_some()
 }
 
 fn normalize_adapter_state(state: CentralState) -> String {
@@ -1850,9 +1884,10 @@ mod tests {
     use super::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
         approved_rule_id_for_node, all_approved_nodes_connected, classify_discovery_candidate,
-        control_command_frames, mark_node_connected, node_key, prune_reconnect_states,
-        scan_reason, should_clear_reconnect_peripherals, should_scan, ApprovedReconnectState,
-        Config, APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
+        control_command_frames, disconnected_nodes_removed_from_allowed, mark_node_connected,
+        is_approved, node_key, prune_reconnect_states, scan_reason,
+        should_clear_reconnect_peripherals, should_scan, ApprovedReconnectState, Config,
+        APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::{Duration, Instant}};
@@ -2081,6 +2116,85 @@ mod tests {
             reconnect_states.get("node-2").map(|state| state.attempt),
             Some(2)
         );
+    }
+
+    #[test]
+    fn removed_allowed_nodes_are_selected_for_disconnect() {
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-2".to_string(),
+            label: "Bench 2".to_string(),
+            peripheral_id: Some("peripheral-2".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::from([
+            (
+                "peripheral-1".to_string(),
+                DiscoveredNode {
+                    id: "peripheral:peripheral-1".to_string(),
+                    label: "Bench 1".to_string(),
+                    peripheral_id: Some("peripheral-1".to_string()),
+                    address: None,
+                    local_name: None,
+                    known_device_id: None,
+                    last_rssi: None,
+                    last_seen_at: None,
+                },
+            ),
+            (
+                "peripheral-2".to_string(),
+                DiscoveredNode {
+                    id: "peripheral:peripheral-2".to_string(),
+                    label: "Bench 2".to_string(),
+                    peripheral_id: Some("peripheral-2".to_string()),
+                    address: None,
+                    local_name: None,
+                    known_device_id: None,
+                    last_rssi: None,
+                    last_seen_at: None,
+                },
+            ),
+        ]);
+
+        let removed = disconnected_nodes_removed_from_allowed(&connected, &allowed);
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].peripheral_id.as_deref(), Some("peripheral-1"));
+    }
+
+    #[test]
+    fn shared_local_name_alone_does_not_make_a_node_approved() {
+        let rules = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+        ];
+        let node = DiscoveredNode {
+            id: "peripheral:peripheral-9".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-9".to_string()),
+            address: None,
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: None,
+            last_rssi: None,
+            last_seen_at: None,
+        };
+
+        assert!(!is_approved(&node, &rules));
     }
 
     #[test]

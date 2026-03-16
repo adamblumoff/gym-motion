@@ -645,6 +645,68 @@ describe("buildSetupVisibleDevices", () => {
 
     expect(devices[0]?.isPaired).toBe(true);
   });
+
+  it("keeps ambiguous shared-name discoveries visible as unpaired", () => {
+    const devices = buildSetupVisibleDevices(
+      {
+        adapterIssue: null,
+        approvedNodes: [
+          {
+            id: "name:GymMotion-f4e9d4-a",
+            label: "Leg Press A",
+            peripheralId: null,
+            address: null,
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: null,
+          },
+          {
+            id: "name:GymMotion-f4e9d4-b",
+            label: "Leg Press B",
+            peripheralId: null,
+            address: null,
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: null,
+          },
+        ],
+        nodes: [
+          {
+            id: "peripheral:peripheral-2",
+            label: "GymMotion-f4e9d4",
+            peripheralId: "peripheral-2",
+            address: "CC:DD",
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: null,
+            machineLabel: null,
+            siteId: null,
+            lastRssi: -61,
+            lastSeenAt: new Date().toISOString(),
+            gatewayConnectionState: "visible",
+            isApproved: false,
+          },
+        ],
+      },
+      [
+        {
+          id: "name:GymMotion-f4e9d4-a",
+          label: "Leg Press A",
+          peripheralId: null,
+          address: null,
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: null,
+        },
+        {
+          id: "name:GymMotion-f4e9d4-b",
+          label: "Leg Press B",
+          peripheralId: null,
+          address: null,
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: null,
+        },
+      ],
+    );
+
+    expect(devices[0]?.isPaired).toBe(false);
+  });
 });
 
 describe("buildPairedDevices", () => {

@@ -137,11 +137,19 @@ export function forgetApprovedNodeRules(
 export function matchesApprovedNodeIdentity(
   rule: ApprovedNodeRule,
   identity: DiscoveryIdentity,
+  approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
+  const canUseLocalNameFallback =
+    !rule.knownDeviceId &&
+    !rule.peripheralId &&
+    !rule.address &&
+    Boolean(rule.localName) &&
+    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
+
   return Boolean(
     exactIdentityMatch(rule.knownDeviceId, identity.knownDeviceId) ||
       exactIdentityMatch(rule.peripheralId, identity.peripheralId) ||
       addressIdentityMatch(rule.address, identity.address) ||
-      exactIdentityMatch(rule.localName, identity.localName),
+      (canUseLocalNameFallback && exactIdentityMatch(rule.localName, identity.localName)),
   );
 }
