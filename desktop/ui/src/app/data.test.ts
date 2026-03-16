@@ -220,6 +220,7 @@ describe("buildBluetoothNodes", () => {
           reconnectAttempt: 20,
           reconnectAttemptLimit: 20,
           reconnectRetryExhausted: true,
+          reconnectAwaitingDecision: true,
         },
       ],
       events: [],
@@ -232,6 +233,7 @@ describe("buildBluetoothNodes", () => {
     expect(node?.reconnectAttempt).toBe(20);
     expect(node?.reconnectAttemptLimit).toBe(20);
     expect(node?.reconnectRetryExhausted).toBe(true);
+    expect(node?.reconnectAwaitingDecision).toBe(true);
   });
 
   it("prefers the stable BLE address over an opaque runtime peripheral id", () => {

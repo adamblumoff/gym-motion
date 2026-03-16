@@ -48,6 +48,7 @@ pub struct ReconnectStatus {
     pub attempt: u32,
     pub attempt_limit: u32,
     pub retry_exhausted: bool,
+    pub awaiting_user_decision: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -100,6 +101,7 @@ pub enum Command {
     Rescan,
     RefreshScanPolicy,
     RecoverApprovedNode { rule_id: String },
+    ResumeApprovedNodeReconnect { rule_id: String },
     Shutdown,
 }
 
@@ -172,6 +174,17 @@ mod tests {
         .expect("command should serialize");
 
         assert_eq!(value["type"], "recover_approved_node");
+        assert_eq!(value["rule_id"], "known:stack-001");
+    }
+
+    #[test]
+    fn serializes_resume_approved_node_reconnect_command() {
+        let value = serde_json::to_value(Command::ResumeApprovedNodeReconnect {
+            rule_id: "known:stack-001".to_string(),
+        })
+        .expect("command should serialize");
+
+        assert_eq!(value["type"], "resume_approved_node_reconnect");
         assert_eq!(value["rule_id"], "known:stack-001");
     }
 

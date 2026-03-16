@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Activity, Battery, BatteryLow, BatteryWarning, Bluetooth, Trash2 } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../data';
@@ -11,6 +11,7 @@ interface BluetoothNodeProps {
   node: BluetoothNodeData;
   onClick?: () => void;
   onForget?: (nodeId: string) => void;
+  onKeepDevice?: (nodeId: string) => void;
 }
 
 function connectionBadge(node: BluetoothNodeData) {
@@ -34,27 +35,19 @@ function connectionBadge(node: BluetoothNodeData) {
   }
 }
 
-export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
+export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
   const [confirmForget, setConfirmForget] = useState(false);
-  const [dismissedReconnectPrompt, setDismissedReconnectPrompt] = useState(false);
   const statusBadge = connectionBadge(node);
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
-    node.reconnectRetryExhausted &&
-    !dismissedReconnectPrompt;
+    node.reconnectAwaitingDecision;
 
   useEffect(() => {
     if (node.isMoving) {
       setPulseKey((prev) => prev + 1);
     }
   }, [node.isMoving]);
-
-  useEffect(() => {
-    if (!node.reconnectRetryExhausted) {
-      setDismissedReconnectPrompt(false);
-    }
-  }, [node.reconnectRetryExhausted]);
 
   const BatteryIcon =
     node.batteryLevel === null
@@ -174,14 +167,14 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
         <div className="mx-4 mb-4 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3" onClick={(event) => event.stopPropagation()}>
           <div className="text-sm font-medium text-amber-300">Do you want to forget this device?</div>
           <div className="mt-1 text-xs leading-5 text-zinc-400">
-            Auto-reconnect stopped after {node.reconnectAttemptLimit} failed attempts for this paired sensor.
+            Auto-reconnect paused after {node.reconnectAttemptLimit} failed attempts for this paired sensor. Keep it to resume reconnecting, or forget it to stop trying.
           </div>
           <div className="mt-3 flex items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-              onClick={() => setDismissedReconnectPrompt(true)}
+              onClick={() => onKeepDevice?.(node.id)}
             >
               Keep Device
             </Button>

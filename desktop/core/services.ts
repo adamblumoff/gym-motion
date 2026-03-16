@@ -18,6 +18,7 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   rescanAdapters: "runtime:rescan-adapters",
   requestSilentReconnect: "runtime:request-silent-reconnect",
   recoverApprovedNode: "runtime:recover-approved-node",
+  resumeApprovedNodeReconnect: "runtime:resume-approved-node-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
   updated: "runtime:updated",
 } as const;
@@ -73,6 +74,7 @@ export type DesktopApi = {
   rescanAdapters: () => Promise<DesktopSetupState>;
   requestSilentReconnect: () => Promise<void>;
   recoverApprovedNode: (ruleId: string) => Promise<void>;
+  resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;

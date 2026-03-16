@@ -85,6 +85,9 @@ enum SessionCommand {
     RecoverApprovedNode {
         rule_id: String,
     },
+    ResumeApprovedNodeReconnect {
+        rule_id: String,
+    },
     AllowedNodesUpdated {
         nodes: Vec<ApprovedNodeRule>,
     },
@@ -466,6 +469,17 @@ impl Sidecar {
                         .send(SessionCommand::RecoverApprovedNode { rule_id });
                 }
             }
+            Command::ResumeApprovedNodeReconnect { rule_id } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::ResumeApprovedNodeReconnect { rule_id });
+                }
+            }
             Command::SelectAdapter { adapter_id } => {
                 self.selected_adapter_id = Some(adapter_id);
                 self.emit_adapters().await?;
@@ -745,6 +759,26 @@ async fn run_session(
                             })),
                         }).await?;
                     }
+                    SessionCommand::ResumeApprovedNodeReconnect { rule_id } => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        let label = allowed
+                            .iter()
+                            .find(|rule| rule.id == rule_id)
+                            .map(|rule| rule.label.clone())
+                            .unwrap_or_else(|| rule_id.clone());
+                        reconnect_states.insert(rule_id.clone(), ApprovedReconnectState::default());
+                        writer.send(&Event::Log {
+                            level: "info".to_string(),
+                            message: format!(
+                                "Approved-node reconnect resumed for {label}; waiting for the next rediscovery window."
+                            ),
+                            details: Some(json!({
+                                "ruleId": rule_id,
+                                "manualRecovery": false,
+                                "resumedAfterDecision": true,
+                            })),
+                        }).await?;
+                    }
                     SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
                         prune_reconnect_states(&mut reconnect_states, &allowed);
                         if manual_recover_rule_id
@@ -815,11 +849,13 @@ async fn run_session(
                             let state = reconnect_states.entry(rule_id).or_default();
                             if state.attempt >= RECONNECT_ATTEMPT_LIMIT {
                                 state.retry_exhausted = true;
+                                state.awaiting_user_decision = true;
                             }
                             ReconnectStatus {
                                 attempt: state.attempt,
                                 attempt_limit: RECONNECT_ATTEMPT_LIMIT,
                                 retry_exhausted: state.retry_exhausted,
+                                awaiting_user_decision: state.awaiting_user_decision,
                             }
                         });
                         writer.send(&Event::Log {
@@ -1139,6 +1175,7 @@ async fn run_session(
                                             ApprovedReconnectState {
                                                 attempt: reconnect_state.attempt,
                                                 retry_exhausted: true,
+                                                awaiting_user_decision: true,
                                             },
                                         );
                                     }
@@ -1174,6 +1211,7 @@ async fn run_session(
                                     ApprovedReconnectState {
                                         attempt: next_attempt,
                                         retry_exhausted: false,
+                                        awaiting_user_decision: false,
                                     },
                                 );
                                 if scanning {
@@ -1227,6 +1265,7 @@ async fn run_session(
                                             attempt: next_attempt,
                                             attempt_limit: RECONNECT_ATTEMPT_LIMIT,
                                             retry_exhausted: false,
+                                            awaiting_user_decision: false,
                                         }),
                                         shutdown_clone,
                                         command_tx_clone.clone(),
@@ -1625,25 +1664,38 @@ async fn recover_active_session_control_path(
         })
         .await?;
 
-    peripheral
-        .discover_services()
-        .await
-        .with_context(|| format!("refresh services for active session recovery failed for {}", node.label))?;
+    peripheral.discover_services().await.with_context(|| {
+        format!(
+            "refresh services for active session recovery failed for {}",
+            node.label
+        )
+    })?;
 
     let control_characteristic = peripheral
         .characteristics()
         .into_iter()
         .find(|candidate| candidate.uuid == control_uuid)
-        .ok_or_else(|| anyhow!("runtime control characteristic not found during active session recovery"))?;
+        .ok_or_else(|| {
+            anyhow!("runtime control characteristic not found during active session recovery")
+        })?;
 
     send_app_session_bootstrap(peripheral, &control_characteristic, app_session_nonce)
         .await
-        .with_context(|| format!("active session bootstrap recovery failed for {}", node.label))?;
+        .with_context(|| {
+            format!(
+                "active session bootstrap recovery failed for {}",
+                node.label
+            )
+        })?;
     send_app_session_lease(peripheral, &control_characteristic, app_session_id)
         .await
         .with_context(|| format!("active session lease recovery failed for {}", node.label))?;
-    let _ = write_chunked_json_command(peripheral, &control_characteristic, r#"{"type":"sync-now"}"#)
-        .await;
+    let _ = write_chunked_json_command(
+        peripheral,
+        &control_characteristic,
+        r#"{"type":"sync-now"}"#,
+    )
+    .await;
 
     writer
         .send(&Event::Log {
@@ -2663,6 +2715,7 @@ mod tests {
             ApprovedReconnectState {
                 attempt: 20,
                 retry_exhausted: true,
+                awaiting_user_decision: true,
             },
         )]);
 
@@ -2696,6 +2749,7 @@ mod tests {
             ApprovedReconnectState {
                 attempt: 7,
                 retry_exhausted: false,
+                awaiting_user_decision: false,
             },
         )]);
         let node = DiscoveredNode {
@@ -2746,6 +2800,7 @@ mod tests {
                 ApprovedReconnectState {
                     attempt: 20,
                     retry_exhausted: true,
+                    awaiting_user_decision: true,
                 },
             ),
             (
@@ -2753,6 +2808,7 @@ mod tests {
                 ApprovedReconnectState {
                     attempt: 2,
                     retry_exhausted: false,
+                    awaiting_user_decision: false,
                 },
             ),
         ]);
@@ -2771,15 +2827,26 @@ mod tests {
         let state = ApprovedReconnectState {
             attempt: RECONNECT_ATTEMPT_LIMIT,
             retry_exhausted: false,
+            awaiting_user_decision: false,
         };
 
         assert!(next_reconnect_attempt(&state, false).is_none());
         assert!(next_reconnect_attempt(&ApprovedReconnectState::default(), true).is_none());
+        assert!(next_reconnect_attempt(
+            &ApprovedReconnectState {
+                attempt: RECONNECT_ATTEMPT_LIMIT,
+                retry_exhausted: true,
+                awaiting_user_decision: true,
+            },
+            false,
+        )
+        .is_none());
         assert_eq!(
             next_reconnect_attempt(
                 &ApprovedReconnectState {
                     attempt: 3,
                     retry_exhausted: false,
+                    awaiting_user_decision: false,
                 },
                 false,
             ),
@@ -3103,6 +3170,7 @@ mod tests {
             ApprovedReconnectState {
                 attempt: RECONNECT_ATTEMPT_LIMIT,
                 retry_exhausted: true,
+                awaiting_user_decision: true,
             },
         )]);
         let now = Instant::now();
@@ -3211,7 +3279,9 @@ mod tests {
 
         assert!(is_retryable_pre_session_setup_error(&subscribe_error));
         assert!(!is_retryable_pre_session_setup_error(&bootstrap_error));
-        assert!(is_retryable_pre_session_setup_error(&closed_bootstrap_error));
+        assert!(is_retryable_pre_session_setup_error(
+            &closed_bootstrap_error
+        ));
         assert!(is_retryable_pre_session_setup_error(&closed_lease_error));
     }
 

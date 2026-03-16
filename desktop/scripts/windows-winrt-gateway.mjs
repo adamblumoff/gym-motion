@@ -272,6 +272,7 @@ function handleNodeDiscovered(node, scanReason = null) {
     reconnectAttempt: node.reconnect?.attempt ?? null,
     reconnectAttemptLimit: node.reconnect?.attempt_limit ?? null,
     reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
+    reconnectAwaitingDecision: node.reconnect?.awaiting_user_decision ?? null,
   });
 
   if (!shouldWriteDiscoveryLog(scanReason)) {
@@ -304,6 +305,7 @@ function handleNodeConnectionState(event) {
       reconnectAttempt: event.reconnect?.attempt ?? null,
       reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
       reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
     });
     queueNodeLog(peripheralInfo, {
       code: "node.connecting",
@@ -314,6 +316,7 @@ function handleNodeConnectionState(event) {
         reconnectAttempt: event.reconnect?.attempt ?? null,
         reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+        reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
         lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
@@ -329,6 +332,7 @@ function handleNodeConnectionState(event) {
       ...peripheralInfo,
       reconnectAttempt: event.reconnect?.attempt ?? null,
       reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
     });
     queueNodeLog(peripheralInfo, {
       code: "node.connected",
@@ -354,6 +358,7 @@ function handleNodeConnectionState(event) {
     reconnectAttempt: event.reconnect?.attempt ?? null,
     reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
     reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+    reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
   });
   if (!transition?.applied) {
     queueNodeLog(peripheralInfo, {
@@ -367,6 +372,7 @@ function handleNodeConnectionState(event) {
         reconnectAttempt: event.reconnect?.attempt ?? null,
         reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+        reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
         lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
@@ -392,6 +398,7 @@ function handleNodeConnectionState(event) {
       reconnectAttempt: event.reconnect?.attempt ?? null,
       reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
       reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
       transportStateBefore: transition.before?.gatewayConnectionState ?? null,
       transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
       lastTelemetryAt: transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,
@@ -460,6 +467,23 @@ function attachControlReader() {
 
       if (command.type === "recover_approved_node" && typeof command.ruleId === "string") {
         sendCommand("recover_approved_node", {
+          rule_id: command.ruleId,
+        });
+        return;
+      }
+
+      if (
+        command.type === "resume_approved_node_reconnect" &&
+        typeof command.ruleId === "string"
+      ) {
+        const rule = approvedNodeRules.find((node) => node.id === command.ruleId);
+        runtimeServer.clearReconnectDecision({
+          knownDeviceId: rule?.knownDeviceId ?? null,
+          peripheralId: rule?.peripheralId ?? null,
+          address: rule?.address ?? null,
+          localName: rule?.localName ?? null,
+        });
+        sendCommand("resume_approved_node_reconnect", {
           rule_id: command.ruleId,
         });
       }

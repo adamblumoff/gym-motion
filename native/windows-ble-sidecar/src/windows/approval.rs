@@ -15,6 +15,7 @@ pub(crate) const APPROVED_RECONNECT_STALL_MS: u64 = 3_000;
 pub(crate) struct ApprovedReconnectState {
     pub(crate) attempt: u32,
     pub(crate) retry_exhausted: bool,
+    pub(crate) awaiting_user_decision: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +57,7 @@ pub(crate) fn reconnect_status_for_rule(
             attempt: state.attempt,
             attempt_limit: RECONNECT_ATTEMPT_LIMIT,
             retry_exhausted: state.retry_exhausted,
+            awaiting_user_decision: state.awaiting_user_decision,
         }
     })
 }
@@ -313,7 +315,11 @@ pub(crate) fn next_reconnect_attempt(
     state: &ApprovedReconnectState,
     active_for_node: bool,
 ) -> Option<u32> {
-    if active_for_node || state.retry_exhausted || state.attempt >= RECONNECT_ATTEMPT_LIMIT {
+    if active_for_node
+        || state.retry_exhausted
+        || state.awaiting_user_decision
+        || state.attempt >= RECONNECT_ATTEMPT_LIMIT
+    {
         return None;
     }
 

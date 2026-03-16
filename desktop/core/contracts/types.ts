@@ -135,6 +135,7 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   reconnectAttempt: number;
   reconnectAttemptLimit: number;
   reconnectRetryExhausted: boolean;
+  reconnectAwaitingDecision?: boolean;
 };
 
 export type MotionEventSummary = {

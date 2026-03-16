@@ -14,6 +14,7 @@ export function Dashboard() {
     snapshot,
     setup,
     rescanAdapters,
+    resumeApprovedNodeReconnect,
     setAllowedNodes,
   } = useDesktopRuntime();
   const nodes = useMemo(
@@ -55,6 +56,10 @@ export function Dashboard() {
       setModalOpen(false);
       setSelectedNodeId(null);
     }
+  }
+
+  async function handleKeepNode(nodeId: string) {
+    await resumeApprovedNodeReconnect(nodeId);
   }
 
   const activeNodes = nodes.filter((node) => node.isConnected).length;
@@ -115,6 +120,7 @@ export function Dashboard() {
               node={node}
               onClick={() => handleSelectNode(node.id)}
               onForget={handleForgetNode}
+              onKeepDevice={handleKeepNode}
             />
           ))}
         </div>

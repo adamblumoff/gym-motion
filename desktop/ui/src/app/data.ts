@@ -30,6 +30,7 @@ export type BluetoothNodeData = {
   reconnectAttempt: number;
   reconnectAttemptLimit: number;
   reconnectRetryExhausted: boolean;
+  reconnectAwaitingDecision: boolean;
   logs: NodeLog[];
 };
 
@@ -43,6 +44,7 @@ export type SetupDevice = {
   reconnectAttempt: number;
   reconnectAttemptLimit: number;
   reconnectRetryExhausted: boolean;
+  reconnectAwaitingDecision: boolean;
   lastDisconnectReason: string | null;
 };
 
@@ -105,6 +107,7 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     reconnectAttempt: device.reconnectAttempt,
     reconnectAttemptLimit: device.reconnectAttemptLimit,
     reconnectRetryExhausted: device.reconnectRetryExhausted,
+    reconnectAwaitingDecision: device.reconnectAwaitingDecision ?? false,
     logs: buildNodeLogs(device, snapshot.activities),
   }));
 }
@@ -148,6 +151,7 @@ export function buildSetupVisibleDevices(
     reconnectAttempt: 0,
     reconnectAttemptLimit: 20,
     reconnectRetryExhausted: false,
+    reconnectAwaitingDecision: false,
     lastDisconnectReason: null,
   }));
 }
@@ -177,6 +181,7 @@ export function buildPairedDevices(
       reconnectAttempt: runtimeDevice?.reconnectAttempt ?? 0,
       reconnectAttemptLimit: runtimeDevice?.reconnectAttemptLimit ?? 20,
       reconnectRetryExhausted: runtimeDevice?.reconnectRetryExhausted ?? false,
+      reconnectAwaitingDecision: runtimeDevice?.reconnectAwaitingDecision ?? false,
       lastDisconnectReason: runtimeDevice?.gatewayDisconnectReason ?? null,
     };
   });

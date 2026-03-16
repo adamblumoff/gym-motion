@@ -99,6 +99,7 @@ function emptyReconnectRuntimeState() {
     reconnectAttempt: 0,
     reconnectAttemptLimit: 20,
     reconnectRetryExhausted: false,
+    reconnectAwaitingDecision: false,
   };
 }
 
@@ -365,6 +366,7 @@ export function createGatewayRuntimeServer({
       reconnectAttempt: runtime?.reconnectAttempt ?? 0,
       reconnectAttemptLimit: runtime?.reconnectAttemptLimit ?? 20,
       reconnectRetryExhausted: runtime?.reconnectRetryExhausted ?? false,
+      reconnectAwaitingDecision: runtime?.reconnectAwaitingDecision ?? false,
     };
   }
 
@@ -822,6 +824,7 @@ export function createGatewayRuntimeServer({
       reconnectAttempt = null,
       reconnectAttemptLimit = null,
       reconnectRetryExhausted = null,
+      reconnectAwaitingDecision = null,
     }) {
       const timestamp = nowIso();
       touchGatewayState({ lastAdvertisementAt: timestamp });
@@ -863,6 +866,8 @@ export function createGatewayRuntimeServer({
           reconnectAttemptLimit ?? existingRuntime?.reconnectAttemptLimit ?? 20,
         reconnectRetryExhausted:
           reconnectRetryExhausted ?? existingRuntime?.reconnectRetryExhausted ?? false,
+        reconnectAwaitingDecision:
+          reconnectAwaitingDecision ?? existingRuntime?.reconnectAwaitingDecision ?? false,
       });
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
@@ -885,6 +890,7 @@ export function createGatewayRuntimeServer({
       reconnectAttempt = null,
       reconnectAttemptLimit = null,
       reconnectRetryExhausted = null,
+      reconnectAwaitingDecision = null,
     }) {
       const previous = inspectNodeConnection({
         deviceId,
@@ -935,6 +941,7 @@ export function createGatewayRuntimeServer({
           runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
           20,
         reconnectRetryExhausted: reconnectRetryExhausted ?? false,
+        reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
       });
       upsertKnownNode(resolvedDeviceId, {
         peripheralId,
@@ -958,6 +965,7 @@ export function createGatewayRuntimeServer({
       rssi,
       reconnectAttempt = null,
       reconnectAttemptLimit = null,
+      reconnectAwaitingDecision = null,
     }) {
       const previous = inspectNodeConnection({
         deviceId,
@@ -999,6 +1007,7 @@ export function createGatewayRuntimeServer({
           runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
           20,
         reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
       });
       upsertKnownNode(resolvedDeviceId, {
         peripheralId,
@@ -1086,6 +1095,7 @@ export function createGatewayRuntimeServer({
       reconnectAttempt = null,
       reconnectAttemptLimit = null,
       reconnectRetryExhausted = null,
+      reconnectAwaitingDecision = null,
     }) {
       const previous = inspectNodeConnection({
         deviceId,
@@ -1126,6 +1136,10 @@ export function createGatewayRuntimeServer({
           reconnectRetryExhausted ??
           runtimeByDeviceId.get(resolvedDeviceId)?.reconnectRetryExhausted ??
           false,
+        reconnectAwaitingDecision:
+          reconnectAwaitingDecision ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAwaitingDecision ??
+          false,
       });
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
@@ -1134,6 +1148,37 @@ export function createGatewayRuntimeServer({
         before: previous,
         after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
       };
+    },
+
+    clearReconnectDecision({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      localName,
+      address,
+    }) {
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+
+      if (!resolvedDeviceId) {
+        return null;
+      }
+
+      updateRuntimeNode(resolvedDeviceId, {
+        reconnectAttempt: 0,
+        reconnectAttemptLimit:
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ?? 20,
+        reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: false,
+      });
+      emitDevice(resolvedDeviceId);
+      broadcastGatewayStatus();
+      return inspectNodeConnection({ deviceId: resolvedDeviceId });
     },
 
     noteOtaStatus(deviceId, patch) {

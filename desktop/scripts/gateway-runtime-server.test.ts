@@ -527,6 +527,7 @@ describe("gateway runtime server", () => {
       reconnectAttempt: 20,
       reconnectAttemptLimit: 20,
       reconnectRetryExhausted: true,
+      reconnectAwaitingDecision: true,
     });
 
     const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
@@ -537,6 +538,7 @@ describe("gateway runtime server", () => {
     expect(device?.reconnectAttempt).toBe(20);
     expect(device?.reconnectAttemptLimit).toBe(20);
     expect(device?.reconnectRetryExhausted).toBe(true);
+    expect(device?.reconnectAwaitingDecision).toBe(true);
   });
 
   it("emits discovered instead of unreachable on first discovery for a known node", async () => {

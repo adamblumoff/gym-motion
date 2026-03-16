@@ -26,6 +26,9 @@ const desktopApi: DesktopApi = {
   async recoverApprovedNode(ruleId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, ruleId);
   },
+  async resumeApprovedNodeReconnect(ruleId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect, ruleId);
+  },
   async setAllowedNodes(nodes: ApprovedNodeRule[]) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);
   },

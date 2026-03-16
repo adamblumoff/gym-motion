@@ -20,6 +20,8 @@ protocol, or the vendored WinRT `btleplug` package.
 - The sidecar owns BLE transport truth.
 - The firmware owns app-session lease truth.
 - Electron/runtime server should project BLE state, not invent it.
+- Reconnect exhaustion prompts must be backend-owned pause state, not a
+  component-local dismissal toggle.
 - Do not reuse WinRT GATT handles across reconnect churn unless they were
   refreshed from a fresh discovery pass.
 - Do not fall back to reconnect scan bursts until in-session recovery has

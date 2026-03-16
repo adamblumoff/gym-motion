@@ -183,6 +183,9 @@ export function useDesktopApp() {
     async recoverApprovedNode(ruleId: string) {
       await window.gymMotionDesktop.recoverApprovedNode(ruleId);
     },
+    async resumeApprovedNodeReconnect(ruleId: string) {
+      await window.gymMotionDesktop.resumeApprovedNodeReconnect(ruleId);
+    },
     async setAllowedNodes(nodes: ApprovedNodeRule[]) {
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => ({
