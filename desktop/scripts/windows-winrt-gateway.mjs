@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
+import { shouldWriteDiscoveryLog } from "./windows-winrt-gateway-logging.mjs";
 
 const config = {
   apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -47,6 +48,7 @@ let shuttingDown = false;
 let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
 let scanRequestedFromBoot = config.startScanOnBoot;
+let currentScanReason = null;
 
 function log(message, details) {
   if (details !== undefined) {
@@ -355,6 +357,11 @@ function handleNodeDiscovered(node) {
     reconnectAttemptLimit: node.reconnect?.attempt_limit ?? null,
     reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
   });
+
+  if (!shouldWriteDiscoveryLog(currentScanReason)) {
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
     code: "node.discovered",
     message: `Gateway discovered ${node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node"}.`,
@@ -591,12 +598,13 @@ function handleSidecarEvent(event) {
       }
       break;
     case "gateway_state":
+      currentScanReason = event.gateway?.scan_reason ?? event.scanReason ?? null;
       runtimeServer.setAdapterState(
         event.gateway?.adapter_state ?? event.adapterState ?? "unknown",
       );
       runtimeServer.setScanState(
         event.gateway?.scan_state ?? event.scanState ?? "stopped",
-        event.gateway?.scan_reason ?? event.scanReason ?? null,
+        currentScanReason,
       );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       break;
@@ -690,6 +698,7 @@ async function startSidecar() {
   attachJsonLineReader(sidecar.stdout, handleSidecarEvent);
   sidecar.once("exit", (code, signal) => {
     sidecar = null;
+    currentScanReason = null;
     runtimeServer.setAdapterState("unknown");
     runtimeServer.setScanState("stopped", null);
 
