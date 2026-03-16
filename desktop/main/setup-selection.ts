@@ -53,12 +53,20 @@ export function createApprovedNodeRule(
 export function matchesApprovedNodeRule(
   rule: ApprovedNodeRule,
   identity: DiscoveryIdentity,
+  approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
+  const canUseLocalNameFallback =
+    !rule.knownDeviceId &&
+    !rule.peripheralId &&
+    !rule.address &&
+    Boolean(rule.localName) &&
+    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
+
   return Boolean(
     (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
       (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
       addressIdentityMatch(rule.address, identity.address) ||
-      (rule.localName && identity.localName === rule.localName),
+      (canUseLocalNameFallback && identity.localName === rule.localName),
   );
 }
 

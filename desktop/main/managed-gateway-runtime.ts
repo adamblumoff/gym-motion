@@ -482,10 +482,11 @@ export function createManagedGatewayRuntime(
               ...createNodeIdentity(device),
               knownDeviceId: device.id,
             },
+            readApprovedNodes(),
           ),
         );
       const isApproved = readApprovedNodes().some((approvedNode) =>
-        matchesApprovedNodeRule(approvedNode, node),
+        matchesApprovedNodeRule(approvedNode, node, readApprovedNodes()),
       );
 
       return {

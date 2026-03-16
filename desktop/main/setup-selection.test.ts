@@ -55,6 +55,37 @@ describe("setup selection helpers", () => {
     ).toBe(true);
   });
 
+  it("does not treat shared local names as approval proof", () => {
+    const rule = createApprovedNodeRule({
+      label: "GymMotion-f4e9d4",
+      peripheralId: null,
+      address: null,
+      localName: "GymMotion-f4e9d4",
+      knownDeviceId: null,
+    });
+    const approvedNodes = [
+      rule,
+      {
+        ...rule,
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Duplicate",
+      },
+    ];
+
+    expect(
+      matchesApprovedNodeRule(
+        rule,
+        {
+          knownDeviceId: null,
+          peripheralId: null,
+          address: null,
+          localName: "GymMotion-f4e9d4",
+        },
+        approvedNodes,
+      ),
+    ).toBe(false);
+  });
+
   it("prefers a stable runtime device match for approved reboot recovery", () => {
     const device = findMatchingGatewayDeviceForApprovedNode(
       {

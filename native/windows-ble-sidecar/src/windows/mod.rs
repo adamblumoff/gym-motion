@@ -197,6 +197,23 @@ fn classify_discovery_candidate(
     let name_prefix_matched = local_name
         .map(|name| !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix))
         .unwrap_or(false);
+    let unique_local_name_rule = local_name.and_then(|candidate_name| {
+        let mut matches = allowed_nodes.iter().filter(|rule| {
+            rule.known_device_id.is_none()
+                && rule.peripheral_id.is_none()
+                && rule.address.is_none()
+                && rule
+                    .local_name
+                    .as_ref()
+                    .map(|value| value == candidate_name)
+                    .unwrap_or(false)
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
+    });
     let matched_known_device_id = known_device_ids.get(peripheral_id).cloned().or_else(|| {
         allowed_nodes.iter().find_map(|rule| {
             if rule
@@ -218,11 +235,8 @@ fn classify_discovery_candidate(
                 return rule.known_device_id.clone();
             }
 
-            if rule
-                .local_name
-                .as_ref()
-                .zip(local_name)
-                .map(|(left, right)| left == right)
+            if unique_local_name_rule
+                .map(|unique_rule| unique_rule.id == rule.id)
                 .unwrap_or(false)
             {
                 return rule.known_device_id.clone();
@@ -247,11 +261,8 @@ fn classify_discovery_candidate(
                         .zip(address)
                         .map(|(left, right)| left.eq_ignore_ascii_case(right))
                         .unwrap_or(false)
-                    || rule
-                        .local_name
-                        .as_ref()
-                        .zip(local_name)
-                        .map(|(left, right)| left == right)
+                    || unique_local_name_rule
+                        .map(|unique_rule| unique_rule.id == rule.id)
                         .unwrap_or(false)
             }),
         matched_known_device_id,
@@ -2298,5 +2309,46 @@ mod tests {
 
         assert!(classification.approved_identity_matched);
         assert!(!manual_discovery_accepted);
+    }
+
+    #[test]
+    fn approved_reconnect_does_not_match_shared_local_name_without_stronger_identity() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: Some("stack-001".to_string()),
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: Some("stack-002".to_string()),
+            },
+        ];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-9",
+            None,
+            Some("GymMotion-f4e9d4"),
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(!classification.approved_identity_matched);
+        assert!(classification.matched_known_device_id.is_none());
     }
 }
