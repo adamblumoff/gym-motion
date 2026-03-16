@@ -1947,12 +1947,25 @@ async fn connect_and_stream(
                                     continue;
                                 }
 
-                                if let Some(session_id) = status.session_id.clone() {
-                                    if session_id != app_session_id {
-                                        continue;
-                                    }
-                                    ack_session_id = Some(session_id);
+                                let Some(session_id) = status.session_id.clone() else {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "warn".to_string(),
+                                            message: "Ignoring app-session-online status without a session id.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": node.known_device_id,
+                                                "address": node.address,
+                                            })),
+                                        })
+                                        .await?;
+                                    continue;
+                                };
+
+                                if session_id != app_session_id {
+                                    continue;
                                 }
+                                ack_session_id = Some(session_id);
 
                                 ack_received = true;
                                 let mut enriched = node.clone();
