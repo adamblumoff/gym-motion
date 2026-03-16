@@ -164,16 +164,19 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
       </div>
 
       {showReconnectPrompt && (
-        <div className="mx-4 mb-4 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3" onClick={(event) => event.stopPropagation()}>
-          <div className="text-sm font-medium text-amber-300">Do you want to forget this device?</div>
-          <div className="mt-1 text-xs leading-5 text-zinc-400">
+        <div
+          className="mx-4 mb-3 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="text-xs font-medium text-amber-300">Do you want to forget this device?</div>
+          <div className="mt-1 text-[11px] leading-4 text-zinc-400">
             Auto-reconnect paused after {node.reconnectAttemptLimit} scan bursts for this paired sensor. Keep it to resume reconnecting, or forget it to stop trying.
           </div>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-1.5">
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              className="h-6 px-2 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               onClick={() => onKeepDevice?.(node.id)}
             >
               Keep Device
@@ -181,7 +184,7 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
             <Button
               variant="destructive"
               size="sm"
-              className="h-7 px-2 text-xs"
+              className="h-6 px-2 text-[11px]"
               onClick={() => onForget?.(node.id)}
             >
               Forget Device

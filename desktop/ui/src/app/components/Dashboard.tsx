@@ -3,7 +3,10 @@ import { Toaster } from 'sonner';
 
 import { buildBluetoothNodes } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
-import { forgetApprovedNodeRules } from '../../lib/setup-rules';
+import {
+  forgetApprovedNodeRules,
+  resolveApprovedNodeRuleId,
+} from '../../lib/setup-rules';
 import { CommandPalette } from './CommandPalette';
 import { DashboardHeader } from './DashboardHeader';
 import { BluetoothNode } from './BluetoothNode';
@@ -59,7 +62,20 @@ export function Dashboard() {
   }
 
   async function handleKeepNode(nodeId: string) {
-    await resumeApprovedNodeReconnect(nodeId);
+    if (!setup) {
+      return;
+    }
+
+    const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId) ?? null;
+    await resumeApprovedNodeReconnect(
+      resolveApprovedNodeRuleId(setup.approvedNodes, {
+        fallbackId: nodeId,
+        knownDeviceId: runtimeDevice?.id ?? nodeId,
+        peripheralId: runtimeDevice?.peripheralId ?? null,
+        address: runtimeDevice?.address ?? null,
+        localName: runtimeDevice?.advertisedName ?? null,
+      }),
+    );
   }
 
   const activeNodes = nodes.filter((node) => node.isConnected).length;

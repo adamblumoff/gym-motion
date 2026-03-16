@@ -6,6 +6,7 @@ import {
   buildApprovedNodeRules,
   forgetApprovedNodeRules,
   matchesApprovedNodeIdentity,
+  resolveApprovedNodeRuleId,
   resolveVisibleNodes,
 } from "./setup-rules";
 
@@ -217,5 +218,28 @@ describe("setup-rules", () => {
         approvedNodes,
       ),
     ).toBe(false);
+  });
+
+  it("resolves keep-device actions to the matching approved rule id", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "address:AA:BB",
+        label: "Stack 001",
+        peripheralId: null,
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      resolveApprovedNodeRuleId(approvedNodes, {
+        fallbackId: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral-1",
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+      }),
+    ).toBe("address:AA:BB");
   });
 });

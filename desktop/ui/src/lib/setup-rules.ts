@@ -67,6 +67,17 @@ export function forgetApprovedNodeRules(
   return forgetApprovedNodeRulesFromIdentity(approvedNodes, identity);
 }
 
+export function resolveApprovedNodeRuleId(
+  approvedNodes: ApprovedNodeRule[],
+  identity: DiscoveryIdentity & { fallbackId: string },
+) {
+  const matchingRule = approvedNodes.find((rule) =>
+    matchesApprovedNodeIdentityFromCore(rule, identity, approvedNodes),
+  );
+
+  return matchingRule?.id ?? identity.fallbackId;
+}
+
 export function matchesApprovedNodeIdentity(
   rule: ApprovedNodeRule,
   identity: DiscoveryIdentity,
