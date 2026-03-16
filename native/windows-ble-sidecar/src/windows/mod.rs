@@ -955,7 +955,7 @@ async fn run_session(
         .await?;
 
     let mut events = adapter.events().await?;
-    let active_connections = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let active_connections = Arc::new(Mutex::new(HashMap::<String, DiscoveredNode>::new()));
     let known_device_ids = Arc::new(RwLock::new(HashMap::<String, String>::new()));
     let mut connected_nodes = HashMap::<String, DiscoveredNode>::new();
     let mut reconnect_states = HashMap::<String, ApprovedReconnectState>::new();
@@ -990,6 +990,22 @@ async fn run_session(
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_ok() && *shutdown.borrow() {
+                    let mut shutdown_nodes = connected_nodes
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let active_nodes = active_connections
+                        .lock()
+                        .await
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    for node in active_nodes {
+                        if !shutdown_nodes.iter().any(|candidate| node_key(candidate) == node_key(&node)) {
+                            shutdown_nodes.push(node);
+                        }
+                    }
+                    disconnect_nodes_for_shutdown(&adapter, &writer, &shutdown_nodes).await;
                     break;
                 }
             }
@@ -1287,7 +1303,7 @@ async fn run_session(
                                     reconnect_states.get(&rule_id).cloned().unwrap_or_default();
                                 let Some(next_attempt) = next_reconnect_attempt(
                                     &reconnect_state,
-                                    active.contains(&key),
+                                    active.contains_key(&key),
                                 ) else {
                                     if reconnect_state.attempt >= RECONNECT_ATTEMPT_LIMIT
                                         && !reconnect_state.retry_exhausted
@@ -1356,7 +1372,7 @@ async fn run_session(
                                     .as_ref()
                                     .map(|target| target == &rule_id)
                                     .unwrap_or(false);
-                                active.insert(key.clone());
+                                active.insert(key.clone(), node.clone());
                                 drop(active);
                                 let writer_clone = writer.clone();
                                 let config_clone = config.clone();
@@ -1365,6 +1381,7 @@ async fn run_session(
                                 let known_device_ids_clone = known_device_ids.clone();
                                 let command_tx_clone = command_sender.clone();
                                 let app_session_id_clone = app_session_id.clone();
+                                let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
                                         peripheral,
@@ -1379,6 +1396,7 @@ async fn run_session(
                                             attempt_limit: RECONNECT_ATTEMPT_LIMIT,
                                             retry_exhausted: false,
                                         }),
+                                        shutdown_clone,
                                         command_tx_clone.clone(),
                                     )
                                     .await;
@@ -1578,6 +1596,38 @@ async fn peripheral_for_node(adapter: &Adapter, node: &DiscoveredNode) -> Option
         .find(|peripheral| peripheral.id().to_string() == target_id)
 }
 
+async fn disconnect_nodes_for_shutdown(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    nodes: &[DiscoveredNode],
+) {
+    for node in nodes {
+        let Some(peripheral) = peripheral_for_node(adapter, node).await else {
+            continue;
+        };
+
+        if !peripheral.is_connected().await.unwrap_or(false) {
+            continue;
+        }
+
+        let _ = writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: format!(
+                    "Disconnecting {} during Windows BLE runtime shutdown.",
+                    node.label
+                ),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                })),
+            })
+            .await;
+        let _ = peripheral.disconnect().await;
+    }
+}
+
 async fn discovered_node_for_event(
     peripheral: &Peripheral,
     writer: &EventWriter,
@@ -1625,6 +1675,7 @@ async fn connect_and_stream(
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     app_session_id: String,
     reconnect: Option<ReconnectStatus>,
+    mut session_shutdown: watch::Receiver<bool>,
     command_sender: mpsc::UnboundedSender<SessionCommand>,
 ) -> Result<Option<String>> {
     let log_handshake_step = |step: &str| Event::Log {
@@ -1932,6 +1983,31 @@ async fn connect_and_stream(
 
     loop {
         tokio::select! {
+            changed = session_shutdown.changed() => {
+                if changed.is_ok() && *session_shutdown.borrow() {
+                    let _ = lease_shutdown_tx.send(true);
+                    let _ = lease_task.await;
+                    if peripheral.is_connected().await.unwrap_or(false) {
+                        let _ = writer
+                            .send(&Event::Log {
+                                level: "info".to_string(),
+                                message: format!(
+                                    "Disconnecting {} because the Windows BLE runtime is shutting down.",
+                                    node.label
+                                ),
+                                details: Some(json!({
+                                    "peripheralId": node.peripheral_id,
+                                    "knownDeviceId": node.known_device_id,
+                                    "address": node.address,
+                                })),
+                            })
+                            .await;
+                        let _ = peripheral.disconnect().await;
+                        sleep(Duration::from_millis(100)).await;
+                    }
+                    return Ok(None);
+                }
+            }
             notification = notifications.next() => {
                 let Some(notification) = notification else {
                     break;
