@@ -50,7 +50,6 @@ const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 2_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
-const RECONNECT_CONNECT_SETTLE_MS: u64 = 900;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
 const GATT_SETUP_RETRY_DELAY_MS: u64 = 750;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 3;
@@ -1476,9 +1475,6 @@ async fn run_session(
                                     last_scan_progress_at = None;
                                     startup_burst_deadline = None;
                                 }
-                                sleep(Duration::from_millis(150)).await;
-                                let reconnect_peripheral =
-                                    peripheral_for_node(&adapter, &node).await.unwrap_or(peripheral);
                                 let manual_recover_rule_id_for_log = manual_recover_rule_id
                                     .as_ref()
                                     .map(|target| target == &rule_id)
@@ -1487,7 +1483,6 @@ async fn run_session(
                                 drop(active);
                                 let writer_clone = writer.clone();
                                 let config_clone = config.clone();
-                                let adapter_clone = adapter.clone();
                                 let allowed_nodes_clone = allowed_nodes.clone();
                                 let active_connections_clone = active_connections.clone();
                                 let known_device_ids_clone = known_device_ids.clone();
@@ -1496,8 +1491,7 @@ async fn run_session(
                                 let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
-                                        adapter_clone,
-                                        reconnect_peripheral,
+                                        peripheral,
                                         node.clone(),
                                         writer_clone.clone(),
                                         config_clone,
@@ -1786,7 +1780,6 @@ async fn discovered_node_for_event(
 }
 
 async fn connect_and_stream(
-    adapter: Adapter,
     peripheral: Peripheral,
     node: DiscoveredNode,
     writer: EventWriter,
@@ -1824,30 +1817,9 @@ async fn connect_and_stream(
 
     let mut gatt_ready = false;
     let mut last_gatt_error = None;
-    let mut active_peripheral = peripheral;
+    let active_peripheral = peripheral;
 
     for attempt in 1..=GATT_SETUP_RETRY_ATTEMPTS {
-        if attempt == 1 {
-            writer
-                .send(&Event::Log {
-                    level: "info".to_string(),
-                    message: "Waiting briefly for WinRT reconnect transport to settle.".to_string(),
-                    details: Some(json!({
-                        "peripheralId": node.peripheral_id,
-                        "knownDeviceId": node.known_device_id,
-                        "address": node.address,
-                        "reconnect": reconnect,
-                        "delayMs": RECONNECT_CONNECT_SETTLE_MS,
-                    })),
-                })
-                .await?;
-            sleep(Duration::from_millis(RECONNECT_CONNECT_SETTLE_MS)).await;
-        }
-
-        if let Some(refreshed_peripheral) = peripheral_for_node(&adapter, &node).await {
-            active_peripheral = refreshed_peripheral;
-        }
-
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
