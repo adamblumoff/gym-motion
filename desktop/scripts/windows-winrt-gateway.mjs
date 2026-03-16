@@ -451,6 +451,9 @@ function attachControlReader() {
           localName: node.localName ?? node.local_name ?? null,
           knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
         }));
+        log("Approved-node rules updated from desktop runtime.", {
+          approvedCount: approvedNodeRules.length,
+        });
         syncAllowedNodes();
         return;
       }
@@ -477,6 +480,12 @@ function attachControlReader() {
         typeof command.ruleId === "string"
       ) {
         const rule = approvedNodeRules.find((node) => node.id === command.ruleId);
+        log("Resuming paused approved-node reconnect scan.", {
+          ruleId: command.ruleId,
+          knownDeviceId: rule?.knownDeviceId ?? null,
+          peripheralId: rule?.peripheralId ?? null,
+          address: rule?.address ?? null,
+        });
         runtimeServer.clearReconnectDecision({
           knownDeviceId: rule?.knownDeviceId ?? null,
           peripheralId: rule?.peripheralId ?? null,

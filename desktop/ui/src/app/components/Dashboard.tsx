@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { Toaster } from 'sonner';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast, Toaster } from 'sonner';
 
 import { buildBluetoothNodes } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
@@ -7,10 +7,25 @@ import {
   forgetApprovedNodeRules,
   resolveApprovedNodeRuleId,
 } from '../../lib/setup-rules';
+import { matchesApprovedNodeIdentity } from '@core/approved-node-runtime-match';
 import { CommandPalette } from './CommandPalette';
 import { DashboardHeader } from './DashboardHeader';
 import { BluetoothNode } from './BluetoothNode';
 import { NodeDetailModal } from './NodeDetailModal';
+
+function sameStringSet(left: Set<string>, right: Set<string>) {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 export function Dashboard() {
   const {
@@ -20,14 +35,78 @@ export function Dashboard() {
     resumeApprovedNodeReconnect,
     setAllowedNodes,
   } = useDesktopRuntime();
-  const nodes = useMemo(
-    () => (snapshot ? buildBluetoothNodes(snapshot) : []),
-    [snapshot],
-  );
+  const [pendingResumeNodeIds, setPendingResumeNodeIds] = useState<Set<string>>(new Set());
+  const [pendingForgottenNodeIds, setPendingForgottenNodeIds] = useState<Set<string>>(new Set());
+  const nodes = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+
+    let nextNodes = buildBluetoothNodes(snapshot);
+
+    if (pendingResumeNodeIds.size > 0) {
+      nextNodes = nextNodes.map((node) =>
+        pendingResumeNodeIds.has(node.id)
+          ? {
+              ...node,
+              reconnectAwaitingDecision: false,
+              reconnectRetryExhausted: false,
+            }
+          : node,
+      );
+    }
+
+    if (pendingForgottenNodeIds.size > 0) {
+      nextNodes = nextNodes.filter((node) => !pendingForgottenNodeIds.has(node.id));
+    }
+
+    return nextNodes;
+  }, [pendingForgottenNodeIds, pendingResumeNodeIds, snapshot]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
+    setPendingResumeNodeIds((current) => {
+      const next = new Set(
+        Array.from(current).filter((nodeId) => {
+          const node = buildBluetoothNodes(snapshot).find((item) => item.id === nodeId);
+          return node?.reconnectAwaitingDecision === true;
+        }),
+      );
+      return sameStringSet(current, next) ? current : next;
+    });
+
+    if (!setup) {
+      return;
+    }
+
+    setPendingForgottenNodeIds((current) => {
+      const next = new Set(
+        Array.from(current).filter((nodeId) => {
+          const runtimeDevice = snapshot.devices.find((device) => device.id === nodeId) ?? null;
+          return setup.approvedNodes.some((rule) =>
+            matchesApprovedNodeIdentity(
+              rule,
+              {
+                knownDeviceId: runtimeDevice?.id ?? nodeId,
+                peripheralId: runtimeDevice?.peripheralId ?? null,
+                address: runtimeDevice?.address ?? null,
+                localName: runtimeDevice?.advertisedName ?? null,
+              },
+              setup.approvedNodes,
+            ),
+          );
+        }),
+      );
+      return sameStringSet(current, next) ? current : next;
+    });
+  }, [setup, snapshot]);
 
   const handleSelectNode = useCallback(
     (nodeId: string) => {
@@ -45,6 +124,8 @@ export function Dashboard() {
       return;
     }
 
+    setPendingForgottenNodeIds((current) => new Set(current).add(nodeId));
+
     const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId);
     const nextRules = forgetApprovedNodeRules(setup.approvedNodes, {
       id: nodeId,
@@ -53,11 +134,21 @@ export function Dashboard() {
       address: runtimeDevice?.address ?? null,
       localName: runtimeDevice?.advertisedName ?? null,
     });
-    await setAllowedNodes(nextRules);
+    try {
+      await setAllowedNodes(nextRules);
+      toast.success('Device forgotten.');
 
-    if (selectedNodeId === nodeId) {
-      setModalOpen(false);
-      setSelectedNodeId(null);
+      if (selectedNodeId === nodeId) {
+        setModalOpen(false);
+        setSelectedNodeId(null);
+      }
+    } catch (error) {
+      setPendingForgottenNodeIds((current) => {
+        const next = new Set(current);
+        next.delete(nodeId);
+        return next;
+      });
+      toast.error(error instanceof Error ? error.message : 'Failed to forget device.');
     }
   }
 
@@ -67,15 +158,27 @@ export function Dashboard() {
     }
 
     const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId) ?? null;
-    await resumeApprovedNodeReconnect(
-      resolveApprovedNodeRuleId(setup.approvedNodes, {
-        fallbackId: nodeId,
-        knownDeviceId: runtimeDevice?.id ?? nodeId,
-        peripheralId: runtimeDevice?.peripheralId ?? null,
-        address: runtimeDevice?.address ?? null,
-        localName: runtimeDevice?.advertisedName ?? null,
-      }),
-    );
+    setPendingResumeNodeIds((current) => new Set(current).add(nodeId));
+
+    try {
+      await resumeApprovedNodeReconnect(
+        resolveApprovedNodeRuleId(setup.approvedNodes, {
+          fallbackId: nodeId,
+          knownDeviceId: runtimeDevice?.id ?? nodeId,
+          peripheralId: runtimeDevice?.peripheralId ?? null,
+          address: runtimeDevice?.address ?? null,
+          localName: runtimeDevice?.advertisedName ?? null,
+        }),
+      );
+      toast.success('Resuming reconnect scan.');
+    } catch (error) {
+      setPendingResumeNodeIds((current) => {
+        const next = new Set(current);
+        next.delete(nodeId);
+        return next;
+      });
+      toast.error(error instanceof Error ? error.message : 'Failed to resume reconnect scan.');
+    }
   }
 
   const activeNodes = nodes.filter((node) => node.isConnected).length;

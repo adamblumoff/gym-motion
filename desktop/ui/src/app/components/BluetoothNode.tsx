@@ -176,16 +176,26 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
             <Button
               variant="ghost"
               size="sm"
+              type="button"
               className="h-6 px-2 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-              onClick={() => onKeepDevice?.(node.id)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void onKeepDevice?.(node.id);
+              }}
             >
               Keep Device
             </Button>
             <Button
               variant="destructive"
               size="sm"
+              type="button"
               className="h-6 px-2 text-[11px]"
-              onClick={() => onForget?.(node.id)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void onForget?.(node.id);
+              }}
             >
               Forget Device
             </Button>
@@ -200,16 +210,26 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
             <Button
               variant="ghost"
               size="sm"
+              type="button"
               className="text-red-400 hover:text-red-300 hover:bg-red-500/10 h-7 text-xs px-2"
-              onClick={() => onForget?.(node.id)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void onForget?.(node.id);
+              }}
             >
               Confirm
             </Button>
             <Button
               variant="ghost"
               size="sm"
+              type="button"
               className="text-zinc-500 hover:text-zinc-300 h-7 text-xs px-2"
-              onClick={() => setConfirmForget(false)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setConfirmForget(false);
+              }}
             >
               Cancel
             </Button>
@@ -218,8 +238,13 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
           <Button
             variant="ghost"
             size="sm"
+            type="button"
             className="text-zinc-600 hover:text-red-400 hover:bg-red-500/10 h-7 text-xs px-2 -ml-2"
-            onClick={() => setConfirmForget(true)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setConfirmForget(true);
+            }}
           >
             <Trash2 className="size-3 mr-1.5" />
             Forget Device
