@@ -2998,7 +2998,7 @@ mod tests {
     }
 
     #[test]
-    fn approved_reconnect_allows_second_sparse_sighting_within_ready_window() {
+    fn approved_reconnect_requires_runtime_service_even_after_sparse_repeat_sighting() {
         let classification = classify_discovery_candidate(
             "peripheral-2",
             Some("aa:bb"),
@@ -3036,7 +3036,7 @@ mod tests {
             last_seen_at_monotonic: start + Duration::from_millis(300),
         };
 
-        assert!(reconnect_candidate_ready(
+        assert!(!reconnect_candidate_ready(
             &classification,
             false,
             Some(&record),
