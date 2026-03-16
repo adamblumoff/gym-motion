@@ -23,7 +23,7 @@ function printHelp() {
 Options:
   --version <value>   Required firmware version to register
   --rollout <state>   Rollout state: draft | active | paused (default: active)
-  --file <path>       Firmware binary path (default: build/firmware/gym_motion.ino.bin)
+  --file <path>       Firmware binary path (default: build/firmware/firmware.ino.bin)
   --sha <path>        SHA256 checksum file path
   --md5 <path>        MD5 checksum file path
 `);
@@ -53,10 +53,10 @@ async function main() {
   }
 
   const rolloutState = readArg("rollout") ?? "active";
-  const filePath = readArg("file") ?? "build/firmware/gym_motion.ino.bin";
+  const filePath = readArg("file") ?? "build/firmware/firmware.ino.bin";
   const shaFile = readArg("sha") ?? `${filePath}.sha256`;
   const md5File = readArg("md5") ?? `${filePath}.md5`;
-  const objectKey = `reference-node-firmware/${version}/gym_motion.ino.bin`;
+  const objectKey = `reference-node-firmware/${version}/firmware.ino.bin`;
   const gitSha = resolveGitSha();
 
   const upload = await uploadFirmwareObject({

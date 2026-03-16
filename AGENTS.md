@@ -2,13 +2,13 @@
 
 ## Arduino Sketch Note
 
-- Source-of-truth repo sketch: `/home/adamblumoff/gym-motion/gym_motion/gym_motion.ino`
-- Manual upload note: open `/home/adamblumoff/gym-motion/gym_motion/gym_motion.ino`; Arduino will compile that file together with every `.ino` tab in the same `gym_motion` folder.
+- Source-of-truth repo sketch: `/home/adamblumoff/gym-motion/firmware/firmware.ino`
+- Manual upload note: open `/home/adamblumoff/gym-motion/firmware/firmware.ino`; Arduino will compile that file together with every `.ino` tab in the same `firmware` folder.
 - Product framing note: this sketch is the current ESP32 reference implementation for a future BLE-only sensor node product. Avoid writing docs or scripts as if Wi-Fi-capable ESP32 hardware is the permanent node model.
 - Deployment rule: normal firmware rollouts should go through the OTA release flow, not manual Arduino uploads.
 - Bench flashing rule: prefer `bun run firmware:upload -- --port <serial-port>` so USB flashes use the same partition settings as CI and OTA.
 - Arduino IDE fallback: if you must flash from the IDE, use `ESP32 Dev Module` with `Partition Scheme -> Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)`.
-- PlatformIO note: `/home/adamblumoff/gym-motion/gym_motion/platformio.ini` mirrors the current ESP32 Arduino build defaults (`esp32dev` + `min_spiffs.csv`) for local firmware work that prefers PlatformIO over Arduino CLI.
+- PlatformIO note: `/home/adamblumoff/gym-motion/firmware/platformio.ini` mirrors the current ESP32 Arduino build defaults (`esp32dev` + `min_spiffs.csv`) for local firmware work that prefers PlatformIO over Arduino CLI.
 - OTA release workflow:
   - before pushing, run the local manual QA gate:
     - `bun test`

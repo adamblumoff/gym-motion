@@ -83,7 +83,7 @@ describe("parseFirmwareRelease", () => {
     const result = parseFirmwareRelease({
       version: "0.2.0",
       gitSha: "abcdef1",
-      assetUrl: "firmware/0.2.0/gym_motion.ino.bin",
+      assetUrl: "firmware/0.2.0/firmware.ino.bin",
       sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       md5: "0123456789abcdef0123456789abcdef",
       sizeBytes: 245760,

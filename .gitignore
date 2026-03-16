@@ -19,7 +19,9 @@
 
 # production
 /build
-/gym_motion/build
+/firmware/build
+/firmware/.pio/
+/firmware/.vscode/
 /dist
 /release
 /bin/arduino-cli

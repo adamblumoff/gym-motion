@@ -18,7 +18,7 @@ else
 fi
 
 FQBN="${FQBN:-esp32:esp32:esp32}"
-SKETCH_PATH="${SKETCH_PATH:-gym_motion/gym_motion.ino}"
+SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
