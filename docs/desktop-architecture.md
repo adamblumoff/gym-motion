@@ -19,6 +19,7 @@ The current product target is Windows only. The runtime BLE contract should be t
 - The renderer should not call localhost HTTP routes.
 - Live updates should cross the Electron boundary as typed events, not SSE.
 - Native BLE access should be treated as a Windows WinRT sidecar boundary first. Non-Windows BLE paths still in the repo are legacy/dev-only and should not drive product behavior by default.
+- Reconnect handshakes need exclusive adapter attention. On Windows, pause active BLE scanning before attempting reconnect GATT setup; otherwise WinRT can surface a half-connected state where the ESP32 sees a client but `connect()`/`discover_services()` still fail and the session never reaches bootstrap or lease.
 - Shared Gym Motion types should live in `desktop/core`, not be duplicated between main and renderer.
 - Transport connection state and telemetry freshness are separate signals. Motion or heartbeat telemetry must not change BLE connection state on their own.
 
