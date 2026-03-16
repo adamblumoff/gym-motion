@@ -2203,11 +2203,11 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_scan_does_not_clear_peripherals_while_a_handshake_is_in_flight() {
+    fn reconnect_scan_does_not_clear_peripherals_during_silent_retry_bursts() {
         let connected = HashMap::new();
 
         assert!(!should_clear_reconnect_peripherals(&connected, 1));
-        assert!(should_clear_reconnect_peripherals(&connected, 0));
+        assert!(!should_clear_reconnect_peripherals(&connected, 0));
     }
 
     #[test]

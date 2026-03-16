@@ -805,24 +805,6 @@ export function createGatewayRuntimeServer({
         scanReason: scanState === "scanning" ? scanReason : null,
       });
 
-      if (scanState === "scanning" && scanReason === "approved-reconnect") {
-        for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
-          if (
-            runtime.gatewayConnectionState !== "disconnected" ||
-            runtime.reconnectRetryExhausted
-          ) {
-            continue;
-          }
-
-          runtimeByDeviceId.set(deviceId, {
-            ...runtime,
-            gatewayConnectionState: "reconnecting",
-            updatedAt: nowIso(),
-          });
-          emitDevice(deviceId);
-        }
-      }
-
       if (scanState !== "scanning") {
         normalizeIdleConnectionStates();
       }

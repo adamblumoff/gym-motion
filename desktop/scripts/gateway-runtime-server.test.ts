@@ -300,6 +300,41 @@ describe("gateway runtime server", () => {
     expect(reconnectPayload.gateway?.reconnectingNodeCount).toBe(1);
   });
 
+  it("keeps approved nodes disconnected during silent reconnect scanning until connect starts", async () => {
+    const runtimePort = 50210 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteDisconnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      reason: "link lost",
+    });
+    runtimeServer.setScanState("scanning", "approved-reconnect");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("disconnected");
+    expect(payload.gateway?.reconnectingNodeCount).toBe(0);
+  });
+
   it("keeps cached approved nodes disconnected while startup scan is still silent", async () => {
     const runtimePort = 50310 + Math.floor(Math.random() * 1000);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
