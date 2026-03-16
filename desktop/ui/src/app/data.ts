@@ -10,6 +10,7 @@ import type {
   MotionEventSummary,
   TelemetryFreshness,
 } from "@core/contracts";
+import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
 import { matchesApprovedNodeIdentity } from "../lib/setup-rules";
 
 export type NodeLog = {
@@ -157,14 +158,9 @@ export function buildPairedDevices(
   snapshot: DesktopSnapshot | null = null,
 ): SetupDevice[] {
   return setup.approvedNodes.map((node) => {
-    const runtimeDevice = snapshot?.devices.find((device) =>
-      matchesApprovedNodeIdentity(node, {
-        peripheralId: device.peripheralId,
-        address: device.address ?? null,
-        localName: device.advertisedName,
-        knownDeviceId: device.id,
-      }),
-    );
+    const runtimeDevice = snapshot
+      ? findMatchingGatewayDeviceForApprovedNode(node, snapshot.devices)
+      : null;
 
     return {
       id: node.id,
