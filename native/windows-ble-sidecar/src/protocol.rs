@@ -72,6 +72,10 @@ pub struct RuntimeStatusPayload {
     pub status_type: String,
     #[serde(alias = "deviceId")]
     pub device_id: Option<String>,
+    #[serde(alias = "bootId")]
+    pub boot_id: Option<String>,
+    #[serde(alias = "bootUptimeMs")]
+    pub boot_uptime_ms: Option<u64>,
     #[serde(alias = "sessionId")]
     pub session_id: Option<String>,
     #[serde(alias = "sessionNonce")]

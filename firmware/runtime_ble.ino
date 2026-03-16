@@ -53,6 +53,16 @@ void sendProvisioningStatus(const String& payload) {
   notifyCharacteristic(provisioningStatusCharacteristic, provisioningBleConnected, payload);
 }
 
+String createRuntimeReadyPayload() {
+  return
+    "{\"type\":\"ready\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"bootUptimeMs\":" + String(millis()) +
+    ",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
+    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"deviceName\":\"" + escapeJsonString(createBleDeviceName()) + "\"}";
+}
+
 String createProvisioningReadyPayload() {
   return
     "{\"type\":\"ready\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
@@ -532,6 +542,9 @@ class GymServerCallbacks : public BLEServerCallbacks {
       "BLE client connected; waiting for runtime or provisioning traffic."
     );
     sendProvisioningReady();
+    if (runtimeStatusCharacteristic != nullptr) {
+      runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
+    }
     sendTelemetry(lastReportedDelta, millis(), true);
   }
 
@@ -730,6 +743,7 @@ void setupBle() {
   runtimeTelemetryCharacteristic->setCallbacks(new RuntimeTelemetryCallbacks());
   runtimeControlCharacteristic->setCallbacks(new RuntimeControlCallbacks());
   runtimeOtaDataCharacteristic->setCallbacks(new RuntimeOtaDataCallbacks());
+  runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
   runtimeService->start();
 
   BLEAdvertising* advertising = bleServer->getAdvertising();

@@ -70,6 +70,8 @@ const PRE_SESSION_SETUP_ATTEMPTS: u32 = 3;
 const SESSION_BOOTSTRAP_RETRY_LIMIT: u32 = 1;
 const SESSION_TELEMETRY_CONFIRM_RETRY_LIMIT: u32 = 1;
 const POST_GATT_READY_SETTLE_MS: u64 = 250;
+const COLD_BOOT_READY_UPTIME_MS: u64 = 8_000;
+const COLD_BOOT_READY_MAX_WAIT_MS: u64 = 5_000;
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
@@ -1505,6 +1507,57 @@ async fn discovery_candidate_for_event(
     }
 }
 
+async fn wait_for_cold_boot_ready_window(
+    peripheral: &Peripheral,
+    status_characteristic: &btleplug::api::Characteristic,
+    writer: &EventWriter,
+    node: &DiscoveredNode,
+    reconnect: &Option<ReconnectStatus>,
+) -> Result<()> {
+    let Ok(raw_status) = peripheral.read(status_characteristic).await else {
+        return Ok(());
+    };
+    let Ok(raw_text) = String::from_utf8(raw_status) else {
+        return Ok(());
+    };
+    let Ok(status) = serde_json::from_str::<RuntimeStatusPayload>(&raw_text) else {
+        return Ok(());
+    };
+
+    if status.status_type != "ready" {
+        return Ok(());
+    }
+
+    let Some(boot_uptime_ms) = status.boot_uptime_ms else {
+        return Ok(());
+    };
+    if boot_uptime_ms >= COLD_BOOT_READY_UPTIME_MS {
+        return Ok(());
+    }
+
+    let wait_ms = (COLD_BOOT_READY_UPTIME_MS - boot_uptime_ms).min(COLD_BOOT_READY_MAX_WAIT_MS);
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: format!(
+                "Fresh node boot detected for {}; waiting briefly before runtime bootstrap.",
+                node.label
+            ),
+            details: Some(json!({
+                "peripheralId": node.peripheral_id,
+                "knownDeviceId": node.known_device_id,
+                "address": node.address,
+                "reconnect": reconnect,
+                "bootId": status.boot_id,
+                "bootUptimeMs": boot_uptime_ms,
+                "waitMs": wait_ms,
+            })),
+        })
+        .await?;
+    sleep(Duration::from_millis(wait_ms)).await;
+    Ok(())
+}
+
 async fn connect_and_stream(
     peripheral: Peripheral,
     node: DiscoveredNode,
@@ -1775,6 +1828,14 @@ async fn connect_and_stream(
                 .into_iter()
                 .find(|candidate| candidate.uuid == config.status_uuid)
                 .ok_or_else(|| anyhow!("runtime status characteristic not found"))?;
+            wait_for_cold_boot_ready_window(
+                &peripheral,
+                &status_characteristic,
+                &writer,
+                &node,
+                &reconnect,
+            )
+            .await?;
 
             let (message, details) = log_handshake_step("opening notifications stream");
             emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
