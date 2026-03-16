@@ -46,6 +46,8 @@ const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
+const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
+const GATT_SETUP_RETRY_DELAY_MS: u64 = 250;
 
 #[derive(Clone)]
 struct Config {
@@ -1702,21 +1704,137 @@ async fn connect_and_stream(
         })
         .await?;
 
-    let setup_result = async {
-        writer.send(&log_handshake_step("checking transport connection")).await?;
-        if !peripheral.is_connected().await.unwrap_or(false) {
-            writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
-            peripheral
-                .connect()
-                .await
-                .with_context(|| format!("connect step failed for {}", node.label))?;
-        }
-        writer.send(&log_handshake_step("discovering services")).await?;
-        peripheral
-            .discover_services()
-            .await
-            .with_context(|| format!("discover_services step failed for {}", node.label))?;
+    let mut gatt_ready = false;
+    let mut last_gatt_error = None;
 
+    for attempt in 1..=GATT_SETUP_RETRY_ATTEMPTS {
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: format!(
+                    "Reconnect handshake GATT setup attempt {attempt}/{GATT_SETUP_RETRY_ATTEMPTS}"
+                ),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "reconnect": reconnect,
+                })),
+            })
+            .await?;
+
+        writer.send(&log_handshake_step("checking transport connection")).await?;
+        let was_connected = peripheral.is_connected().await.unwrap_or(false);
+        if !was_connected {
+            writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
+            if let Err(error) = peripheral.connect().await {
+                writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message:
+                            "WinRT connect() returned an error; re-checking transport before giving up."
+                                .to_string(),
+                        details: Some(json!({
+                            "peripheralId": node.peripheral_id,
+                            "knownDeviceId": node.known_device_id,
+                            "address": node.address,
+                            "reconnect": reconnect,
+                            "attempt": attempt,
+                            "error": error.to_string(),
+                        })),
+                    })
+                    .await?;
+                last_gatt_error = Some(anyhow!(error).context(format!(
+                    "connect step failed for {}",
+                    node.label
+                )));
+            }
+            sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
+        }
+
+        let connected_after_attempt = peripheral.is_connected().await.unwrap_or(false);
+        if !connected_after_attempt {
+            let Some(error) = last_gatt_error.take() else {
+                last_gatt_error = Some(anyhow!(
+                    "transport still disconnected for {} after connect attempt",
+                    node.label
+                ));
+                continue;
+            };
+
+            if attempt == GATT_SETUP_RETRY_ATTEMPTS {
+                return Err(error);
+            }
+
+            writer
+                .send(&Event::Log {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Reconnect handshake GATT setup attempt {attempt} failed before transport became connected; retrying."
+                    ),
+                    details: Some(json!({
+                        "peripheralId": node.peripheral_id,
+                        "knownDeviceId": node.known_device_id,
+                        "address": node.address,
+                        "reconnect": reconnect,
+                        "error": error.to_string(),
+                    })),
+                })
+                .await?;
+            sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
+            continue;
+        }
+
+        writer.send(&log_handshake_step("discovering services")).await?;
+        match peripheral.discover_services().await {
+            Ok(()) => {
+                gatt_ready = true;
+                last_gatt_error = None;
+                break;
+            }
+            Err(error) => {
+                last_gatt_error = Some(anyhow!(error).context(format!(
+                    "discover_services step failed for {}",
+                    node.label
+                )));
+            }
+        }
+
+        let Some(error) = last_gatt_error.take() else {
+            continue;
+        };
+        if attempt == GATT_SETUP_RETRY_ATTEMPTS {
+            return Err(error);
+        }
+
+        writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: format!(
+                    "Reconnect handshake GATT setup attempt {attempt} failed after transport connect; retrying."
+                ),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "reconnect": reconnect,
+                    "error": error.to_string(),
+                })),
+            })
+            .await?;
+
+        if peripheral.is_connected().await.unwrap_or(false) {
+            let _ = peripheral.disconnect().await;
+            sleep(Duration::from_millis(100)).await;
+        }
+        sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
+    }
+
+    if !gatt_ready {
+        return Err(anyhow!("gatt setup never became ready for {}", node.label));
+    }
+
+    let setup_result = async {
         writer
             .send(&log_handshake_step("resolving telemetry characteristic"))
             .await?;
