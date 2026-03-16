@@ -74,6 +74,8 @@ pub struct RuntimeStatusPayload {
     pub device_id: Option<String>,
     #[serde(alias = "sessionId")]
     pub session_id: Option<String>,
+    #[serde(alias = "sessionNonce")]
+    pub session_nonce: Option<String>,
     #[serde(alias = "firmwareVersion")]
     pub firmware_version: Option<String>,
     #[serde(alias = "hardwareId")]

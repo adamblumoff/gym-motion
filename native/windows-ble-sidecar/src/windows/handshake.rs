@@ -25,13 +25,14 @@ pub(crate) async fn send_app_session_lease(
 pub(crate) async fn send_app_session_bootstrap(
     peripheral: &Peripheral,
     characteristic: &Characteristic,
+    session_nonce: &str,
 ) -> Result<()> {
-    write_chunked_json_command(
-        peripheral,
-        characteristic,
-        r#"{"type":"app-session-bootstrap"}"#,
-    )
-    .await
+    let payload = json!({
+        "type": "app-session-bootstrap",
+        "sessionNonce": session_nonce,
+    })
+    .to_string();
+    write_chunked_json_command(peripheral, characteristic, &payload).await
 }
 
 pub(crate) async fn write_chunked_json_command(

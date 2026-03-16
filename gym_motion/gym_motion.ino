@@ -104,6 +104,8 @@ unsigned long historyDroppedCount = 0;
 bool historyOverflowed = false;
 uint16_t runtimeBleConnId = 0;
 String runtimeAppSessionId;
+String runtimeAppSessionNonce;
+String runtimeBootstrapSessionNonce;
 
 struct OtaTransferState {
   bool active = false;

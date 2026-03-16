@@ -1515,6 +1515,7 @@ async fn connect_and_stream(
     command_sender: mpsc::UnboundedSender<SessionCommand>,
 ) -> Result<Option<String>> {
     let app_session_id = Uuid::new_v4().to_string();
+    let app_session_nonce = Uuid::new_v4().to_string();
     let reconnect_started_at = Instant::now();
     let mut transport_ready_at: Option<Instant> = None;
     let mut gatt_ready_at: Option<Instant> = None;
@@ -1792,7 +1793,7 @@ async fn connect_and_stream(
                 .with_context(|| format!("subscribe step failed for {}", node.label))?;
             let (message, details) = log_handshake_step("sending app-session bootstrap");
             emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-            send_app_session_bootstrap(&peripheral, &control_characteristic)
+            send_app_session_bootstrap(&peripheral, &control_characteristic, &app_session_nonce)
                 .await
                 .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
             let (message, details) = log_handshake_step("sending app-session lease");
@@ -1965,6 +1966,24 @@ async fn connect_and_stream(
                                 if session_id != app_session_id {
                                     continue;
                                 }
+                                let Some(session_nonce) = status.session_nonce.clone() else {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "warn".to_string(),
+                                            message: "Ignoring app-session-online status without a session nonce.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": node.known_device_id,
+                                                "address": node.address,
+                                                "expectedSessionId": app_session_id,
+                                            })),
+                                        })
+                                        .await?;
+                                    continue;
+                                };
+                                if session_nonce != app_session_nonce {
+                                    continue;
+                                }
                                 ack_session_id = Some(session_id);
 
                                 ack_received = true;
@@ -2108,7 +2127,11 @@ async fn connect_and_stream(
                             })),
                         })
                         .await?;
-                    send_app_session_bootstrap(&peripheral, &control_characteristic)
+                    send_app_session_bootstrap(
+                        &peripheral,
+                        &control_characteristic,
+                        &app_session_nonce,
+                    )
                         .await
                         .with_context(|| format!("app-session-bootstrap retry failed for {}", node.label))?;
                     send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
@@ -2264,13 +2287,14 @@ mod tests {
 
     #[test]
     fn frames_app_session_bootstrap_commands_for_firmware_parser() {
-        let frames = control_command_frames(r#"{"type":"app-session-bootstrap"}"#);
+        let payload = r#"{"type":"app-session-bootstrap","sessionNonce":"nonce-1"}"#;
+        let frames = control_command_frames(payload);
 
-        assert_eq!(frames.first().map(Vec::as_slice), Some(&b"BEGIN:32"[..]));
         assert_eq!(
-            frames.get(1).map(Vec::as_slice),
-            Some(&br#"{"type":"app-session-bootstrap"}"#[..])
+            frames.first().map(Vec::as_slice),
+            Some(format!("BEGIN:{}", payload.len()).as_bytes())
         );
+        assert_eq!(frames.get(1).map(Vec::as_slice), Some(payload.as_bytes()));
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
     }
 

@@ -77,10 +77,14 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
-void sendRuntimeAppSessionOnline(const String& sessionId) {
+void sendRuntimeAppSessionOnline(
+  const String& sessionId,
+  const String& sessionNonce
+) {
   String payload =
     "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
+    "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
@@ -166,6 +170,8 @@ void resetRuntimeAppSessionState() {
   runtimeBootstrapLeasePending = false;
   runtimeLeaseRequired = false;
   runtimeAppSessionId = "";
+  runtimeAppSessionNonce = "";
+  runtimeBootstrapSessionNonce = "";
   lastAppSessionLeaseAt = 0;
   lastRuntimeControlAt = 0;
   appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
@@ -186,19 +192,24 @@ void disarmRuntimeBootstrapWatchdog() {
 
 void markRuntimeAppSessionOnline(
   const String& sessionId,
+  const String& sessionNonce,
   unsigned long expiresInMs,
   unsigned long timestamp
 ) {
   const unsigned long nextTimeout =
     expiresInMs > 0 ? expiresInMs : APP_SESSION_LEASE_DEFAULT_MS;
   const bool sessionChanged =
-    !runtimeAppSessionConnected || runtimeAppSessionId != sessionId;
+    !runtimeAppSessionConnected ||
+    runtimeAppSessionId != sessionId ||
+    runtimeAppSessionNonce != sessionNonce;
 
   runtimeAppSessionConnected = true;
   runtimeAppSessionId = sessionId;
+  runtimeAppSessionNonce = sessionNonce;
   lastAppSessionLeaseAt = timestamp;
   lastRuntimeControlAt = timestamp;
   appSessionLeaseTimeoutMs = nextTimeout;
+  runtimeBootstrapSessionNonce = sessionNonce;
 
   if (!sessionChanged) {
     logRuntimeLeaseState("Lease refreshed.", timestamp);
@@ -208,7 +219,7 @@ void markRuntimeAppSessionOnline(
   logRuntimeTransportEvent(
     "Windows app session lease is active for session " + sessionId + "."
   );
-  sendRuntimeAppSessionOnline(sessionId);
+  sendRuntimeAppSessionOnline(sessionId, sessionNonce);
 
   journalNodeLog(
     "info",
@@ -409,6 +420,18 @@ void handleRuntimeControl(const String& payload) {
   if (type == "app-session-bootstrap") {
     disarmRuntimeBootstrapWatchdog();
     runtimeLeaseRequired = true;
+    const String sessionNonce = extractJsonString(payload, "sessionNonce");
+    if (sessionNonce.length() == 0) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.invalid",
+        "Ignored app session bootstrap without a session nonce.",
+        millis()
+      );
+      runtimeLeaseRequired = false;
+      return;
+    }
+    runtimeBootstrapSessionNonce = sessionNonce;
     return;
   }
 
@@ -432,7 +455,22 @@ void handleRuntimeControl(const String& payload) {
       return;
     }
 
-    markRuntimeAppSessionOnline(sessionId, expiresInMs, millis());
+    if (runtimeBootstrapSessionNonce.length() == 0) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.invalid",
+        "Ignored app session lease without a bootstrap session nonce.",
+        millis()
+      );
+      return;
+    }
+
+    markRuntimeAppSessionOnline(
+      sessionId,
+      runtimeBootstrapSessionNonce,
+      expiresInMs,
+      millis()
+    );
     return;
   }
 
