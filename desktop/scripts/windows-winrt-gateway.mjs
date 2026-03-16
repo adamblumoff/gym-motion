@@ -348,7 +348,7 @@ async function forwardTelemetry(payload, node = {}) {
   context.lastHeartbeatForwardedAt = Date.now();
 }
 
-function handleNodeDiscovered(node) {
+function handleNodeDiscovered(node, scanReason = null) {
   const peripheralInfo = describeNode(node);
 
   runtimeServer.noteDiscovery({
@@ -358,7 +358,7 @@ function handleNodeDiscovered(node) {
     reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
   });
 
-  if (!shouldWriteDiscoveryLog(currentScanReason)) {
+  if (!shouldWriteDiscoveryLog(scanReason)) {
     return;
   }
 
@@ -609,7 +609,10 @@ function handleSidecarEvent(event) {
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       break;
     case "node_discovered":
-      handleNodeDiscovered(event.node ?? {});
+      handleNodeDiscovered(
+        event.node ?? {},
+        event.scan_reason ?? event.scanReason ?? null,
+      );
       break;
     case "node_connection_state":
       handleNodeConnectionState(event);

@@ -1222,7 +1222,10 @@ async fn run_session(
                             classified_candidates_this_burst =
                                 classified_candidates_this_burst.saturating_add(1);
                             last_advertisement_at = node.last_seen_at.clone();
-                            writer.send(&Event::NodeDiscovered { node: node.clone() }).await?;
+                            writer.send(&Event::NodeDiscovered {
+                                node: node.clone(),
+                                scan_reason: discovery_scan_reason.map(str::to_string),
+                            }).await?;
                             writer.send(&Event::GatewayState {
                                 gateway: GatewayStatePayload {
                                     adapter_state: normalize_adapter_state(adapter.adapter_state().await.unwrap_or(CentralState::Unknown)),
