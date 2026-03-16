@@ -19,7 +19,8 @@ use crate::{
 };
 
 use log::{debug, trace};
-use std::{collections::HashMap, future::IntoFuture};
+use std::{collections::HashMap, future::IntoFuture, time::Duration};
+use tokio::time::sleep;
 use uuid::Uuid;
 use windows::core::Ref;
 use windows::{
@@ -35,6 +36,9 @@ use windows::{
 };
 
 pub type NotifiyEventHandler = Box<dyn Fn(Vec<u8>) + Send>;
+
+const SUBSCRIBE_ATTEMPTS: u32 = 3;
+const SUBSCRIBE_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 impl From<WriteType> for GattWriteOption {
     fn from(val: WriteType) -> Self {
@@ -124,19 +128,42 @@ impl BLECharacteristic {
             return Err(Error::NotSupported("Can not subscribe to attribute".into()));
         }
 
-        let status = self
-            .characteristic
-            .WriteClientCharacteristicConfigurationDescriptorAsync(config)?
-            .into_future()
-            .await?;
-        trace!("subscribe {:?}", status);
-        if status == GattCommunicationStatus::Success {
-            Ok(())
-        } else {
-            Err(Error::Other(
-                format!("Windows UWP threw error on subscribe: {:?}", status).into(),
-            ))
+        for attempt in 1..=SUBSCRIBE_ATTEMPTS {
+            match self
+                .characteristic
+                .WriteClientCharacteristicConfigurationDescriptorAsync(config)?
+                .into_future()
+                .await
+            {
+                Ok(status) if status == GattCommunicationStatus::Success => {
+                    trace!("subscribe {:?}", status);
+                    return Ok(());
+                }
+                Ok(status) => {
+                    trace!("subscribe {:?}", status);
+                    if attempt == SUBSCRIBE_ATTEMPTS {
+                        if let Some(token) = self.notify_token.take() {
+                            let _ = self.characteristic.RemoveValueChanged(token);
+                        }
+                        return Err(Error::Other(
+                            format!("Windows UWP threw error on subscribe: {:?}", status).into(),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    if attempt == SUBSCRIBE_ATTEMPTS {
+                        if let Some(token) = self.notify_token.take() {
+                            let _ = self.characteristic.RemoveValueChanged(token);
+                        }
+                        return Err(error.into());
+                    }
+                }
+            }
+
+            sleep(SUBSCRIBE_RETRY_DELAY).await;
         }
+
+        unreachable!("subscribe loop should return before exhausting attempts");
     }
 
     pub async fn unsubscribe(&mut self) -> Result<()> {
