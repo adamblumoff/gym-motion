@@ -1558,6 +1558,112 @@ async fn wait_for_cold_boot_ready_window(
     Ok(())
 }
 
+fn is_closed_handle_error_message(message: &str) -> bool {
+    message.contains("The object has been closed.")
+}
+
+fn spawn_lease_task(
+    peripheral: Peripheral,
+    characteristic: btleplug::api::Characteristic,
+    session_id: String,
+) -> (
+    watch::Sender<bool>,
+    mpsc::UnboundedReceiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
+    let (lease_failure_tx, lease_failure_rx) = mpsc::unbounded_channel::<String>();
+    let lease_task = tokio::spawn(async move {
+        let mut lease_heartbeat =
+            tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
+        lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        lease_heartbeat.tick().await;
+
+        loop {
+            tokio::select! {
+                changed = lease_shutdown_rx.changed() => {
+                    if changed.is_ok() && *lease_shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = lease_heartbeat.tick() => {
+                    if let Err(error) = send_app_session_lease(
+                        &peripheral,
+                        &characteristic,
+                        &session_id,
+                    ).await {
+                        let _ = lease_failure_tx.send(format_error_chain(&error));
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    (lease_shutdown_tx, lease_failure_rx, lease_task)
+}
+
+async fn recover_active_session_control_path(
+    peripheral: &Peripheral,
+    writer: &EventWriter,
+    node: &DiscoveredNode,
+    reconnect: &Option<ReconnectStatus>,
+    control_uuid: uuid::Uuid,
+    app_session_id: &str,
+    app_session_nonce: &str,
+) -> Result<btleplug::api::Characteristic> {
+    writer
+        .send(&Event::Log {
+            level: "warn".to_string(),
+            message: "WinRT closed the runtime control handle after connect; refreshing services and replaying the app-session handshake on the same connection.".to_string(),
+            details: Some(json!({
+                "peripheralId": node.peripheral_id,
+                "knownDeviceId": node.known_device_id,
+                "address": node.address,
+                "reconnect": reconnect,
+            })),
+        })
+        .await?;
+
+    peripheral
+        .discover_services()
+        .await
+        .with_context(|| format!("refresh services for active session recovery failed for {}", node.label))?;
+
+    let control_characteristic = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|candidate| candidate.uuid == control_uuid)
+        .ok_or_else(|| anyhow!("runtime control characteristic not found during active session recovery"))?;
+
+    send_app_session_bootstrap(peripheral, &control_characteristic, app_session_nonce)
+        .await
+        .with_context(|| format!("active session bootstrap recovery failed for {}", node.label))?;
+    send_app_session_lease(peripheral, &control_characteristic, app_session_id)
+        .await
+        .with_context(|| format!("active session lease recovery failed for {}", node.label))?;
+    let _ = write_chunked_json_command(peripheral, &control_characteristic, r#"{"type":"sync-now"}"#)
+        .await;
+
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: format!(
+                "Recovered runtime control path for {} without restarting reconnect scan.",
+                node.label
+            ),
+            details: Some(json!({
+                "peripheralId": node.peripheral_id,
+                "knownDeviceId": node.known_device_id,
+                "address": node.address,
+                "reconnect": reconnect,
+            })),
+        })
+        .await?;
+
+    Ok(control_characteristic)
+}
+
 async fn connect_and_stream(
     peripheral: Peripheral,
     node: DiscoveredNode,
@@ -1942,37 +2048,12 @@ async fn connect_and_stream(
     let mut session_bootstrap_retry_count = 0_u32;
     let mut session_telemetry_confirm_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
-    let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
-    let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
-    let lease_peripheral = peripheral.clone();
-    let lease_characteristic = control_characteristic.clone();
-    let lease_session_id = app_session_id.clone();
-    let lease_task = tokio::spawn(async move {
-        let mut lease_heartbeat =
-            tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
-        lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        lease_heartbeat.tick().await;
-
-        loop {
-            tokio::select! {
-                changed = lease_shutdown_rx.changed() => {
-                    if changed.is_ok() && *lease_shutdown_rx.borrow() {
-                        break;
-                    }
-                }
-                _ = lease_heartbeat.tick() => {
-                    if let Err(error) = send_app_session_lease(
-                        &lease_peripheral,
-                        &lease_characteristic,
-                        &lease_session_id,
-                    ).await {
-                        let _ = lease_failure_tx.send(format_error_chain(&error));
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    let mut current_control_characteristic = control_characteristic;
+    let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) = spawn_lease_task(
+        peripheral.clone(),
+        current_control_characteristic.clone(),
+        app_session_id.clone(),
+    );
 
     loop {
         tokio::select! {
@@ -2068,7 +2149,7 @@ async fn connect_and_stream(
                                     .await?;
                                 if let Err(error) = write_chunked_json_command(
                                     &peripheral,
-                                    &control_characteristic,
+                                    &current_control_characteristic,
                                     r#"{"type":"sync-now"}"#,
                                 )
                                 .await
@@ -2209,7 +2290,7 @@ async fn connect_and_stream(
                             .await?;
                         write_chunked_json_command(
                             &peripheral,
-                            &control_characteristic,
+                            &current_control_characteristic,
                             r#"{"type":"sync-now"}"#,
                         )
                         .await
@@ -2247,12 +2328,12 @@ async fn connect_and_stream(
                         .await?;
                     send_app_session_bootstrap(
                         &peripheral,
-                        &control_characteristic,
+                        &current_control_characteristic,
                         &app_session_nonce,
                     )
                         .await
                         .with_context(|| format!("app-session-bootstrap retry failed for {}", node.label))?;
-                    send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
+                    send_app_session_lease(&peripheral, &current_control_characteristic, &app_session_id)
                         .await
                         .with_context(|| format!("app-session-lease retry failed for {}", node.label))?;
                     session_health_sleep
@@ -2333,6 +2414,49 @@ async fn connect_and_stream(
             Some(reason) = lease_failure_rx.recv() => {
                 let _ = lease_shutdown_tx.send(true);
                 let _ = lease_task.await;
+                if is_closed_handle_error_message(&reason)
+                    && peripheral.is_connected().await.unwrap_or(false)
+                {
+                    match recover_active_session_control_path(
+                        &peripheral,
+                        &writer,
+                        &node,
+                        &reconnect,
+                        config.control_uuid,
+                        &app_session_id,
+                        &app_session_nonce,
+                    )
+                    .await
+                    {
+                        Ok(recovered_control_characteristic) => {
+                            current_control_characteristic = recovered_control_characteristic;
+                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                peripheral.clone(),
+                                current_control_characteristic.clone(),
+                                app_session_id.clone(),
+                            );
+                            lease_shutdown_tx = new_shutdown_tx;
+                            lease_failure_rx = new_failure_rx;
+                            lease_task = new_lease_task;
+                            continue;
+                        }
+                        Err(error) => {
+                            writer
+                                .send(&Event::Log {
+                                    level: "warn".to_string(),
+                                    message: "Active session control-path recovery failed; falling back to reconnect scan.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "reconnect": reconnect,
+                                        "error": format_error_chain(&error),
+                                    })),
+                                })
+                                .await?;
+                        }
+                    }
+                }
                 return Ok(Some(format!(
                     "App-session lease heartbeat failed for {}: {}",
                     node.label,
