@@ -8,6 +8,7 @@ use crate::protocol::{ApprovedNodeRule, DiscoveredNode, ReconnectStatus};
 use super::{config::Config, registry::DeviceRecord};
 
 pub(crate) const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
+pub(crate) const APPROVED_RECONNECT_SCAN_BURST_LIMIT: u32 = 20;
 pub(crate) const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
 pub(crate) const APPROVED_RECONNECT_STALL_MS: u64 = 3_000;
 
@@ -315,11 +316,7 @@ pub(crate) fn next_reconnect_attempt(
     state: &ApprovedReconnectState,
     active_for_node: bool,
 ) -> Option<u32> {
-    if active_for_node
-        || state.retry_exhausted
-        || state.awaiting_user_decision
-        || state.attempt >= RECONNECT_ATTEMPT_LIMIT
-    {
+    if active_for_node || state.retry_exhausted || state.awaiting_user_decision {
         return None;
     }
 

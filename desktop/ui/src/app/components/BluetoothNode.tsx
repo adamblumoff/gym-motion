@@ -167,7 +167,7 @@ export function BluetoothNode({ node, onClick, onForget, onKeepDevice }: Bluetoo
         <div className="mx-4 mb-4 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3" onClick={(event) => event.stopPropagation()}>
           <div className="text-sm font-medium text-amber-300">Do you want to forget this device?</div>
           <div className="mt-1 text-xs leading-5 text-zinc-400">
-            Auto-reconnect paused after {node.reconnectAttemptLimit} failed attempts for this paired sensor. Keep it to resume reconnecting, or forget it to stop trying.
+            Auto-reconnect paused after {node.reconnectAttemptLimit} scan bursts for this paired sensor. Keep it to resume reconnecting, or forget it to stop trying.
           </div>
           <div className="mt-3 flex items-center gap-2">
             <Button

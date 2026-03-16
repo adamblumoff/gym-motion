@@ -33,9 +33,10 @@ use self::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
         approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, is_approved,
         mark_node_connected, next_reconnect_attempt, node_key, prune_reconnect_states,
-        reconnect_candidate_ready, reconnect_status_for_rule, scan_reason,
+        reconnect_candidate_ready, reconnect_status_for_rule, rule_matches_node, scan_reason,
         should_clear_reconnect_peripherals, should_restart_approved_reconnect_scan, should_scan,
-        ApprovedReconnectState, APPROVED_RECONNECT_SCAN_BURST_MS, RECONNECT_ATTEMPT_LIMIT,
+        ApprovedReconnectState, APPROVED_RECONNECT_SCAN_BURST_LIMIT,
+        APPROVED_RECONNECT_SCAN_BURST_MS, RECONNECT_ATTEMPT_LIMIT,
     },
     config::Config,
     discovery::{discovery_candidate_from_peripheral, DiscoveryCandidate},
@@ -182,14 +183,12 @@ async fn sync_scan_state(
         manual_scan_deadline,
         now,
     );
-    let should_scan_now = if should_pause_approved_reconnect_scan(
-        next_scan_reason,
-        active_connection_count,
-    ) {
-        false
-    } else {
-        should_scan_base
-    };
+    let should_scan_now =
+        if should_pause_approved_reconnect_scan(next_scan_reason, active_connection_count) {
+            false
+        } else {
+            should_scan_base
+        };
 
     if should_scan_now && !*scanning {
         adapter.start_scan(ScanFilter::default()).await?;
@@ -289,6 +288,34 @@ fn should_pause_approved_reconnect_scan(
     active_connection_count: usize,
 ) -> bool {
     scan_reason == Some("approved-reconnect") && active_connection_count > 0
+}
+
+fn pause_approved_reconnect_for_operator_decision(
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+) -> usize {
+    let mut paused_rules = 0_usize;
+
+    for rule in allowed {
+        let already_connected = connected_nodes
+            .values()
+            .any(|node| rule_matches_node(rule, node, allowed));
+        if already_connected {
+            continue;
+        }
+
+        let state = reconnect_states.entry(rule.id.clone()).or_default();
+        if state.awaiting_user_decision {
+            continue;
+        }
+
+        state.retry_exhausted = true;
+        state.awaiting_user_decision = true;
+        paused_rules = paused_rules.saturating_add(1);
+    }
+
+    paused_rules
 }
 
 async fn restart_approved_reconnect_scan(
@@ -795,6 +822,7 @@ async fn run_session(
                                 "resumedAfterDecision": true,
                             })),
                         }).await?;
+                        reconnect_scan_burst = 0;
                     }
                     SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
                         prune_reconnect_states(&mut reconnect_states, &allowed);
@@ -839,6 +867,7 @@ async fn run_session(
                             &node,
                             &allowed,
                         );
+                        reconnect_scan_burst = 0;
                         sync_scan_state(
                             &adapter,
                             &writer,
@@ -865,10 +894,6 @@ async fn run_session(
                         let allowed = allowed_nodes.read().await.clone();
                         let reconnect = approved_rule_id_for_node(&node, &allowed).map(|rule_id| {
                             let state = reconnect_states.entry(rule_id).or_default();
-                            if state.attempt >= RECONNECT_ATTEMPT_LIMIT {
-                                state.retry_exhausted = true;
-                                state.awaiting_user_decision = true;
-                            }
                             ReconnectStatus {
                                 attempt: state.attempt,
                                 attempt_limit: RECONNECT_ATTEMPT_LIMIT,
@@ -895,6 +920,7 @@ async fn run_session(
                             reason: Some(reason),
                             reconnect,
                         }).await?;
+                        reconnect_scan_burst = 0;
                         sync_scan_state(
                             &adapter,
                             &writer,
@@ -1007,6 +1033,45 @@ async fn run_session(
                     startup_burst_deadline,
                     active_connection_count,
                 ) {
+                    continue;
+                }
+
+                if reconnect_scan_burst >= APPROVED_RECONNECT_SCAN_BURST_LIMIT {
+                    let paused_rules = pause_approved_reconnect_for_operator_decision(
+                        &allowed,
+                        &connected_nodes,
+                        &mut reconnect_states,
+                    );
+                    writer
+                        .send(&Event::Log {
+                            level: "warn".to_string(),
+                            message: "Approved-node reconnect scan paused after repeated scan bursts; waiting for operator input.".to_string(),
+                            details: Some(json!({
+                                "scanBurstLimit": APPROVED_RECONNECT_SCAN_BURST_LIMIT,
+                                "scanBurstCount": reconnect_scan_burst,
+                                "pausedRuleCount": paused_rules,
+                                "connectedApprovedCount": connected_nodes.len(),
+                            })),
+                        })
+                        .await?;
+                    sync_scan_state(
+                        &adapter,
+                        &writer,
+                        &config,
+                        &selected_adapter_id,
+                        &allowed,
+                        &connected_nodes,
+                        &reconnect_states,
+                        &mut device_registry,
+                        &mut scanning,
+                        &mut current_scan_reason,
+                        manual_scan_deadline,
+                        &last_advertisement_at,
+                        &mut last_scan_progress_at,
+                        &mut startup_burst_deadline,
+                        active_connection_count,
+                    )
+                    .await?;
                     continue;
                 }
 
@@ -1188,18 +1253,6 @@ async fn run_session(
                                     &reconnect_state,
                                     active.contains_key(&key),
                                 ) else {
-                                    if reconnect_state.attempt >= RECONNECT_ATTEMPT_LIMIT
-                                        && !reconnect_state.retry_exhausted
-                                    {
-                                        reconnect_states.insert(
-                                            rule_id.clone(),
-                                            ApprovedReconnectState {
-                                                attempt: reconnect_state.attempt,
-                                                retry_exhausted: true,
-                                                awaiting_user_decision: true,
-                                            },
-                                        );
-                                    }
                                     drop(active);
                                     continue;
                                 };
@@ -2845,14 +2898,17 @@ mod tests {
     }
 
     #[test]
-    fn next_reconnect_attempt_stops_when_limit_is_reached_or_connection_is_active() {
+    fn next_reconnect_attempt_only_stops_for_active_or_paused_rules() {
         let state = ApprovedReconnectState {
             attempt: RECONNECT_ATTEMPT_LIMIT,
             retry_exhausted: false,
             awaiting_user_decision: false,
         };
 
-        assert!(next_reconnect_attempt(&state, false).is_none());
+        assert_eq!(
+            next_reconnect_attempt(&state, false),
+            Some(RECONNECT_ATTEMPT_LIMIT + 1)
+        );
         assert!(next_reconnect_attempt(&ApprovedReconnectState::default(), true).is_none());
         assert!(next_reconnect_attempt(
             &ApprovedReconnectState {
@@ -2921,6 +2977,57 @@ mod tests {
             0,
         ));
         assert!(!should_pause_approved_reconnect_scan(Some("manual"), 1));
+    }
+
+    #[test]
+    fn pause_approved_reconnect_marks_missing_rules_awaiting_operator_input() {
+        let rules = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench 1".to_string(),
+                peripheral_id: Some("peripheral-1".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench 2".to_string(),
+                peripheral_id: Some("peripheral-2".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+            },
+        ];
+        let connected_nodes = HashMap::from([(
+            "peripheral-1".to_string(),
+            DiscoveredNode {
+                id: "peripheral:peripheral-1".to_string(),
+                label: "Bench 1".to_string(),
+                peripheral_id: Some("peripheral-1".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+                last_rssi: None,
+                last_seen_at: None,
+            },
+        )]);
+        let mut reconnect_states = HashMap::new();
+
+        let paused_rules = pause_approved_reconnect_for_operator_decision(
+            &rules,
+            &connected_nodes,
+            &mut reconnect_states,
+        );
+
+        assert_eq!(paused_rules, 1);
+        assert_eq!(
+            reconnect_states
+                .get("node-2")
+                .map(|state| state.awaiting_user_decision),
+            Some(true)
+        );
+        assert!(!reconnect_states.contains_key("node-1"));
     }
 
     #[test]
