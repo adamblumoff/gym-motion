@@ -47,7 +47,8 @@ const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
-const GATT_SETUP_RETRY_DELAY_MS: u64 = 250;
+const GATT_SETUP_RETRY_DELAY_MS: u64 = 750;
+const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 3;
 
 #[derive(Clone)]
 struct Config {
@@ -1785,19 +1786,44 @@ async fn connect_and_stream(
             continue;
         }
 
-        writer.send(&log_handshake_step("discovering services")).await?;
-        match peripheral.discover_services().await {
-            Ok(()) => {
-                gatt_ready = true;
-                last_gatt_error = None;
-                break;
+        for discovery_attempt in 1..=SERVICE_DISCOVERY_RETRY_ATTEMPTS {
+            writer.send(&log_handshake_step("discovering services")).await?;
+            match peripheral.discover_services().await {
+                Ok(()) => {
+                    gatt_ready = true;
+                    last_gatt_error = None;
+                    break;
+                }
+                Err(error) => {
+                    let formatted_error = format!("{:#}", error);
+                    writer
+                        .send(&Event::Log {
+                            level: "warn".to_string(),
+                            message: format!(
+                                "discover_services attempt {discovery_attempt}/{SERVICE_DISCOVERY_RETRY_ATTEMPTS} failed; waiting before retry."
+                            ),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "address": node.address,
+                                "reconnect": reconnect,
+                                "error": formatted_error,
+                            })),
+                        })
+                        .await?;
+                    last_gatt_error = Some(anyhow!(error).context(format!(
+                        "discover_services step failed for {}",
+                        node.label
+                    )));
+                    if discovery_attempt < SERVICE_DISCOVERY_RETRY_ATTEMPTS {
+                        sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
+                    }
+                }
             }
-            Err(error) => {
-                last_gatt_error = Some(anyhow!(error).context(format!(
-                    "discover_services step failed for {}",
-                    node.label
-                )));
-            }
+        }
+
+        if gatt_ready {
+            break;
         }
 
         let Some(error) = last_gatt_error.take() else {
