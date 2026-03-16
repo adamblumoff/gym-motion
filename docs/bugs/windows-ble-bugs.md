@@ -1,4 +1,4 @@
-# Previous Bugs
+# Windows BLE Bugs
 
 This file captures BLE/runtime bugs we already paid to learn the hard way.
 
