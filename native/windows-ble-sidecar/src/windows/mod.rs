@@ -1487,6 +1487,7 @@ async fn run_session(
                                 drop(active);
                                 let writer_clone = writer.clone();
                                 let config_clone = config.clone();
+                                let adapter_clone = adapter.clone();
                                 let allowed_nodes_clone = allowed_nodes.clone();
                                 let active_connections_clone = active_connections.clone();
                                 let known_device_ids_clone = known_device_ids.clone();
@@ -1495,7 +1496,7 @@ async fn run_session(
                                 let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
-                                        adapter.clone(),
+                                        adapter_clone,
                                         reconnect_peripheral,
                                         node.clone(),
                                         writer_clone.clone(),
