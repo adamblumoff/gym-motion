@@ -6,15 +6,20 @@
   "main": "out/main/index.js",
   "scripts": {
     "db:setup": "bun run ./scripts/setup-db.ts",
+    "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
     "dev": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
     "build": "electron-vite build && electron-builder --config electron-builder.config.mjs --dir",
     "build:win": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
     "preview": "electron-vite preview",
+    "seed": "bun run ./scripts/send-test-event.ts",
+    "firmware:build": "./scripts/build-firmware.sh",
+    "firmware:upload": "./scripts/upload-firmware.sh",
+    "firmware:publish": "bun run ./scripts/publish-firmware.ts",
+    "device:purge": "bun run ./scripts/purge-device.ts",
     "lint": "eslint desktop --ext .ts,.tsx",
-    "test:boundaries": "node ./scripts/check-no-legacy-imports.mjs",
+    "test:boundaries": "node ./scripts/check-no-archive-imports.mjs",
     "test": "bun run test:boundaries && bun test ./desktop/main ./desktop/core ./desktop/ui ./desktop/scripts",
     "typecheck": "tsc --noEmit",
-    "legacy:dev": "cd legacy && bun dev",
     "test:windows-desktop": "./scripts/test-windows-desktop.sh"
   },
   "dependencies": {

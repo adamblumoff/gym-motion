@@ -139,4 +139,4 @@ Validate the same Setup and reconnect flow in the packaged app.
 - Paired sensor rows should keep showing the saved BLE address when one is known, even if the live runtime device also has an opaque WinRT peripheral handle.
 - Those paired rows should also bind to live runtime devices by strongest available identity first (`knownDeviceId`, then peripheral/address, then only safe fallbacks). A shared local name must not let one live sensor borrow another paired row's address, signal, or connection badge.
 - That same duplicate-name guard applies to reconnect bookkeeping too: one connected/recovered node must never satisfy multiple saved name-only approvals just because they share a `localName`.
-- The legacy noble / raw-USB BLE path is not part of the supported Windows product flow and should not be used to justify changes in the active WinRT architecture.
+- The older noble / raw-USB BLE path is not part of the supported Windows product flow and should not be used to justify changes in the active WinRT architecture.

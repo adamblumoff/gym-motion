@@ -55,7 +55,7 @@ async function main() {
   }
 
   if (violations.length > 0) {
-    console.error("Forbidden legacy imports found in desktop/backend code:");
+    console.error("Forbidden archived import paths found in desktop/backend code:");
     for (const file of violations) {
       console.error(`- ${file}`);
     }

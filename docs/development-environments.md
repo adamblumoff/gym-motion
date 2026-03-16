@@ -17,7 +17,7 @@ If those are not all in the same environment, the app can feel "wrong" even when
 Example:
 
 - local app at `http://localhost:3000`
-- local Next.js API routes
+- local API routes
 - production Railway database via `.env.local`
 - production ESP32 devices posting to Railway production
 
@@ -38,7 +38,7 @@ This is the cleanest software-development setup.
 
 Shape:
 
-- local Next.js app
+- local app
 - local Postgres or a dedicated Railway dev database
 - one ESP32 configured to post to the local or dev app
 
@@ -68,7 +68,7 @@ This is the mode we effectively had during debugging.
 
 Shape:
 
-- local Next.js app
+- local app
 - production Railway database
 - production devices still posting to production API
 

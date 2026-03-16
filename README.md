@@ -4,12 +4,11 @@ Windows-only Electron app for the current Gym Motion gateway and operator consol
 
 ## Current Status
 
-This repo now has two product tracks:
+This repo now has one active product track:
 
 - `desktop/`: the active Electron desktop app
-- `legacy/`: the archived Next.js plus gateway prototype that used to live at the repo root
 
-Firmware, bench scripts, and repo docs stay at the top level because they still support the hardware workflow during the desktop migration.
+Firmware, bench scripts, and repo docs stay at the top level because they support the current desktop and hardware workflow.
 
 ## Desktop Stack
 
@@ -51,7 +50,6 @@ Windows-side testing guide:
 - `desktop/preload`: typed preload bridge
 - `desktop/ui`: renderer app
 - `desktop/core`: shared contracts, helpers, and runtime abstractions
-- `legacy`: archived web-plus-gateway implementation
 
 ## Notes
 
@@ -62,7 +60,7 @@ Windows-side testing guide:
 - On Windows, disconnected approved nodes now stay in a silent reconnect search until the sidecar rediscovers them and starts a real reconnect attempt. After 20 failed reconnect attempts for one paired node, the homepage sensor card shows a local forget-device prompt for that node.
 - On Windows, when a managed node reconnects, the gateway sends an explicit runtime `sync-now` control command so the node immediately republishes its current telemetry snapshot after gateway restarts or link recovery.
 - Firmware now also expects a Windows app-session lease over BLE. The sidecar renews that lease every 5 seconds, and the node expires it after 15 seconds so it can drop stale Windows sessions, restart advertising, and become reconnectable again if the app disappears without a clean BLE disconnect.
-- On Windows, the desktop app uses the native Rust WinRT BLE sidecar so it can see built-in Bluetooth adapters. The legacy noble gateway remains in the repo only as a fallback/dev artifact and is not the active product runtime.
+- On Windows, the desktop app uses the native Rust WinRT BLE sidecar so it can see built-in Bluetooth adapters. Non-Windows BLE runtime code that remains in `backend/` is bench/dev support only and is not the active product runtime.
 - Real BLE validation should happen from a Windows-side clone at `C:\Users\adamb\Code\gym-motion`, with `.env.local` copied into that repo after cloning.
 - Windows-side local development now requires the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build the native BLE sidecar before launching or packaging.
 - The plan still assumes remote Postgres remains the source of truth for v1.

@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
-import { uploadFirmwareObject } from "@/lib/storage-bucket";
+import { createFirmwareRelease } from "../backend/data/repository";
+import { uploadFirmwareObject } from "../backend/storage-bucket";
+import { loadRepoEnv } from "./load-env";
 
-const apiBaseUrl = process.env.API_URL ?? "https://gym-motion-production.up.railway.app";
+loadRepoEnv();
 
 function readArg(name: string) {
   const index = process.argv.indexOf(`--${name}`);
@@ -15,18 +17,35 @@ function readArg(name: string) {
   return undefined;
 }
 
+function printHelp() {
+  console.log(`Usage: bun run scripts/publish-firmware.ts --version <semver> [options]
+
+Options:
+  --version <value>   Required firmware version to register
+  --rollout <state>   Rollout state: draft | active | paused (default: active)
+  --file <path>       Firmware binary path (default: build/firmware/gym_motion.ino.bin)
+  --sha <path>        SHA256 checksum file path
+  --md5 <path>        MD5 checksum file path
+`);
+}
+
 async function readChecksum(filePath: string) {
   const contents = await readFile(filePath, "utf8");
   return contents.trim().split(/\s+/)[0] ?? "";
 }
 
-async function resolveGitSha() {
+function resolveGitSha() {
   return execFileSync("git", ["rev-parse", "HEAD"], {
     encoding: "utf8",
   }).trim();
 }
 
 async function main() {
+  if (process.argv.includes("--help")) {
+    printHelp();
+    return;
+  }
+
   const version = readArg("version");
 
   if (!version) {
@@ -38,34 +57,23 @@ async function main() {
   const shaFile = readArg("sha") ?? `${filePath}.sha256`;
   const md5File = readArg("md5") ?? `${filePath}.md5`;
   const objectKey = `reference-node-firmware/${version}/gym_motion.ino.bin`;
-  const gitSha = await resolveGitSha();
+  const gitSha = resolveGitSha();
 
   const upload = await uploadFirmwareObject({
     filePath,
     objectKey,
   });
 
-  const payload = {
+  const release = await createFirmwareRelease({
     version,
     gitSha,
     assetUrl: objectKey,
     sha256: await readChecksum(shaFile),
     md5: await readChecksum(md5File),
     sizeBytes: upload.sizeBytes,
-    rolloutState,
-  };
-
-  const response = await fetch(`${apiBaseUrl}/api/firmware/releases`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+    rolloutState:
+      rolloutState === "draft" || rolloutState === "paused" ? rolloutState : "active",
   });
-
-  if (!response.ok) {
-    throw new Error(`Release registration failed with ${response.status}: ${await response.text()}`);
-  }
 
   console.log(
     JSON.stringify(
@@ -74,8 +82,7 @@ async function main() {
         artifactType: "reference-ble-node-firmware",
         bucket: upload.bucketName,
         objectKey,
-        apiBaseUrl,
-        payload,
+        release,
       },
       null,
       2,

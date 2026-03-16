@@ -1,4 +1,7 @@
-import { getDb } from "@/lib/db";
+import { getDb } from "../backend/data/db";
+import { loadRepoEnv } from "./load-env";
+
+loadRepoEnv();
 
 const TIMESTAMP_COLUMNS = [
   { table: "devices", column: "updated_at" },
@@ -10,7 +13,19 @@ const TIMESTAMP_COLUMNS = [
   { table: "device_logs", column: "received_at" },
 ] as const;
 
+function printHelp() {
+  console.log(`Usage: bun run scripts/migrate-timestamps.ts
+
+Converts timestamp-without-time-zone columns to timestamptz using UTC semantics.
+`);
+}
+
 async function main() {
+  if (process.argv.includes("--help")) {
+    printHelp();
+    return;
+  }
+
   const db = getDb();
 
   try {

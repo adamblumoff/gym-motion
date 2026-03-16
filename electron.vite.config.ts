@@ -8,7 +8,6 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "legacy/src"),
         "@core": path.resolve(__dirname, "desktop/core"),
         "@main": path.resolve(__dirname, "desktop/main"),
       },
