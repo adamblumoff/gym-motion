@@ -1,12 +1,15 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use btleplug::{
     api::{Characteristic, Peripheral as _, WriteType},
     platform::Peripheral,
 };
 use serde_json::json;
+use tokio::time::{sleep, Duration};
 
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const CONTROL_CHUNK_SIZE: usize = 120;
+const COMMAND_WRITE_ATTEMPTS: u32 = 3;
+const COMMAND_WRITE_RETRY_DELAY_MS: u64 = 200;
 
 pub(crate) async fn send_app_session_lease(
     peripheral: &Peripheral,
@@ -40,13 +43,33 @@ pub(crate) async fn write_chunked_json_command(
     characteristic: &Characteristic,
     payload: &str,
 ) -> Result<()> {
-    for chunk in control_command_frames(payload) {
-        peripheral
-            .write(characteristic, &chunk, WriteType::WithResponse)
-            .await?;
+    let frames = control_command_frames(payload);
+    for attempt in 1..=COMMAND_WRITE_ATTEMPTS {
+        let mut last_error = None;
+        for chunk in &frames {
+            if let Err(error) = peripheral
+                .write(characteristic, chunk, WriteType::WithResponse)
+                .await
+            {
+                last_error = Some(error);
+                break;
+            }
+        }
+
+        if let Some(error) = last_error {
+            if attempt == COMMAND_WRITE_ATTEMPTS {
+                return Err(error).with_context(|| {
+                    format!("chunked control write failed after {COMMAND_WRITE_ATTEMPTS} attempts")
+                });
+            }
+            sleep(Duration::from_millis(COMMAND_WRITE_RETRY_DELAY_MS)).await;
+            continue;
+        }
+
+        return Ok(());
     }
 
-    Ok(())
+    unreachable!("command write loop should return before exhausting attempts");
 }
 
 pub(crate) fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {

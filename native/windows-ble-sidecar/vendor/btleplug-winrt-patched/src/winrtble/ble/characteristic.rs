@@ -39,7 +39,6 @@ pub type NotifiyEventHandler = Box<dyn Fn(Vec<u8>) + Send>;
 
 const SUBSCRIBE_ATTEMPTS: u32 = 3;
 const SUBSCRIBE_RETRY_DELAY: Duration = Duration::from_millis(250);
-
 impl From<WriteType> for GattWriteOption {
     fn from(val: WriteType) -> Self {
         match val {
