@@ -2,8 +2,6 @@ use std::future::IntoFuture;
 
 use anyhow::Result;
 
-use crate::protocol::AdapterSummary;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WinrtAdapterDescriptor {
     pub(crate) id: String,
@@ -11,19 +9,6 @@ pub(crate) struct WinrtAdapterDescriptor {
     pub(crate) is_available: bool,
     pub(crate) issue: Option<String>,
     pub(crate) details: Vec<String>,
-}
-
-impl WinrtAdapterDescriptor {
-    pub(crate) fn to_summary(&self) -> AdapterSummary {
-        AdapterSummary {
-            id: self.id.clone(),
-            label: self.label.clone(),
-            transport: "winrt".to_string(),
-            is_available: self.is_available,
-            issue: self.issue.clone(),
-            details: self.details.clone(),
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -70,7 +55,7 @@ mod tests {
     use super::WinrtAdapterDescriptor;
 
     #[test]
-    fn adapter_descriptors_convert_to_wire_summaries() {
+    fn adapter_descriptors_keep_expected_fields() {
         let descriptor = WinrtAdapterDescriptor {
             id: "winrt:0".to_string(),
             label: "Bluetooth adapter".to_string(),
@@ -79,10 +64,8 @@ mod tests {
             details: vec!["state:On".to_string()],
         };
 
-        let summary = descriptor.to_summary();
-
-        assert_eq!(summary.id, "winrt:0");
-        assert_eq!(summary.transport, "winrt");
-        assert!(summary.is_available);
+        assert_eq!(descriptor.id, "winrt:0");
+        assert_eq!(descriptor.label, "Bluetooth adapter");
+        assert!(descriptor.is_available);
     }
 }

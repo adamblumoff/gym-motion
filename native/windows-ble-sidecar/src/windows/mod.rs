@@ -376,19 +376,13 @@ impl Sidecar {
 
     async fn list_adapters(&self) -> Result<Vec<AdapterSummary>> {
         let winrt_adapters = list_winrt_adapters().await?;
-
-        if !winrt_adapters.is_empty() {
-            return Ok(winrt_adapters
-                .into_iter()
-                .map(|adapter| adapter.to_summary())
-                .collect());
-        }
-
         let adapters = self.manager.adapters().await?;
         let mut summaries = Vec::with_capacity(adapters.len());
 
         for (index, adapter) in adapters.into_iter().enumerate() {
-            let label = adapter
+            // Keep btleplug as the canonical adapter source until session startup
+            // is fully migrated to raw WinRT, otherwise adapter ids can drift.
+            let fallback_label = adapter
                 .adapter_info()
                 .await
                 .unwrap_or_else(|_| format!("Bluetooth adapter {}", index + 1));
@@ -396,17 +390,28 @@ impl Sidecar {
                 .adapter_state()
                 .await
                 .unwrap_or(CentralState::Unknown);
+            let winrt_descriptor = winrt_adapters.get(index);
+            let mut details = vec![format!("state:{:?}", state)];
+            if let Some(descriptor) = winrt_descriptor {
+                for detail in &descriptor.details {
+                    if !details.contains(detail) {
+                        details.push(detail.clone());
+                    }
+                }
+            }
             summaries.push(AdapterSummary {
                 id: format!("winrt:{index}"),
-                label,
+                label: winrt_descriptor
+                    .map(|descriptor| descriptor.label.clone())
+                    .filter(|label| !label.trim().is_empty())
+                    .unwrap_or(fallback_label),
                 transport: "winrt".to_string(),
                 is_available: state == CentralState::PoweredOn,
-                issue: if state == CentralState::PoweredOff {
-                    Some("Adapter is powered off.".to_string())
-                } else {
-                    None
+                issue: match state {
+                    CentralState::PoweredOff => Some("Adapter is powered off.".to_string()),
+                    _ => winrt_descriptor.and_then(|descriptor| descriptor.issue.clone()),
                 },
-                details: vec![format!("state:{:?}", state)],
+                details,
             });
         }
 
