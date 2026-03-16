@@ -457,64 +457,66 @@ impl ApiPeripheral for Peripheral {
     async fn discover_services(&self) -> Result<()> {
         let mut device = self.shared.device.lock().await;
         if let Some(ref mut device) = *device {
+            // WinRT GATT objects can become invalid across disconnect/reconnect churn even when
+            // the service UUIDs are unchanged, so rebuild the service/characteristic cache from
+            // fresh handles on every discovery pass.
+            self.shared.ble_services.clear();
             let gatt_services = device.discover_services().await?;
             for service in gatt_services {
                 let uuid = utils::to_uuid(&service.Uuid().unwrap());
-                if !self.shared.ble_services.contains_key(&uuid) {
-                    match BLEDevice::get_characteristics(service).await {
-                        Ok(characteristics) => {
-                            let characteristics = characteristics
-                                .into_iter()
-                                .fold(
-                                    // Only consider the first characteristic of each UUID
-                                    // This "should" be unique, but of course it's not enforced
-                                    HashMap::<GUID, GattCharacteristic>::new(),
-                                    |mut map, gatt_characteristic| {
-                                        let uuid = gatt_characteristic.Uuid().unwrap_or_default();
-                                        if !map.contains_key(&uuid) {
-                                            map.insert(uuid, gatt_characteristic);
-                                        }
-                                        map
-                                    },
-                                )
-                                .into_iter()
-                                .map(|(_, characteristic)| async {
-                                    let c = characteristic.clone();
-                                    (
-                                        characteristic,
-                                        BLEDevice::get_characteristic_descriptors(&c)
-                                            .await
-                                            .unwrap_or(Vec::new())
-                                            .into_iter()
-                                            .map(|descriptor| {
-                                                let descriptor = BLEDescriptor::new(descriptor);
-                                                (descriptor.uuid(), descriptor)
-                                            })
-                                            .collect(),
-                                    )
-                                });
-
-                            let characteristics = futures::future::join_all(characteristics)
-                                .await
-                                .into_iter()
-                                .map(|(characteristic, descriptors)| {
-                                    let characteristic =
-                                        BLECharacteristic::new(characteristic, descriptors);
-                                    (characteristic.uuid(), characteristic)
-                                })
-                                .collect();
-
-                            self.shared.ble_services.insert(
-                                uuid,
-                                BLEService {
-                                    uuid,
-                                    characteristics,
+                match BLEDevice::get_characteristics(service).await {
+                    Ok(characteristics) => {
+                        let characteristics = characteristics
+                            .into_iter()
+                            .fold(
+                                // Only consider the first characteristic of each UUID
+                                // This "should" be unique, but of course it's not enforced
+                                HashMap::<GUID, GattCharacteristic>::new(),
+                                |mut map, gatt_characteristic| {
+                                    let uuid = gatt_characteristic.Uuid().unwrap_or_default();
+                                    if !map.contains_key(&uuid) {
+                                        map.insert(uuid, gatt_characteristic);
+                                    }
+                                    map
                                 },
-                            );
-                        }
-                        Err(e) => {
-                            warn!("get_characteristics_async {:?}", e);
-                        }
+                            )
+                            .into_iter()
+                            .map(|(_, characteristic)| async {
+                                let c = characteristic.clone();
+                                (
+                                    characteristic,
+                                    BLEDevice::get_characteristic_descriptors(&c)
+                                        .await
+                                        .unwrap_or(Vec::new())
+                                        .into_iter()
+                                        .map(|descriptor| {
+                                            let descriptor = BLEDescriptor::new(descriptor);
+                                            (descriptor.uuid(), descriptor)
+                                        })
+                                        .collect(),
+                                )
+                            });
+
+                        let characteristics = futures::future::join_all(characteristics)
+                            .await
+                            .into_iter()
+                            .map(|(characteristic, descriptors)| {
+                                let characteristic =
+                                    BLECharacteristic::new(characteristic, descriptors);
+                                (characteristic.uuid(), characteristic)
+                            })
+                            .collect();
+
+                        self.shared.ble_services.insert(
+                            uuid,
+                            BLEService {
+                                uuid,
+                                characteristics,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        warn!("get_characteristics_async {:?}", e);
                     }
                 }
             }
