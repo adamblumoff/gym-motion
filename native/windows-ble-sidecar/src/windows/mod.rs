@@ -50,6 +50,7 @@ const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 2_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
+const RECONNECT_CONNECT_SETTLE_MS: u64 = 900;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
 const GATT_SETUP_RETRY_DELAY_MS: u64 = 750;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 3;
@@ -1494,6 +1495,7 @@ async fn run_session(
                                 let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
+                                        adapter.clone(),
                                         reconnect_peripheral,
                                         node.clone(),
                                         writer_clone.clone(),
@@ -1783,6 +1785,7 @@ async fn discovered_node_for_event(
 }
 
 async fn connect_and_stream(
+    adapter: Adapter,
     peripheral: Peripheral,
     node: DiscoveredNode,
     writer: EventWriter,
@@ -1820,8 +1823,30 @@ async fn connect_and_stream(
 
     let mut gatt_ready = false;
     let mut last_gatt_error = None;
+    let mut active_peripheral = peripheral;
 
     for attempt in 1..=GATT_SETUP_RETRY_ATTEMPTS {
+        if attempt == 1 {
+            writer
+                .send(&Event::Log {
+                    level: "info".to_string(),
+                    message: "Waiting briefly for WinRT reconnect transport to settle.".to_string(),
+                    details: Some(json!({
+                        "peripheralId": node.peripheral_id,
+                        "knownDeviceId": node.known_device_id,
+                        "address": node.address,
+                        "reconnect": reconnect,
+                        "delayMs": RECONNECT_CONNECT_SETTLE_MS,
+                    })),
+                })
+                .await?;
+            sleep(Duration::from_millis(RECONNECT_CONNECT_SETTLE_MS)).await;
+        }
+
+        if let Some(refreshed_peripheral) = peripheral_for_node(&adapter, &node).await {
+            active_peripheral = refreshed_peripheral;
+        }
+
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -1838,10 +1863,10 @@ async fn connect_and_stream(
             .await?;
 
         writer.send(&log_handshake_step("checking transport connection")).await?;
-        let was_connected = peripheral.is_connected().await.unwrap_or(false);
+        let was_connected = active_peripheral.is_connected().await.unwrap_or(false);
         if !was_connected {
             writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
-            if let Err(error) = peripheral.connect().await {
+            if let Err(error) = active_peripheral.connect().await {
                 writer
                     .send(&Event::Log {
                         level: "warn".to_string(),
@@ -1866,7 +1891,7 @@ async fn connect_and_stream(
             sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
         }
 
-        let connected_after_attempt = peripheral.is_connected().await.unwrap_or(false);
+        let connected_after_attempt = active_peripheral.is_connected().await.unwrap_or(false);
         if !connected_after_attempt {
             let Some(error) = last_gatt_error.take() else {
                 last_gatt_error = Some(anyhow!(
@@ -1901,7 +1926,7 @@ async fn connect_and_stream(
 
         for discovery_attempt in 1..=SERVICE_DISCOVERY_RETRY_ATTEMPTS {
             writer.send(&log_handshake_step("discovering services")).await?;
-            match peripheral.discover_services().await {
+            match active_peripheral.discover_services().await {
                 Ok(()) => {
                     gatt_ready = true;
                     last_gatt_error = None;
@@ -1962,8 +1987,8 @@ async fn connect_and_stream(
             })
             .await?;
 
-        if peripheral.is_connected().await.unwrap_or(false) {
-            let _ = peripheral.disconnect().await;
+        if active_peripheral.is_connected().await.unwrap_or(false) {
+            let _ = active_peripheral.disconnect().await;
             sleep(Duration::from_millis(100)).await;
         }
         sleep(Duration::from_millis(GATT_SETUP_RETRY_DELAY_MS)).await;
@@ -1972,6 +1997,8 @@ async fn connect_and_stream(
     if !gatt_ready {
         return Err(anyhow!("gatt setup never became ready for {}", node.label));
     }
+
+    let peripheral = active_peripheral;
 
     let setup_result = async {
         writer
