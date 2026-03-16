@@ -3,36 +3,19 @@ import type {
   DiscoveredNodeSummary,
   GatewayRuntimeDeviceSummary,
 } from "@core/contracts";
-import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
+import {
+  findMatchingGatewayDeviceForApprovedNode,
+  matchesApprovedNodeIdentity,
+  nodeRuleId,
+  type ApprovedNodeIdentity,
+} from "@core/approved-node-runtime-match";
 
-export { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
+export {
+  findMatchingGatewayDeviceForApprovedNode,
+  nodeRuleId,
+} from "@core/approved-node-runtime-match";
 
-type DiscoveryIdentity = {
-  peripheralId: string | null;
-  address: string | null;
-  localName: string | null;
-  knownDeviceId: string | null;
-};
-
-export function nodeRuleId(identity: DiscoveryIdentity) {
-  if (identity.knownDeviceId) {
-    return `known:${identity.knownDeviceId}`;
-  }
-
-  if (identity.peripheralId) {
-    return `peripheral:${identity.peripheralId}`;
-  }
-
-  if (identity.address) {
-    return `address:${identity.address}`;
-  }
-
-  if (identity.localName) {
-    return `name:${identity.localName}`;
-  }
-
-  return "unknown";
-}
+type DiscoveryIdentity = ApprovedNodeIdentity;
 
 export function createApprovedNodeRule(
   node: Pick<
@@ -55,26 +38,7 @@ export function matchesApprovedNodeRule(
   identity: DiscoveryIdentity,
   approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
-  const canUseLocalNameFallback =
-    !rule.knownDeviceId &&
-    !rule.peripheralId &&
-    !rule.address &&
-    Boolean(rule.localName) &&
-    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
-
-  return Boolean(
-    (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
-      (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
-      addressIdentityMatch(rule.address, identity.address) ||
-      (canUseLocalNameFallback && identity.localName === rule.localName),
-  );
-}
-
-function addressIdentityMatch(
-  left: string | null | undefined,
-  right: string | null | undefined,
-) {
-  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+  return matchesApprovedNodeIdentity(rule, identity, approvedNodes);
 }
 
 export function reconcileApprovedNodeRule(

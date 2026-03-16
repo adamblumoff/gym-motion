@@ -1483,33 +1483,6 @@ async fn run_session(
                                 rejected_candidates_this_burst.saturating_add(1);
                         }
                     }
-                    CentralEvent::DeviceConnected(id) => {
-                        let Some(peripheral) =
-                            peripheral_for_event(&adapter, &writer, "device_connected", &id).await
-                        else {
-                            continue;
-                        };
-                        let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_for_event(
-                            &peripheral,
-                            &writer,
-                            "device_connected",
-                            &config,
-                            &allowed,
-                            &known_device_ids,
-                            allow_approved_identity_fallback(
-                                &allowed,
-                                &connected_nodes,
-                                &reconnect_states,
-                                manual_scan_deadline,
-                                Instant::now(),
-                            ),
-                        )
-                        .await
-                        {
-                            let _ = node;
-                        }
-                    }
                     CentralEvent::DeviceDisconnected(id) => {
                         let Some(peripheral) = peripheral_for_event(
                             &adapter,
@@ -1960,7 +1933,6 @@ async fn connect_and_stream(
     writer.send(&log_handshake_step("waiting for telemetry")).await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut session_healthy_reported = false;
-    let mut connected_identity_confirmed = node.known_device_id.is_some();
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
     let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
     let lease_peripheral = peripheral.clone();
@@ -2028,9 +2000,6 @@ async fn connect_and_stream(
                                         reconnect: reconnect.clone(),
                                     })
                                     .await?;
-                            }
-                            if !connected_identity_confirmed {
-                                connected_identity_confirmed = true;
                             }
                             writer
                                 .send(&Event::Telemetry {

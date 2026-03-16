@@ -31,6 +31,8 @@
 - Non-Windows gateway BLE code still exists in the repo for legacy/dev support, but it is not the active product target and should not drive product decisions by default.
 - On Windows, the app should auto-bind Bluetooth internally. The operator-facing `Setup` tab is for node connection and node management only, not adapter selection, and Bluetooth discovery should be manual-only rather than background scanning.
 - Important reconnect regression note: do not keep WinRT scanning active while a reconnect handshake is in flight. That scan/connect overlap caused `connect()` and then `discover_services()` to report `Not connected` even though the ESP32 saw a BLE client, which prevented `app-session-bootstrap` and `app-session-lease` from ever being written and made the node drop the session as stale.
+- Approved-node identity policy note: keep one desktop-core source of truth for matching order (`knownDeviceId`, then `peripheralId`, then BLE address, then unique `localName`). Do not re-implement that policy separately in setup UI, setup merging, or other Electron helpers.
+- Ownership note: the WinRT sidecar owns BLE scan/reconnect/handshake truth, the firmware owns app-session lease truth, the runtime server owns projection/cache only, and Electron main owns persistence/app lifecycle.
 - Windows desktop dev and packaging require the Rust MSVC toolchain because `bun run dev` and `bun run build:win` build `native/windows-ble-sidecar` locally.
 - Current native Linux gateway bench host: `adam-blumoff@192.168.1.174`
 - Quick connect command from the main dev machine: `ssh adam-blumoff@192.168.1.174`

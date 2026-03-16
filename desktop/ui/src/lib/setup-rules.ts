@@ -1,37 +1,13 @@
 import type { ApprovedNodeRule, DesktopSetupState } from "@core/contracts";
+import {
+  forgetApprovedNodeRules as forgetApprovedNodeRulesFromIdentity,
+  matchesApprovedNodeIdentity as matchesApprovedNodeIdentityFromCore,
+  type ApprovedNodeIdentity,
+} from "@core/approved-node-runtime-match";
 
-type DiscoveryIdentity = {
-  peripheralId: string | null;
-  address: string | null;
-  localName: string | null;
-  knownDeviceId: string | null;
-};
+type DiscoveryIdentity = ApprovedNodeIdentity;
 
-type ForgetIdentity = DiscoveryIdentity & {
-  id: string | null;
-};
-
-function exactIdentityMatch(
-  left: string | null | undefined,
-  right: string | null | undefined,
-) {
-  return Boolean(left && right && left === right);
-}
-
-function addressIdentityMatch(
-  left: string | null | undefined,
-  right: string | null | undefined,
-) {
-  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
-}
-
-function forgetFieldMatches(
-  ruleValue: string | null | undefined,
-  identityValue: string | null | undefined,
-  matcher: (left: string | null | undefined, right: string | null | undefined) => boolean,
-) {
-  return Boolean(ruleValue && identityValue && matcher(ruleValue, identityValue));
-}
+type ForgetIdentity = DiscoveryIdentity & { id: string | null };
 
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
@@ -88,50 +64,7 @@ export function forgetApprovedNodeRules(
   approvedNodes: ApprovedNodeRule[],
   identity: string | ForgetIdentity,
 ) {
-  const forgetIdentity: ForgetIdentity =
-    typeof identity === "string"
-      ? {
-          id: identity,
-          knownDeviceId: identity,
-          peripheralId: identity,
-          address: null,
-          localName: null,
-        }
-      : identity;
-
-  const localNameMatches = approvedNodes.filter((rule) =>
-    forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch),
-  );
-  const allowLocalNameFallback = localNameMatches.length === 1;
-
-  return approvedNodes.filter((rule) => {
-    const strongIdentityMatch =
-      forgetFieldMatches(rule.id, forgetIdentity.id, exactIdentityMatch) ||
-      forgetFieldMatches(
-        rule.knownDeviceId,
-        forgetIdentity.knownDeviceId,
-        exactIdentityMatch,
-      ) ||
-      forgetFieldMatches(
-        rule.peripheralId,
-        forgetIdentity.peripheralId,
-        exactIdentityMatch,
-      ) ||
-      forgetFieldMatches(rule.address, forgetIdentity.address, addressIdentityMatch);
-
-    if (strongIdentityMatch) {
-      return false;
-    }
-
-    if (
-      allowLocalNameFallback &&
-      forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch)
-    ) {
-      return false;
-    }
-
-    return true;
-  });
+  return forgetApprovedNodeRulesFromIdentity(approvedNodes, identity);
 }
 
 export function matchesApprovedNodeIdentity(
@@ -139,17 +72,5 @@ export function matchesApprovedNodeIdentity(
   identity: DiscoveryIdentity,
   approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
-  const canUseLocalNameFallback =
-    !rule.knownDeviceId &&
-    !rule.peripheralId &&
-    !rule.address &&
-    Boolean(rule.localName) &&
-    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
-
-  return Boolean(
-    exactIdentityMatch(rule.knownDeviceId, identity.knownDeviceId) ||
-      exactIdentityMatch(rule.peripheralId, identity.peripheralId) ||
-      addressIdentityMatch(rule.address, identity.address) ||
-      (canUseLocalNameFallback && exactIdentityMatch(rule.localName, identity.localName)),
-  );
+  return matchesApprovedNodeIdentityFromCore(rule, identity, approvedNodes);
 }
