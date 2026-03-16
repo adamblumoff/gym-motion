@@ -5,11 +5,13 @@ use std::{
 
 use crate::protocol::{ApprovedNodeRule, DiscoveredNode, ReconnectStatus};
 
-use super::config::Config;
+use super::{config::Config, registry::DeviceRecord};
 
-const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
-const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
-const APPROVED_RECONNECT_STALL_MS: u64 = 15_000;
+pub(crate) const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
+pub(crate) const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
+pub(crate) const APPROVED_RECONNECT_STALL_MS: u64 = 3_000;
+const APPROVED_RECONNECT_READY_SIGHTINGS: u32 = 2;
+const APPROVED_RECONNECT_READY_WINDOW_MS: u64 = 1_000;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ApprovedReconnectState {
@@ -181,6 +183,34 @@ pub(crate) fn classify_discovery_candidate(
             }),
         matched_known_device_id,
     }
+}
+
+pub(crate) fn reconnect_candidate_ready(
+    classification: &DiscoveryClassification,
+    local_name_present: bool,
+    record: Option<&DeviceRecord>,
+) -> bool {
+    if classification.runtime_service_matched {
+        return true;
+    }
+
+    if !classification.approved_identity_matched {
+        return false;
+    }
+
+    if local_name_present {
+        return true;
+    }
+
+    record
+        .map(|device| {
+            device.sightings_in_epoch >= APPROVED_RECONNECT_READY_SIGHTINGS
+                && device
+                    .last_seen_at_monotonic
+                    .duration_since(device.first_seen_at_monotonic)
+                    <= Duration::from_millis(APPROVED_RECONNECT_READY_WINDOW_MS)
+        })
+        .unwrap_or(false)
 }
 
 pub(crate) fn approved_nodes_pending_connection(

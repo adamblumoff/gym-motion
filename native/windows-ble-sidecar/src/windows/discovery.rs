@@ -1,29 +1,40 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use btleplug::{api::Peripheral as _, platform::Peripheral};
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
 
-use super::{approval::classify_discovery_candidate, config::Config};
+use super::{
+    approval::{classify_discovery_candidate, DiscoveryClassification},
+    config::Config,
+};
 
-pub(crate) async fn discovered_node_from_peripheral(
+pub(crate) struct DiscoveryCandidate {
+    pub(crate) node: DiscoveredNode,
+    pub(crate) classification: DiscoveryClassification,
+    pub(crate) service_uuids: HashSet<Uuid>,
+}
+
+pub(crate) async fn discovery_candidate_from_peripheral(
     peripheral: &Peripheral,
     config: &Config,
     allowed_nodes: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
     allow_approved_identity_fallback: bool,
-) -> Result<Option<DiscoveredNode>> {
+) -> Result<Option<DiscoveryCandidate>> {
     let Some(properties) = peripheral.properties().await? else {
         return Ok(None);
     };
 
     let local_name = properties.local_name.or(properties.advertisement_name);
-    let has_runtime_service = properties
-        .services
-        .iter()
-        .any(|uuid| *uuid == config.service_uuid);
+    let service_uuids = properties.services.iter().copied().collect::<HashSet<_>>();
+    let has_runtime_service = service_uuids.contains(&config.service_uuid);
     let address = Some(properties.address.to_string());
     let peripheral_id = peripheral.id().to_string();
     let known_device_ids_guard = known_device_ids.read().await;
@@ -46,21 +57,25 @@ pub(crate) async fn discovered_node_from_peripheral(
         return Ok(None);
     }
 
-    let known_device_id = classification.matched_known_device_id;
+    let known_device_id = classification.matched_known_device_id.clone();
     let label = local_name
         .clone()
         .or_else(|| known_device_id.clone())
         .unwrap_or_else(|| peripheral_id.clone());
 
-    Ok(Some(DiscoveredNode {
-        id: format!("peripheral:{peripheral_id}"),
-        label,
-        peripheral_id: Some(peripheral_id),
-        address,
-        local_name,
-        known_device_id,
-        last_rssi: properties.rssi,
-        last_seen_at: Some(iso_now()),
+    Ok(Some(DiscoveryCandidate {
+        node: DiscoveredNode {
+            id: format!("peripheral:{peripheral_id}"),
+            label,
+            peripheral_id: Some(peripheral_id),
+            address,
+            local_name,
+            known_device_id,
+            last_rssi: properties.rssi,
+            last_seen_at: Some(iso_now()),
+        },
+        classification,
+        service_uuids,
     }))
 }
 

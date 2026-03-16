@@ -18,3 +18,12 @@ uuid = { version = "1.18.1", features = ["serde", "v4"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 btleplug = { path = "vendor/btleplug-winrt-patched" }
+windows = { version = "0.62.1", features = [
+  "Devices_Bluetooth",
+  "Devices_Bluetooth_Advertisement",
+  "Devices_Bluetooth_GenericAttributeProfile",
+  "Devices_Enumeration",
+  "Devices_Radios",
+  "Foundation",
+  "Storage_Streams",
+] }

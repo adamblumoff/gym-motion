@@ -16,6 +16,7 @@ pub(crate) struct Config {
     pub(crate) control_uuid: Uuid,
     pub(crate) status_uuid: Uuid,
     pub(crate) device_name_prefix: String,
+    pub(crate) verbose_logging: bool,
 }
 
 impl Config {
@@ -27,6 +28,7 @@ impl Config {
             status_uuid: parse_uuid("BLE_STATUS_UUID", STATUS_UUID_FALLBACK)?,
             device_name_prefix: env::var("BLE_DEVICE_NAME_PREFIX")
                 .unwrap_or_else(|_| DEVICE_PREFIX_FALLBACK.to_string()),
+            verbose_logging: env_flag("GATEWAY_VERBOSE"),
         })
     }
 }
@@ -34,4 +36,10 @@ impl Config {
 fn parse_uuid(name: &str, fallback: &str) -> Result<Uuid> {
     let raw = env::var(name).unwrap_or_else(|_| fallback.to_string());
     Ok(Uuid::parse_str(&raw).with_context(|| format!("invalid {name}: {raw}"))?)
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }

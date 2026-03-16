@@ -316,6 +316,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "windows",
 ]
 
 [[package]]
