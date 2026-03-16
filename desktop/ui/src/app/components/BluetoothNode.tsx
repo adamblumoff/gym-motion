@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Activity, Battery, BatteryLow, BatteryWarning, Bluetooth, Trash2 } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../data';
