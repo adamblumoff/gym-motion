@@ -616,7 +616,6 @@ async fn run_session(
     command_sender: mpsc::UnboundedSender<SessionCommand>,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
 ) -> Result<()> {
-    let app_session_id = Uuid::new_v4().to_string();
     let adapter_state = normalize_adapter_state(
         adapter
             .adapter_state()
@@ -1210,7 +1209,6 @@ async fn run_session(
                                 let active_connections_clone = active_connections.clone();
                                 let known_device_ids_clone = known_device_ids.clone();
                                 let command_tx_clone = command_sender.clone();
-                                let app_session_id_clone = app_session_id.clone();
                                 let shutdown_clone = shutdown.clone();
                                 tokio::spawn(async move {
                                     let result = connect_and_stream(
@@ -1220,7 +1218,6 @@ async fn run_session(
                                         config_clone,
                                         allowed_nodes_clone,
                                         known_device_ids_clone,
-                                        app_session_id_clone,
                                         Some(ReconnectStatus {
                                             attempt: next_attempt,
                                             attempt_limit: RECONNECT_ATTEMPT_LIMIT,
@@ -1512,11 +1509,11 @@ async fn connect_and_stream(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
-    app_session_id: String,
     reconnect: Option<ReconnectStatus>,
     mut session_shutdown: watch::Receiver<bool>,
     command_sender: mpsc::UnboundedSender<SessionCommand>,
 ) -> Result<Option<String>> {
+    let app_session_id = Uuid::new_v4().to_string();
     let reconnect_started_at = Instant::now();
     let mut transport_ready_at: Option<Instant> = None;
     let mut gatt_ready_at: Option<Instant> = None;
