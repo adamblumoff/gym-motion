@@ -70,15 +70,22 @@ impl BLECharacteristic {
     pub async fn write_value(&self, data: &[u8], write_type: WriteType) -> Result<()> {
         let writer = DataWriter::new()?;
         writer.WriteBytes(data)?;
-        let operation = self
-            .characteristic
-            .WriteValueWithOptionAsync(&writer.DetachBuffer()?, write_type.into())?;
+        let operation = {
+            let buffer = writer.DetachBuffer()?;
+            self.characteristic
+                .WriteValueWithResultAndOptionAsync(&buffer, write_type.into())?
+        };
         let result = operation.into_future().await?;
-        if result == GattCommunicationStatus::Success {
+        let status = result.Status()?;
+        if status == GattCommunicationStatus::Success {
             Ok(())
         } else {
             Err(Error::Other(
-                format!("Windows UWP threw error on write: {:?}", result).into(),
+                format!(
+                    "Windows UWP threw error on write: {}",
+                    utils::format_gatt_result_details(status, result.ProtocolError().ok())
+                )
+                .into(),
             ))
         }
     }
@@ -130,22 +137,32 @@ impl BLECharacteristic {
         for attempt in 1..=SUBSCRIBE_ATTEMPTS {
             match self
                 .characteristic
-                .WriteClientCharacteristicConfigurationDescriptorAsync(config)?
+                .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(config)?
                 .into_future()
                 .await
             {
-                Ok(status) if status == GattCommunicationStatus::Success => {
-                    trace!("subscribe {:?}", status);
+                Ok(result) if result.Status()? == GattCommunicationStatus::Success => {
+                    trace!(
+                        "subscribe {}",
+                        utils::format_gatt_result_details(
+                            result.Status()?,
+                            result.ProtocolError().ok()
+                        )
+                    );
                     return Ok(());
                 }
-                Ok(status) => {
-                    trace!("subscribe {:?}", status);
+                Ok(result) => {
+                    let details = utils::format_gatt_result_details(
+                        result.Status()?,
+                        result.ProtocolError().ok(),
+                    );
+                    trace!("subscribe {}", details);
                     if attempt == SUBSCRIBE_ATTEMPTS {
                         if let Some(token) = self.notify_token.take() {
                             let _ = self.characteristic.RemoveValueChanged(token);
                         }
                         return Err(Error::Other(
-                            format!("Windows UWP threw error on subscribe: {:?}", status).into(),
+                            format!("Windows UWP threw error on subscribe: {}", details).into(),
                         ));
                     }
                 }

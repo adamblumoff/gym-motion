@@ -20,6 +20,7 @@ use windows::{
         GattCharacteristicProperties, GattClientCharacteristicConfigurationDescriptorValue,
         GattCommunicationStatus,
     },
+    Foundation::IReference,
     Storage::Streams::{DataReader, IBuffer},
 };
 
@@ -35,6 +36,34 @@ pub fn to_error(status: GattCommunicationStatus) -> Result<()> {
     } else {
         Err(Error::Other("Communication Error:".to_string().into()))
     }
+}
+
+pub fn format_gatt_status(status: GattCommunicationStatus) -> String {
+    if status == GattCommunicationStatus::Success {
+        "Success".to_string()
+    } else if status == GattCommunicationStatus::Unreachable {
+        "Unreachable".to_string()
+    } else if status == GattCommunicationStatus::AccessDenied {
+        "AccessDenied".to_string()
+    } else if status == GattCommunicationStatus::ProtocolError {
+        "ProtocolError".to_string()
+    } else {
+        format!("Unknown({})", status.0)
+    }
+}
+
+pub fn format_gatt_result_details(
+    status: GattCommunicationStatus,
+    protocol_error: Option<IReference<u8>>,
+) -> String {
+    let mut details = format!("status={}", format_gatt_status(status));
+    if let Some(protocol_error) = protocol_error {
+        match protocol_error.Value() {
+            Ok(code) => details.push_str(&format!(", protocol_error=0x{code:02X}")),
+            Err(error) => details.push_str(&format!(", protocol_error_read_error={error}")),
+        }
+    }
+    details
 }
 
 pub fn to_descriptor_value(
