@@ -537,7 +537,7 @@ impl Sidecar {
                 writer
                     .error(
                         format!("Windows BLE session failed: {error}"),
-                        Some(json!({ "error": error.to_string() })),
+                        Some(json!({ "error": format_error_chain(&error) })),
                     )
                     .await;
             }
@@ -1682,7 +1682,7 @@ async fn connect_and_stream(
                             "reconnect": reconnect,
                             "error": last_gatt_error
                                 .as_ref()
-                                .map(ToString::to_string),
+                                .map(format_error_chain),
                         })),
                     })
                     .await?;
@@ -1717,7 +1717,7 @@ async fn connect_and_stream(
                         "knownDeviceId": node.known_device_id,
                         "address": node.address,
                         "reconnect": reconnect,
-                        "error": error.to_string(),
+                        "error": format_error_chain(&error),
                     })),
                 })
                 .await?;
@@ -1786,7 +1786,7 @@ async fn connect_and_stream(
                     "knownDeviceId": node.known_device_id,
                     "address": node.address,
                     "reconnect": reconnect,
-                    "error": error.to_string(),
+                    "error": format_error_chain(&error),
                 })),
             })
             .await?;
@@ -1892,7 +1892,7 @@ async fn connect_and_stream(
                     "reconnect": reconnect,
                     "setupAttempt": setup_attempt,
                     "setupAttemptLimit": PRE_SESSION_SETUP_ATTEMPTS,
-                    "error": error.to_string(),
+                    "error": format_error_chain(error),
                 })),
             })
             .await?;
@@ -1916,7 +1916,7 @@ async fn connect_and_stream(
                             "knownDeviceId": node.known_device_id,
                             "address": node.address,
                             "reconnect": reconnect,
-                            "error": error.to_string(),
+                            "error": format_error_chain(&error),
                         })),
                     })
                     .await?;
@@ -1966,7 +1966,7 @@ async fn connect_and_stream(
                         &lease_characteristic,
                         &lease_session_id,
                     ).await {
-                        let _ = lease_failure_tx.send(error.to_string());
+                        let _ = lease_failure_tx.send(format_error_chain(&error));
                         break;
                     }
                 }
@@ -2354,8 +2354,17 @@ async fn connect_and_stream(
 }
 
 fn is_subscription_setup_error(error: &anyhow::Error) -> bool {
-    let message = error.to_string();
+    let message = format_error_chain(error);
     message.contains("status subscribe step failed") || message.contains("subscribe step failed")
+}
+
+fn format_error_chain(error: &anyhow::Error) -> String {
+    let mut chain = error.chain();
+    let mut formatted = Vec::new();
+    while let Some(cause) = chain.next() {
+        formatted.push(cause.to_string());
+    }
+    formatted.join(": ")
 }
 
 fn normalize_adapter_state(state: CentralState) -> String {
