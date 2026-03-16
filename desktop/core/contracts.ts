@@ -141,6 +141,7 @@ export type GatewayStatusSummary = {
   sessionId: string;
   adapterState: string;
   scanState: string;
+  scanReason?: string | null;
   connectedNodeCount: number;
   reconnectingNodeCount: number;
   knownNodeCount: number;
@@ -193,6 +194,7 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayConnectionState: GatewayConnectionState;
   telemetryFreshness: TelemetryFreshness;
   peripheralId: string | null;
+  address?: string | null;
   gatewayLastAdvertisementAt: string | null;
   gatewayLastConnectedAt: string | null;
   gatewayLastDisconnectedAt: string | null;
@@ -208,6 +210,9 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   otaFailureDetail: string | null;
   otaLastStatusMessage: string | null;
   otaUpdatedAt: string | null;
+  reconnectAttempt: number;
+  reconnectAttemptLimit: number;
+  reconnectRetryExhausted: boolean;
 };
 
 export type MotionEventSummary = {

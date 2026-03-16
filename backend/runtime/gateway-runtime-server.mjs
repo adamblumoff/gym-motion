@@ -95,6 +95,14 @@ function emptyOtaRuntimeState() {
   }
 }
 
+function emptyReconnectRuntimeState() {
+  return {
+    reconnectAttempt: 0,
+    reconnectAttemptLimit: 20,
+    reconnectRetryExhausted: false,
+  };
+}
+
 export function createGatewayRuntimeServer({
   apiBaseUrl,
   runtimeHost,
@@ -122,6 +130,7 @@ export function createGatewayRuntimeServer({
     sessionId,
     adapterState: "unknown",
     scanState: "idle",
+    scanReason: null,
     connectedNodeCount: 0,
     reconnectingNodeCount: 0,
     knownNodeCount: 0,
@@ -249,6 +258,7 @@ export function createGatewayRuntimeServer({
           bootId: null,
           hardwareId: node.hardwareId ?? null,
           ...emptyOtaRuntimeState(),
+          ...emptyReconnectRuntimeState(),
           updatedAt: nowIso(),
         });
       }
@@ -335,6 +345,7 @@ export function createGatewayRuntimeServer({
       gatewayConnectionState: connectionState,
       telemetryFreshness,
       peripheralId: runtime?.peripheralId ?? known?.peripheralId ?? null,
+      address: runtime?.address ?? known?.lastKnownAddress ?? null,
       gatewayLastAdvertisementAt:
         runtime?.gatewayLastAdvertisementAt ?? known?.lastSeenAt ?? null,
       gatewayLastConnectedAt:
@@ -352,6 +363,9 @@ export function createGatewayRuntimeServer({
       otaFailureDetail: runtime?.otaFailureDetail ?? metadata?.updateDetail ?? null,
       otaLastStatusMessage: runtime?.otaLastStatusMessage ?? null,
       otaUpdatedAt: runtime?.otaUpdatedAt ?? metadata?.updateUpdatedAt ?? null,
+      reconnectAttempt: runtime?.reconnectAttempt ?? 0,
+      reconnectAttemptLimit: runtime?.reconnectAttemptLimit ?? 20,
+      reconnectRetryExhausted: runtime?.reconnectRetryExhausted ?? false,
     };
   }
 
@@ -396,6 +410,10 @@ export function createGatewayRuntimeServer({
     return deviceIdByPeripheralId.get(peripheralId) ?? null;
   }
 
+  function normalizeBleAddress(address) {
+    return typeof address === "string" ? address.toLowerCase() : null;
+  }
+
   function resolveKnownDeviceIdByDiscovery({
     deviceId = null,
     knownDeviceId = null,
@@ -428,8 +446,9 @@ export function createGatewayRuntimeServer({
     }
 
     if (address) {
+      const normalizedAddress = normalizeBleAddress(address);
       const addressMatches = Array.from(knownNodesByDeviceId.values()).filter(
-        (node) => node.lastKnownAddress === address,
+        (node) => normalizeBleAddress(node.lastKnownAddress) === normalizedAddress,
       );
 
       if (addressMatches.length === 1) {
@@ -448,6 +467,7 @@ export function createGatewayRuntimeServer({
     const previous = runtimeByDeviceId.get(deviceId) ?? {
       gatewayConnectionState: "discovered",
       peripheralId: patch.peripheralId ?? null,
+      address: patch.address ?? null,
       gatewayLastAdvertisementAt: null,
       gatewayLastConnectedAt: null,
       gatewayLastDisconnectedAt: null,
@@ -462,6 +482,7 @@ export function createGatewayRuntimeServer({
       bootId: null,
       hardwareId: null,
       ...emptyOtaRuntimeState(),
+      ...emptyReconnectRuntimeState(),
       updatedAt: nowIso(),
     };
     const next = {
@@ -748,8 +769,7 @@ export function createGatewayRuntimeServer({
       if (state === "poweredOn") {
         for (const deviceId of knownNodesByDeviceId.keys()) {
           updateRuntimeNode(deviceId, {
-            gatewayConnectionState:
-              gatewayState.scanState === "scanning" ? "reconnecting" : "disconnected",
+            gatewayConnectionState: "disconnected",
           });
           emitDevice(deviceId);
         }
@@ -780,8 +800,11 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    setScanState(scanState) {
-      touchGatewayState({ scanState });
+    setScanState(scanState, scanReason = null) {
+      touchGatewayState({
+        scanState,
+        scanReason: scanState === "scanning" ? scanReason : null,
+      });
 
       if (scanState !== "scanning") {
         normalizeIdleConnectionStates();
@@ -790,7 +813,17 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    noteDiscovery({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
+    noteDiscovery({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      address,
+      localName,
+      rssi,
+      reconnectAttempt = null,
+      reconnectAttemptLimit = null,
+      reconnectRetryExhausted = null,
+    }) {
       const timestamp = nowIso();
       touchGatewayState({ lastAdvertisementAt: timestamp });
       const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
@@ -814,22 +847,23 @@ export function createGatewayRuntimeServer({
       }
 
       const existingRuntime = runtimeByDeviceId.get(resolvedDeviceId) ?? null;
-      const shouldMarkReconnecting =
-        gatewayState.adapterState === "poweredOn" &&
-        gatewayState.scanState === "scanning" &&
-        (existingRuntime?.gatewayConnectionState === "disconnected" ||
-          existingRuntime?.gatewayConnectionState === "unreachable");
-      const nextConnectionState = shouldMarkReconnecting
-        ? "reconnecting"
-        : existingRuntime?.gatewayConnectionState ??
-          (gatewayState.adapterState === "poweredOn" ? "discovered" : "unreachable");
+      const nextConnectionState =
+        existingRuntime?.gatewayConnectionState ??
+        (gatewayState.adapterState === "poweredOn" ? "discovered" : "unreachable");
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: nextConnectionState,
         gatewayLastAdvertisementAt: timestamp,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
+        reconnectAttempt:
+          reconnectAttempt ?? existingRuntime?.reconnectAttempt ?? 0,
+        reconnectAttemptLimit:
+          reconnectAttemptLimit ?? existingRuntime?.reconnectAttemptLimit ?? 20,
+        reconnectRetryExhausted:
+          reconnectRetryExhausted ?? existingRuntime?.reconnectRetryExhausted ?? false,
       });
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
@@ -842,7 +876,17 @@ export function createGatewayRuntimeServer({
       });
     },
 
-    noteConnecting({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
+    noteConnecting({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      address,
+      localName,
+      rssi,
+      reconnectAttempt = null,
+      reconnectAttemptLimit = null,
+      reconnectRetryExhausted = null,
+    }) {
       const previous = inspectNodeConnection({
         deviceId,
         knownDeviceId,
@@ -869,12 +913,28 @@ export function createGatewayRuntimeServer({
         return;
       }
 
+      const nextConnectionState =
+        previous?.gatewayConnectionState === "disconnected" ||
+        previous?.gatewayConnectionState === "unreachable"
+          ? "reconnecting"
+          : "connecting";
+
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
-        gatewayConnectionState: "connecting",
+        address: address ?? null,
+        gatewayConnectionState: nextConnectionState,
         gatewayLastAdvertisementAt: nowIso(),
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
+        reconnectAttempt:
+          reconnectAttempt ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ??
+          0,
+        reconnectAttemptLimit:
+          reconnectAttemptLimit ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+          20,
+        reconnectRetryExhausted: reconnectRetryExhausted ?? false,
       });
       upsertKnownNode(resolvedDeviceId, {
         peripheralId,
@@ -889,7 +949,16 @@ export function createGatewayRuntimeServer({
       };
     },
 
-    noteConnected({ deviceId = null, knownDeviceId = null, peripheralId, address, localName, rssi }) {
+    noteConnected({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      address,
+      localName,
+      rssi,
+      reconnectAttempt = null,
+      reconnectAttemptLimit = null,
+    }) {
       const previous = inspectNodeConnection({
         deviceId,
         knownDeviceId,
@@ -918,11 +987,18 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
+        address: address ?? null,
         gatewayConnectionState: "connected",
         gatewayLastConnectedAt: nowIso(),
         gatewayDisconnectReason: null,
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
+        reconnectAttempt: reconnectAttempt ?? 0,
+        reconnectAttemptLimit:
+          reconnectAttemptLimit ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+          20,
+        reconnectRetryExhausted: false,
       });
       upsertKnownNode(resolvedDeviceId, {
         peripheralId,
@@ -947,6 +1023,11 @@ export function createGatewayRuntimeServer({
           peripheralInfo.peripheralId ??
           runtimeByDeviceId.get(payload.deviceId)?.peripheralId ??
           knownNodesByDeviceId.get(payload.deviceId)?.peripheralId ??
+          null,
+        address:
+          peripheralInfo.address ??
+          runtimeByDeviceId.get(payload.deviceId)?.address ??
+          knownNodesByDeviceId.get(payload.deviceId)?.lastKnownAddress ??
           null,
         gatewayLastTelemetryAt: telemetryAt,
         gatewayLastAdvertisementAt:
@@ -995,7 +1076,17 @@ export function createGatewayRuntimeServer({
       };
     },
 
-    noteDisconnected({ deviceId = null, knownDeviceId = null, peripheralId, localName, address, reason }) {
+    noteDisconnected({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      localName,
+      address,
+      reason,
+      reconnectAttempt = null,
+      reconnectAttemptLimit = null,
+      reconnectRetryExhausted = null,
+    }) {
       const previous = inspectNodeConnection({
         deviceId,
         knownDeviceId,
@@ -1021,12 +1112,20 @@ export function createGatewayRuntimeServer({
 
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
-        gatewayConnectionState:
-          gatewayState.adapterState === "poweredOn" && gatewayState.scanState === "scanning"
-            ? "reconnecting"
-            : "disconnected",
+        address: address ?? null,
+        gatewayConnectionState: "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
+        reconnectAttempt:
+          reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
+        reconnectAttemptLimit:
+          reconnectAttemptLimit ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+          20,
+        reconnectRetryExhausted:
+          reconnectRetryExhausted ??
+          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectRetryExhausted ??
+          false,
       });
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();

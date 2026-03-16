@@ -71,14 +71,25 @@ function freshnessBadge(node: BluetoothNodeData) {
 export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
   const [confirmForget, setConfirmForget] = useState(false);
+  const [dismissedReconnectPrompt, setDismissedReconnectPrompt] = useState(false);
   const statusBadge = connectionBadge(node);
   const freshness = freshnessBadge(node);
+  const showReconnectPrompt =
+    node.connectionState === 'disconnected' &&
+    node.reconnectRetryExhausted &&
+    !dismissedReconnectPrompt;
 
   useEffect(() => {
     if (node.isMoving) {
       setPulseKey((prev) => prev + 1);
     }
   }, [node.isMoving]);
+
+  useEffect(() => {
+    if (!node.reconnectRetryExhausted) {
+      setDismissedReconnectPrompt(false);
+    }
+  }, [node.reconnectRetryExhausted]);
 
   const BatteryIcon =
     node.batteryLevel === null
@@ -196,6 +207,33 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
           </div>
         </ScrollArea>
       </div>
+
+      {showReconnectPrompt && (
+        <div className="mx-4 mb-4 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3" onClick={(event) => event.stopPropagation()}>
+          <div className="text-sm font-medium text-amber-300">Do you want to forget this device?</div>
+          <div className="mt-1 text-xs leading-5 text-zinc-400">
+            Auto-reconnect stopped after {node.reconnectAttemptLimit} failed attempts for this paired sensor.
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              onClick={() => setDismissedReconnectPrompt(true)}
+            >
+              Keep Device
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onForget?.(node.id)}
+            >
+              Forget Device
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="px-4 pb-4" onClick={(event) => event.stopPropagation()}>
         {confirmForget ? (

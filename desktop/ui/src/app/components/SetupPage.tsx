@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
-import { ArrowLeft, Bluetooth, Check, Plus, Search, Signal } from 'lucide-react';
+import { ArrowLeft, Bluetooth, Check, Plus, Search, Signal, RefreshCw } from 'lucide-react';
 
+import { isOperatorVisibleScan } from '@core/gateway-scan';
 import { buildApprovedNodeRules } from '../../lib/setup-rules';
 import { buildPairedDevices, buildSetupVisibleDevices } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
@@ -13,8 +14,45 @@ export function SetupPage() {
   const discoveredDevices = setup
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
-  const pairedDevices = setup ? buildPairedDevices(setup) : [];
-  const isScanning = snapshot?.gateway.scanState === 'scanning';
+  const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
+  const isScanning = snapshot
+    ? isOperatorVisibleScan(snapshot.gateway.scanState, snapshot.gateway.scanReason)
+    : false;
+
+  function pairedBadge(device: (typeof pairedDevices)[number]) {
+    switch (device.connectionState) {
+      case 'connected':
+        return {
+          label: 'Connected',
+          className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+          icon: Check,
+        };
+      case 'connecting':
+        return {
+          label: 'Connecting',
+          className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+          icon: RefreshCw,
+        };
+      case 'reconnecting':
+        return {
+          label: 'Reconnecting',
+          className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+          icon: RefreshCw,
+        };
+      case 'unreachable':
+        return {
+          label: 'Unreachable',
+          className: 'bg-red-500/10 text-red-400 border-red-500/20',
+          icon: Bluetooth,
+        };
+      default:
+        return {
+          label: 'Disconnected',
+          className: 'bg-zinc-800 text-zinc-400 border-zinc-700',
+          icon: Bluetooth,
+        };
+    }
+  }
 
   const handleScan = () => {
     void rescanAdapters();
@@ -172,35 +210,50 @@ export function SetupPage() {
                 </div>
               ) : (
                 pairedDevices.map((device) => (
-                  <div
-                    key={device.id}
-                    className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="p-2 bg-blue-500/10 rounded-lg">
-                        <Bluetooth className="size-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-medium text-zinc-100">{device.name}</span>
-                          <Badge className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs">
-                            <Check className="size-3 mr-1" />
-                            Paired
-                          </Badge>
-                        </div>
-                        <div className="text-xs text-zinc-500 font-mono">{device.macAddress ?? '--'}</div>
-                      </div>
-                    </div>
+                  (() => {
+                    const badge = pairedBadge(device);
+                    const BadgeIcon = badge.icon;
 
-                    <Button
-                      onClick={() => handleUnpairDevice(device.id)}
-                      variant="ghost"
-                      size="sm"
-                      className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                    >
-                      Remove
-                    </Button>
-                  </div>
+                    return (
+                      <div
+                        key={device.id}
+                        className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="p-2 bg-blue-500/10 rounded-lg">
+                            <Bluetooth className="size-5 text-blue-400" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-zinc-100">{device.name}</span>
+                              <Badge className={`${badge.className} text-xs`}>
+                                <BadgeIcon
+                                  className={`size-3 mr-1 ${
+                                    badge.label === 'Reconnecting' || badge.label === 'Connecting'
+                                      ? 'animate-spin'
+                                      : ''
+                                  }`}
+                                />
+                                {badge.label}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-zinc-500 font-mono">
+                              {device.macAddress ?? '--'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <Button
+                          onClick={() => handleUnpairDevice(device.id)}
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    );
+                  })()
                 ))
               )}
             </div>

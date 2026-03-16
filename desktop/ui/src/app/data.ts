@@ -10,6 +10,7 @@ import type {
   MotionEventSummary,
   TelemetryFreshness,
 } from "@core/contracts";
+import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
 import { matchesApprovedNodeIdentity } from "../lib/setup-rules";
 
 export type NodeLog = {
@@ -30,6 +31,9 @@ export type BluetoothNodeData = {
   isMoving: boolean;
   signalStrength: number | null;
   batteryLevel: number | null;
+  reconnectAttempt: number;
+  reconnectAttemptLimit: number;
+  reconnectRetryExhausted: boolean;
   logs: NodeLog[];
 };
 
@@ -39,6 +43,7 @@ export type SetupDevice = {
   macAddress: string | null;
   signalStrength: number | null;
   isPaired: boolean;
+  connectionState: GatewayConnectionState | "visible";
 };
 
 function rssiToPercent(rssi: number | null) {
@@ -59,7 +64,7 @@ function displayNodeName(device: GatewayRuntimeDeviceSummary) {
 }
 
 function displayNodeAddress(device: GatewayRuntimeDeviceSummary) {
-  return device.peripheralId ?? device.id;
+  return device.address ?? device.peripheralId ?? device.id;
 }
 
 function displayDiscoveryName(node: Pick<DiscoveredNodeSummary, "machineLabel" | "localName" | "knownDeviceId" | "label" | "id">) {
@@ -97,9 +102,14 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     healthStatus: device.healthStatus,
     telemetryFreshness: device.telemetryFreshness,
     isMoving:
-      device.lastState === "moving" && device.telemetryFreshness === "fresh",
+      device.gatewayConnectionState === "connected" &&
+      device.lastState === "moving" &&
+      device.telemetryFreshness === "fresh",
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
+    reconnectAttempt: device.reconnectAttempt,
+    reconnectAttemptLimit: device.reconnectAttemptLimit,
+    reconnectRetryExhausted: device.reconnectRetryExhausted,
     logs: buildNodeLogs(device, snapshot.activities),
   }));
 }
@@ -137,19 +147,36 @@ export function buildSetupVisibleDevices(
         address: node.address ?? null,
         localName: node.localName ?? null,
         knownDeviceId: node.knownDeviceId ?? null,
-      }),
+      }, approvedNodes),
     ),
+    connectionState: node.gatewayConnectionState,
   }));
 }
 
-export function buildPairedDevices(setup: DesktopSetupState): SetupDevice[] {
-  return setup.approvedNodes.map((node) => ({
-    id: node.id,
-    name: node.label,
-    macAddress: node.address ?? node.peripheralId ?? node.knownDeviceId ?? node.id,
-    signalStrength: null,
-    isPaired: true,
-  }));
+export function buildPairedDevices(
+  setup: DesktopSetupState,
+  snapshot: DesktopSnapshot | null = null,
+): SetupDevice[] {
+  return setup.approvedNodes.map((node) => {
+    const runtimeDevice = snapshot
+      ? findMatchingGatewayDeviceForApprovedNode(node, snapshot.devices, setup.approvedNodes)
+      : null;
+
+    return {
+      id: node.id,
+      name: runtimeDevice ? displayNodeName(runtimeDevice) : node.label,
+      macAddress:
+        node.address ??
+        runtimeDevice?.address ??
+        node.peripheralId ??
+        runtimeDevice?.peripheralId ??
+        node.knownDeviceId ??
+        node.id,
+      signalStrength: runtimeDevice ? rssiToPercent(runtimeDevice.lastRssi) : null,
+      isPaired: true,
+      connectionState: runtimeDevice?.gatewayConnectionState ?? "disconnected",
+    };
+  });
 }
 
 export function buildSignalHistory(

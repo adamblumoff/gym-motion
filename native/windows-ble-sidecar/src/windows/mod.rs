@@ -3,7 +3,7 @@ use std::{
     env,
     future::pending,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -27,7 +27,7 @@ use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
         AdapterSummary, ApprovedNodeRule, Command, DiscoveredNode, Event, GatewayStatePayload,
-        TelemetryPayload,
+        ReconnectStatus, TelemetryPayload,
     },
 };
 
@@ -38,6 +38,13 @@ const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
+const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
+const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
+const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 4_000;
+const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
+const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
+const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
+const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
 
 #[derive(Clone)]
@@ -103,6 +110,453 @@ struct SessionHandle {
 
 enum SessionCommand {
     StartScan,
+    RefreshScanPolicy,
+    AllowedNodesUpdated {
+        nodes: Vec<ApprovedNodeRule>,
+    },
+    ConnectionHealthy {
+        node: DiscoveredNode,
+    },
+    ConnectionEnded {
+        node: DiscoveredNode,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+struct ApprovedReconnectState {
+    attempt: u32,
+    retry_exhausted: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DiscoveryClassification {
+    runtime_service_matched: bool,
+    name_prefix_matched: bool,
+    approved_identity_matched: bool,
+    matched_known_device_id: Option<String>,
+}
+
+fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> Option<String> {
+    rules.iter()
+        .find(|rule| rule_matches_node(rule, node, rules))
+        .map(|rule| rule.id.clone())
+}
+
+fn disconnected_nodes_removed_from_allowed(
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    allowed: &[ApprovedNodeRule],
+) -> Vec<DiscoveredNode> {
+    connected_nodes
+        .values()
+        .filter(|node| !is_approved(node, allowed))
+        .cloned()
+        .collect()
+}
+
+fn reconnect_status_for_rule(
+    rule_id: Option<&str>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+) -> Option<ReconnectStatus> {
+    rule_id.map(|id| {
+        let state = reconnect_states.get(id).cloned().unwrap_or_default();
+        ReconnectStatus {
+            attempt: state.attempt,
+            attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+            retry_exhausted: state.retry_exhausted,
+        }
+    })
+}
+
+fn mark_node_connected(
+    connected_nodes: &mut HashMap<String, DiscoveredNode>,
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+    node: &DiscoveredNode,
+    allowed: &[ApprovedNodeRule],
+) {
+    connected_nodes.insert(node_key(node), node.clone());
+
+    if let Some(rule_id) = approved_rule_id_for_node(node, allowed) {
+        reconnect_states.insert(rule_id, ApprovedReconnectState::default());
+    }
+}
+
+fn prune_reconnect_states(
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+    allowed: &[ApprovedNodeRule],
+) {
+    let allowed_rule_ids = allowed
+        .iter()
+        .map(|rule| rule.id.as_str())
+        .collect::<HashSet<_>>();
+    reconnect_states.retain(|rule_id, _| allowed_rule_ids.contains(rule_id.as_str()));
+}
+
+fn should_clear_reconnect_peripherals(
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    active_connection_count: usize,
+) -> bool {
+    connected_nodes.is_empty() && active_connection_count == 0
+}
+
+fn classify_discovery_candidate(
+    peripheral_id: &str,
+    address: Option<&str>,
+    local_name: Option<&str>,
+    has_runtime_service: bool,
+    config: &Config,
+    allowed_nodes: &[ApprovedNodeRule],
+    known_device_ids: &HashMap<String, String>,
+) -> DiscoveryClassification {
+    let name_prefix_matched = local_name
+        .map(|name| !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix))
+        .unwrap_or(false);
+    let unique_local_name_rule = local_name.and_then(|candidate_name| {
+        let mut matches = allowed_nodes.iter().filter(|rule| {
+            rule.known_device_id.is_none()
+                && rule.peripheral_id.is_none()
+                && rule.address.is_none()
+                && rule
+                    .local_name
+                    .as_ref()
+                    .map(|value| value == candidate_name)
+                    .unwrap_or(false)
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
+    });
+    let matched_known_device_id = known_device_ids.get(peripheral_id).cloned().or_else(|| {
+        allowed_nodes.iter().find_map(|rule| {
+            if rule
+                .peripheral_id
+                .as_ref()
+                .map(|value| value == peripheral_id)
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            if rule
+                .address
+                .as_ref()
+                .zip(address)
+                .map(|(left, right)| left.eq_ignore_ascii_case(right))
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            if unique_local_name_rule
+                .map(|unique_rule| unique_rule.id == rule.id)
+                .unwrap_or(false)
+            {
+                return rule.known_device_id.clone();
+            }
+
+            None
+        })
+    });
+
+    DiscoveryClassification {
+        runtime_service_matched: has_runtime_service,
+        name_prefix_matched,
+        approved_identity_matched: matched_known_device_id.is_some()
+            || allowed_nodes.iter().any(|rule| {
+                rule.peripheral_id
+                    .as_ref()
+                    .map(|value| value == peripheral_id)
+                    .unwrap_or(false)
+                    || rule
+                        .address
+                        .as_ref()
+                        .zip(address)
+                        .map(|(left, right)| left.eq_ignore_ascii_case(right))
+                        .unwrap_or(false)
+                    || unique_local_name_rule
+                        .map(|unique_rule| unique_rule.id == rule.id)
+                        .unwrap_or(false)
+            }),
+        matched_known_device_id,
+    }
+}
+
+fn approved_nodes_pending_connection(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+) -> bool {
+    !rules.is_empty() && !all_approved_nodes_connected(rules, connected_nodes, reconnect_states)
+}
+
+fn should_scan(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+) -> bool {
+    approved_nodes_pending_connection(rules, connected_nodes, reconnect_states)
+        || manual_scan_deadline
+            .map(|deadline| deadline > now)
+            .unwrap_or(false)
+}
+
+fn scan_reason(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+) -> Option<&'static str> {
+    if manual_scan_deadline
+        .map(|deadline| deadline > now)
+        .unwrap_or(false)
+    {
+        return Some("manual");
+    }
+
+    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
+        return Some("approved-reconnect");
+    }
+
+    None
+}
+
+fn allow_approved_identity_fallback(
+    rules: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    manual_scan_deadline: Option<Instant>,
+    now: Instant,
+) -> bool {
+    if approved_nodes_pending_connection(rules, connected_nodes, reconnect_states) {
+        return true;
+    }
+
+    let manual_scan_active = manual_scan_deadline
+        .map(|deadline| deadline > now)
+        .unwrap_or(false);
+    if !manual_scan_active {
+        return false;
+    }
+
+    rules.iter().any(|rule| {
+        reconnect_states
+            .get(&rule.id)
+            .map(|state| state.retry_exhausted)
+            .unwrap_or(false)
+    })
+}
+
+async fn emit_gateway_state(
+    writer: &EventWriter,
+    adapter: &Adapter,
+    selected_adapter_id: &str,
+    scan_state: &str,
+    scan_reason: Option<&str>,
+    last_advertisement_at: &Option<String>,
+) -> Result<()> {
+    writer
+        .send(&Event::GatewayState {
+            gateway: GatewayStatePayload {
+                adapter_state: normalize_adapter_state(
+                    adapter
+                        .adapter_state()
+                        .await
+                        .unwrap_or(CentralState::Unknown),
+                ),
+                scan_state: scan_state.to_string(),
+                scan_reason: scan_reason.map(str::to_string),
+                selected_adapter_id: Some(selected_adapter_id.to_string()),
+                last_advertisement_at: last_advertisement_at.clone(),
+                issue: None,
+            },
+        })
+        .await?;
+
+    Ok(())
+}
+
+async fn sync_scan_state(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    selected_adapter_id: &str,
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    scanning: &mut bool,
+    current_scan_reason: &mut Option<String>,
+    manual_scan_deadline: Option<Instant>,
+    last_advertisement_at: &Option<String>,
+) -> Result<()> {
+    let now = Instant::now();
+    let should_scan_now =
+        should_scan(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
+    let approved_pending =
+        approved_nodes_pending_connection(allowed, connected_nodes, reconnect_states);
+    let next_scan_reason =
+        scan_reason(allowed, connected_nodes, reconnect_states, manual_scan_deadline, now);
+
+    if should_scan_now && !*scanning {
+        adapter.start_scan(ScanFilter::default()).await?;
+        *scanning = true;
+        *current_scan_reason = next_scan_reason.map(str::to_string);
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: if approved_pending {
+                    format!(
+                        "Starting approved-node reconnect scan; {} approved node(s) are still missing.",
+                        allowed.len().saturating_sub(connected_nodes.len())
+                    )
+                } else {
+                    "Starting manual BLE scan window.".to_string()
+                },
+                details: Some(json!({
+                    "approvedPending": approved_pending,
+                    "approvedCount": allowed.len(),
+                    "connectedApprovedCount": connected_nodes.len(),
+                    "manualScanActive": manual_scan_deadline.is_some(),
+                })),
+            })
+            .await?;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "scanning",
+            next_scan_reason,
+            last_advertisement_at,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if should_scan_now && *scanning {
+        let next_scan_reason_string = next_scan_reason.map(str::to_string);
+        if *current_scan_reason != next_scan_reason_string {
+            *current_scan_reason = next_scan_reason_string;
+            emit_gateway_state(
+                writer,
+                adapter,
+                selected_adapter_id,
+                "scanning",
+                next_scan_reason,
+                last_advertisement_at,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if !should_scan_now && *scanning {
+        let _ = adapter.stop_scan().await;
+        *scanning = false;
+        *current_scan_reason = None;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Stopping BLE scan window.".to_string(),
+                details: Some(json!({
+                    "approvedPending": approved_pending,
+                    "approvedCount": allowed.len(),
+                    "connectedApprovedCount": connected_nodes.len(),
+                    "manualScanActive": manual_scan_deadline.is_some(),
+                })),
+            })
+            .await?;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "stopped",
+            None,
+            last_advertisement_at,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn restart_approved_reconnect_scan(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    selected_adapter_id: &str,
+    allowed: &[ApprovedNodeRule],
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
+    last_advertisement_at: &Option<String>,
+    scan_burst: u32,
+    advertisements_seen: u32,
+    rejected_candidates: u32,
+    classified_candidates: u32,
+    active_connection_count: usize,
+) -> Result<()> {
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: "Restarting approved-node reconnect scan burst.".to_string(),
+            details: Some(json!({
+                "scanBurst": scan_burst,
+                "advertisementsSeen": advertisements_seen,
+                "rejectedCandidates": rejected_candidates,
+                "classifiedCandidates": classified_candidates,
+                "lastAdvertisementAt": last_advertisement_at,
+                "connectedApprovedCount": connected_nodes.len(),
+                "activeConnectionCount": active_connection_count,
+            })),
+        })
+        .await?;
+
+    let _ = adapter.stop_scan().await;
+    sleep(Duration::from_millis(
+        APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS,
+    ))
+    .await;
+
+    let should_clear_peripherals =
+        should_clear_reconnect_peripherals(connected_nodes, active_connection_count);
+
+    let cleared_peripherals = if should_clear_peripherals {
+        adapter.clear_peripherals().await.is_ok()
+    } else {
+        false
+    };
+
+    adapter.start_scan(ScanFilter::default()).await?;
+    emit_gateway_state(
+        writer,
+        adapter,
+        selected_adapter_id,
+        "scanning",
+        scan_reason(
+            allowed,
+            connected_nodes,
+            reconnect_states,
+            None,
+            Instant::now(),
+        ),
+        last_advertisement_at,
+    )
+    .await?;
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: "Approved-node reconnect scan burst restarted.".to_string(),
+            details: Some(json!({
+                "scanBurst": scan_burst + 1,
+                "cacheResetAttempted": should_clear_peripherals,
+                "cacheResetApplied": cleared_peripherals,
+                "activeConnectionCount": active_connection_count,
+            })),
+        })
+        .await?;
+
+    Ok(())
 }
 
 fn node_key(node: &DiscoveredNode) -> String {
@@ -112,8 +566,30 @@ fn node_key(node: &DiscoveredNode) -> String {
         .unwrap_or_else(|| node.id.clone())
 }
 
-fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
-    rule.known_device_id
+fn unique_name_only_rule_id<'a>(
+    local_name: Option<&str>,
+    rules: &'a [ApprovedNodeRule],
+) -> Option<&'a str> {
+    let candidate_name = local_name?;
+    let mut matches = rules.iter().filter(|rule| {
+        rule.known_device_id.is_none()
+            && rule.peripheral_id.is_none()
+            && rule.address.is_none()
+            && rule
+                .local_name
+                .as_ref()
+                .map(|value| value == candidate_name)
+                .unwrap_or(false)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.id.as_str())
+}
+
+fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
+    let strong_identity_match = rule.known_device_id
         .as_ref()
         .zip(node.known_device_id.as_ref())
         .map(|(left, right)| left == right)
@@ -129,24 +605,35 @@ fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
             .as_ref()
             .zip(node.address.as_ref())
             .map(|(left, right)| left.eq_ignore_ascii_case(right))
-            .unwrap_or(false)
-        || rule
-            .local_name
-            .as_ref()
-            .zip(node.local_name.as_ref())
-            .map(|(left, right)| left == right)
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+    if strong_identity_match {
+        return true;
+    }
+
+    unique_name_only_rule_id(node.local_name.as_deref(), rules)
+        .map(|rule_id| rule_id == rule.id.as_str())
+        .unwrap_or(false)
 }
 
 fn all_approved_nodes_connected(
     rules: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
+    reconnect_states: &HashMap<String, ApprovedReconnectState>,
 ) -> bool {
     !rules.is_empty()
         && rules.iter().all(|rule| {
+            if reconnect_states
+                .get(&rule.id)
+                .map(|state| state.retry_exhausted)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+
             connected_nodes
                 .values()
-                .any(|node| rule_matches_node(rule, node))
+                .any(|node| rule_matches_node(rule, node, rules))
         })
 }
 
@@ -220,7 +707,7 @@ impl Sidecar {
 
     async fn handle_command(&mut self, command: Command) -> Result<bool> {
         match command {
-            Command::ListAdapters | Command::Rescan => {
+            Command::ListAdapters | Command::Rescan | Command::RefreshScanPolicy => {
                 if matches!(command, Command::Rescan) {
                     if self.session.is_none() {
                         self.start_session().await?;
@@ -228,6 +715,14 @@ impl Sidecar {
 
                     if let Some(session) = &self.session {
                         let _ = session.commands.send(SessionCommand::StartScan);
+                    }
+                } else if matches!(command, Command::RefreshScanPolicy) {
+                    if self.session.is_none() {
+                        self.start_session().await?;
+                    }
+
+                    if let Some(session) = &self.session {
+                        let _ = session.commands.send(SessionCommand::RefreshScanPolicy);
                     }
                 }
                 self.emit_adapters().await?;
@@ -238,6 +733,13 @@ impl Sidecar {
             }
             Command::SetAllowedNodes { nodes } => {
                 *self.allowed_nodes.write().await = nodes;
+                if let Some(session) = &self.session {
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::AllowedNodesUpdated {
+                            nodes: self.allowed_nodes.read().await.clone(),
+                        });
+                }
             }
             Command::Start => {
                 self.start_session().await?;
@@ -263,6 +765,7 @@ impl Sidecar {
                     gateway: GatewayStatePayload {
                         adapter_state: "unknown".to_string(),
                         scan_state: "stopped".to_string(),
+                        scan_reason: None,
                         selected_adapter_id: None,
                         last_advertisement_at: None,
                         issue: Some(
@@ -277,6 +780,7 @@ impl Sidecar {
         let adapter = resolve_adapter(&self.manager, &selected_adapter_id).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let command_tx_clone = command_tx.clone();
         let writer = self.writer.clone();
         let config = self.config.clone();
         let allowed_nodes = self.allowed_nodes.clone();
@@ -288,6 +792,7 @@ impl Sidecar {
                 config,
                 allowed_nodes,
                 shutdown_rx,
+                command_tx_clone,
                 command_rx,
             )
             .await
@@ -376,8 +881,10 @@ async fn run_session(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     mut shutdown: watch::Receiver<bool>,
+    command_sender: mpsc::UnboundedSender<SessionCommand>,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
 ) -> Result<()> {
+    let app_session_id = Uuid::new_v4().to_string();
     let adapter_state = normalize_adapter_state(
         adapter
             .adapter_state()
@@ -389,6 +896,7 @@ async fn run_session(
             gateway: GatewayStatePayload {
                 adapter_state,
                 scan_state: "stopped".to_string(),
+                scan_reason: None,
                 selected_adapter_id: Some(selected_adapter_id.clone()),
                 last_advertisement_at: None,
                 issue: None,
@@ -400,9 +908,40 @@ async fn run_session(
     let active_connections = Arc::new(Mutex::new(HashSet::<String>::new()));
     let known_device_ids = Arc::new(RwLock::new(HashMap::<String, String>::new()));
     let mut connected_nodes = HashMap::<String, DiscoveredNode>::new();
+    let mut reconnect_states = HashMap::<String, ApprovedReconnectState>::new();
     let mut last_advertisement_at = None;
     let mut scanning = false;
-    let mut scan_deadline = None;
+    let mut current_scan_reason = None;
+    let mut manual_scan_deadline = None;
+    let mut reconnect_diagnostic_tick =
+        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
+    reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect_diagnostic_tick.tick().await;
+    let mut reconnect_scan_restart_tick =
+        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS));
+    reconnect_scan_restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect_scan_restart_tick.tick().await;
+    let mut reconnect_scan_burst = 0_u32;
+    let mut advertisements_seen_this_burst = 0_u32;
+    let mut rejected_candidates_this_burst = 0_u32;
+    let mut classified_candidates_this_burst = 0_u32;
+
+    {
+        let allowed = allowed_nodes.read().await.clone();
+        sync_scan_state(
+            &adapter,
+            &writer,
+            &selected_adapter_id,
+            &allowed,
+            &connected_nodes,
+            &reconnect_states,
+            &mut scanning,
+            &mut current_scan_reason,
+            manual_scan_deadline,
+            &last_advertisement_at,
+        )
+        .await?;
+    }
 
     loop {
         tokio::select! {
@@ -416,55 +955,202 @@ async fn run_session(
                     break;
                 };
 
-                if matches!(command, SessionCommand::StartScan) && !scanning {
-                    adapter.start_scan(ScanFilter::default()).await?;
-                    scanning = true;
-                    scan_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
-                    writer
-                        .send(&Event::GatewayState {
-                            gateway: GatewayStatePayload {
-                                adapter_state: normalize_adapter_state(
-                                    adapter
-                                        .adapter_state()
-                                        .await
-                                        .unwrap_or(CentralState::Unknown),
-                                ),
-                                scan_state: "scanning".to_string(),
-                                selected_adapter_id: Some(selected_adapter_id.clone()),
-                                last_advertisement_at: last_advertisement_at.clone(),
-                                issue: None,
-                            },
-                        })
+                match command {
+                    SessionCommand::StartScan => {
+                        manual_scan_deadline = Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                    }
+                    SessionCommand::RefreshScanPolicy => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        prune_reconnect_states(&mut reconnect_states, &allowed);
+                    }
+                    SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
+                        prune_reconnect_states(&mut reconnect_states, &allowed);
+                        for node in disconnected_nodes_removed_from_allowed(&connected_nodes, &allowed) {
+                            if let Some(peripheral) = peripheral_for_node(&adapter, &node).await {
+                                writer.send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: format!(
+                                        "Disconnecting {} because it was removed from allowed nodes.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                    })),
+                                }).await?;
+                                let _ = peripheral.disconnect().await;
+                            }
+                        }
+                    }
+                    SessionCommand::ConnectionHealthy { node } => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        mark_node_connected(
+                            &mut connected_nodes,
+                            &mut reconnect_states,
+                            &node,
+                            &allowed,
+                        );
+                        sync_scan_state(
+                            &adapter,
+                            &writer,
+                            &selected_adapter_id,
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            &mut scanning,
+                            &mut current_scan_reason,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                        )
                         .await?;
+                        continue;
+                    }
+                    SessionCommand::ConnectionEnded { node, reason } => {
+                        let key = node_key(&node);
+                        connected_nodes.remove(&key);
+                        let allowed = allowed_nodes.read().await.clone();
+                        let reconnect = approved_rule_id_for_node(&node, &allowed).map(|rule_id| {
+                            let state = reconnect_states.entry(rule_id).or_default();
+                            if state.attempt >= RECONNECT_ATTEMPT_LIMIT {
+                                state.retry_exhausted = true;
+                            }
+                            ReconnectStatus {
+                                attempt: state.attempt,
+                                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                                retry_exhausted: state.retry_exhausted,
+                            }
+                        });
+                        writer.send(&Event::Log {
+                            level: "info".to_string(),
+                            message: format!(
+                                "Approved-node disconnect for {}; resuming silent reconnect scan.",
+                                node.label
+                            ),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "reason": reason,
+                                "reconnect": reconnect,
+                            })),
+                        }).await?;
+                        writer.send(&Event::NodeConnectionState {
+                            node,
+                            gateway_connection_state: "disconnected".to_string(),
+                            reason: Some(reason),
+                            reconnect,
+                        }).await?;
+                        sync_scan_state(
+                            &adapter,
+                            &writer,
+                            &selected_adapter_id,
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            &mut scanning,
+                            &mut current_scan_reason,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                        )
+                        .await?;
+                        continue;
+                    }
                 }
+
+                let allowed = allowed_nodes.read().await.clone();
+                sync_scan_state(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    &mut scanning,
+                    &mut current_scan_reason,
+                    manual_scan_deadline,
+                    &last_advertisement_at,
+                )
+                .await?;
             }
             _ = async {
-                if let Some(deadline) = scan_deadline {
-                    tokio::time::sleep_until(deadline).await;
+                if let Some(deadline) = manual_scan_deadline {
+                    tokio::time::sleep_until(deadline.into()).await;
                 } else {
                     pending::<()>().await;
                 }
             } => {
-                if scanning {
-                    let _ = adapter.stop_scan().await;
-                    scanning = false;
-                    scan_deadline = None;
-                    writer
-                        .send(&Event::GatewayState {
-                            gateway: GatewayStatePayload {
-                                adapter_state: normalize_adapter_state(
-                                    adapter
-                                        .adapter_state()
-                                        .await
-                                        .unwrap_or(CentralState::Unknown),
-                                ),
-                                scan_state: "stopped".to_string(),
-                                selected_adapter_id: Some(selected_adapter_id.clone()),
-                                last_advertisement_at: last_advertisement_at.clone(),
-                                issue: None,
-                            }
-                        }).await?;
+                manual_scan_deadline = None;
+                let allowed = allowed_nodes.read().await.clone();
+                sync_scan_state(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    &mut scanning,
+                    &mut current_scan_reason,
+                    manual_scan_deadline,
+                    &last_advertisement_at,
+                )
+                .await?;
+            }
+            _ = reconnect_diagnostic_tick.tick() => {
+                let allowed = allowed_nodes.read().await.clone();
+                if approved_nodes_pending_connection(&allowed, &connected_nodes, &reconnect_states) {
+                    writer.send(&Event::Log {
+                        level: "info".to_string(),
+                        message: "Approved-node reconnect scan still running; waiting for rediscovery.".to_string(),
+                        details: Some(json!({
+                            "approvedCount": allowed.len(),
+                            "connectedApprovedCount": connected_nodes.len(),
+                            "scanReason": scan_reason(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
+                            ),
+                            "lastAdvertisementAt": last_advertisement_at,
+                        })),
+                    }).await?;
                 }
+            }
+            _ = reconnect_scan_restart_tick.tick() => {
+                let allowed = allowed_nodes.read().await.clone();
+                if !scanning {
+                    continue;
+                }
+
+                if scan_reason(
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    manual_scan_deadline,
+                    Instant::now(),
+                ) != Some("approved-reconnect") {
+                    continue;
+                }
+
+                restart_approved_reconnect_scan(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    &last_advertisement_at,
+                    reconnect_scan_burst,
+                    advertisements_seen_this_burst,
+                    rejected_candidates_this_burst,
+                    classified_candidates_this_burst,
+                    active_connections.lock().await.len(),
+                )
+                .await?;
+                reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
+                advertisements_seen_this_burst = 0;
+                rejected_candidates_this_burst = 0;
+                classified_candidates_this_burst = 0;
             }
             event = events.next() => {
                 let Some(event) = event else {
@@ -477,6 +1163,18 @@ async fn run_session(
                             gateway: GatewayStatePayload {
                                 adapter_state: normalize_adapter_state(state),
                                 scan_state: if scanning { "scanning" } else { "stopped" }.to_string(),
+                                scan_reason: if scanning {
+                                    scan_reason(
+                                        &allowed_nodes.read().await,
+                                        &connected_nodes,
+                                        &reconnect_states,
+                                        manual_scan_deadline,
+                                        Instant::now(),
+                                    )
+                                    .map(str::to_string)
+                                } else {
+                                    None
+                                },
                                 selected_adapter_id: Some(selected_adapter_id.clone()),
                                 last_advertisement_at: last_advertisement_at.clone(),
                                 issue: None,
@@ -488,15 +1186,51 @@ async fn run_session(
                             continue;
                         }
 
-                        let peripheral = adapter.peripheral(&id).await?;
+                        advertisements_seen_this_burst =
+                            advertisements_seen_this_burst.saturating_add(1);
+
+                        let Some(peripheral) =
+                            peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                        let discovery_scan_reason = scan_reason(
+                            &allowed,
+                            &connected_nodes,
+                            &reconnect_states,
+                            manual_scan_deadline,
+                            Instant::now(),
+                        );
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_discovered",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
+                            ),
+                        )
+                        .await
+                        {
+                            classified_candidates_this_burst =
+                                classified_candidates_this_burst.saturating_add(1);
                             last_advertisement_at = node.last_seen_at.clone();
-                            writer.send(&Event::NodeDiscovered { node: node.clone() }).await?;
+                            writer.send(&Event::NodeDiscovered {
+                                node: node.clone(),
+                                scan_reason: discovery_scan_reason.map(str::to_string),
+                            }).await?;
                             writer.send(&Event::GatewayState {
                                 gateway: GatewayStatePayload {
                                     adapter_state: normalize_adapter_state(adapter.adapter_state().await.unwrap_or(CentralState::Unknown)),
                                     scan_state: "scanning".to_string(),
+                                    scan_reason: discovery_scan_reason.map(str::to_string),
                                     selected_adapter_id: Some(selected_adapter_id.clone()),
                                     last_advertisement_at: last_advertisement_at.clone(),
                                     issue: None,
@@ -504,9 +1238,39 @@ async fn run_session(
                             }).await?;
 
                             if is_approved(&node, &allowed) {
+                                let Some(rule_id) = approved_rule_id_for_node(&node, &allowed) else {
+                                    continue;
+                                };
+                                let reconnect_state =
+                                    reconnect_states.get(&rule_id).cloned().unwrap_or_default();
+                                if reconnect_state.retry_exhausted {
+                                    continue;
+                                }
+                                writer.send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: format!(
+                                        "Approved node rediscovered; starting reconnect attempt for {}.",
+                                        node.label
+                                    ),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "reconnectAttempt": reconnect_state.attempt + 1,
+                                        "reconnectAttemptLimit": RECONNECT_ATTEMPT_LIMIT,
+                                    })),
+                                }).await?;
                                 let key = node.peripheral_id.clone().unwrap_or_else(|| node.id.clone());
                                 let mut active = active_connections.lock().await;
                                 if !active.contains(&key) {
+                                    let next_attempt = reconnect_state.attempt + 1;
+                                    reconnect_states.insert(
+                                        rule_id.clone(),
+                                        ApprovedReconnectState {
+                                            attempt: next_attempt,
+                                            retry_exhausted: false,
+                                        },
+                                    );
                                     active.insert(key.clone());
                                     drop(active);
                                     let writer_clone = writer.clone();
@@ -514,59 +1278,132 @@ async fn run_session(
                                     let allowed_nodes_clone = allowed_nodes.clone();
                                     let active_connections_clone = active_connections.clone();
                                     let known_device_ids_clone = known_device_ids.clone();
+                                    let command_tx_clone = command_sender.clone();
+                                    let app_session_id_clone = app_session_id.clone();
                                     tokio::spawn(async move {
-                                        let result = connect_and_stream(peripheral, node.clone(), writer_clone.clone(), config_clone, allowed_nodes_clone, known_device_ids_clone).await;
-                                        if let Err(error) = result {
-                                            writer_clone.error(format!("BLE connect failed: {error}"), None).await;
-                                            let _ = writer_clone.send(&Event::NodeConnectionState {
-                                                node,
-                                                gateway_connection_state: "disconnected".to_string(),
-                                                reason: Some(error.to_string()),
-                                            }).await;
+                                        let result = connect_and_stream(
+                                            peripheral,
+                                            node.clone(),
+                                            writer_clone.clone(),
+                                            config_clone,
+                                            allowed_nodes_clone,
+                                            known_device_ids_clone,
+                                            app_session_id_clone,
+                                            Some(ReconnectStatus {
+                                                attempt: next_attempt,
+                                                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                                                retry_exhausted: false,
+                                            }),
+                                            command_tx_clone.clone(),
+                                        )
+                                        .await;
+                                        match result {
+                                            Ok(Some(reason)) => {
+                                                let _ = writer_clone
+                                                    .send(&Event::Log {
+                                                        level: "warn".to_string(),
+                                                        message: reason.clone(),
+                                                        details: Some(json!({
+                                                            "peripheralId": node.peripheral_id,
+                                                            "knownDeviceId": node.known_device_id,
+                                                            "address": node.address,
+                                                        })),
+                                                    })
+                                                    .await;
+                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                                                    node,
+                                                    reason,
+                                                });
+                                            }
+                                            Ok(None) => {}
+                                            Err(error) => {
+                                                let _ = writer_clone
+                                                    .send(&Event::Log {
+                                                        level: "warn".to_string(),
+                                                        message: format!("BLE connect failed: {error}"),
+                                                        details: Some(json!({
+                                                            "peripheralId": node.peripheral_id,
+                                                            "knownDeviceId": node.known_device_id,
+                                                            "address": node.address,
+                                                        })),
+                                                    })
+                                                    .await;
+                                                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                                                    node,
+                                                    reason: error.to_string(),
+                                                });
+                                            }
                                         }
                                         active_connections_clone.lock().await.remove(&key);
                                     });
                                 }
                             }
+                        } else {
+                            rejected_candidates_this_burst =
+                                rejected_candidates_this_burst.saturating_add(1);
                         }
                     }
                     CentralEvent::DeviceConnected(id) => {
-                        let peripheral = adapter.peripheral(&id).await?;
+                        let Some(peripheral) =
+                            peripheral_for_event(&adapter, &writer, "device_connected", &id).await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
-                            connected_nodes.insert(node_key(&node), node.clone());
-                            if scanning {
-                                if all_approved_nodes_connected(&allowed, &connected_nodes) {
-                                    let _ = adapter.stop_scan().await;
-                                    scanning = false;
-                                    scan_deadline = None;
-                                    writer.send(&Event::GatewayState {
-                                        gateway: GatewayStatePayload {
-                                            adapter_state: normalize_adapter_state(
-                                                adapter
-                                                    .adapter_state()
-                                                    .await
-                                                    .unwrap_or(CentralState::Unknown),
-                                            ),
-                                            scan_state: "stopped".to_string(),
-                                            selected_adapter_id: Some(selected_adapter_id.clone()),
-                                            last_advertisement_at: last_advertisement_at.clone(),
-                                            issue: None,
-                                        }
-                                    }).await?;
-                                }
-                            }
-                            writer.send(&Event::NodeConnectionState {
-                                node,
-                                gateway_connection_state: "connected".to_string(),
-                                reason: None,
-                            }).await?;
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_connected",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
+                            ),
+                        )
+                        .await
+                        {
+                            let _ = node;
                         }
                     }
                     CentralEvent::DeviceDisconnected(id) => {
-                        let peripheral = adapter.peripheral(&id).await?;
+                        let Some(peripheral) = peripheral_for_event(
+                            &adapter,
+                            &writer,
+                            "device_disconnected",
+                            &id,
+                        )
+                        .await
+                        else {
+                            continue;
+                        };
                         let allowed = allowed_nodes.read().await.clone();
-                        if let Some(node) = discovered_node_from_peripheral(&peripheral, &config, &allowed, &known_device_ids).await? {
+                        if let Some(node) = discovered_node_for_event(
+                            &peripheral,
+                            &writer,
+                            "device_disconnected",
+                            &config,
+                            &allowed,
+                            &known_device_ids,
+                            allow_approved_identity_fallback(
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                                manual_scan_deadline,
+                                Instant::now(),
+                            ),
+                        )
+                        .await
+                        {
+                            let reconnect =
+                                reconnect_status_for_rule(
+                                    approved_rule_id_for_node(&node, &allowed).as_deref(),
+                                    &reconnect_states,
+                                );
                             sleep(Duration::from_millis(DISCONNECT_CONFIRM_MS)).await;
                             if peripheral.is_connected().await.unwrap_or(false) {
                                 writer.send(&Event::Log {
@@ -585,16 +1422,25 @@ async fn run_session(
                             }
 
                             connected_nodes.remove(&node_key(&node));
-                            let state = if is_approved(&node, &allowed) {
-                                "reconnecting"
-                            } else {
-                                "disconnected"
-                            };
                             writer.send(&Event::NodeConnectionState {
                                 node,
-                                gateway_connection_state: state.to_string(),
+                                gateway_connection_state: "disconnected".to_string(),
                                 reason: Some("Device disconnected.".to_string()),
+                                reconnect,
                             }).await?;
+                            sync_scan_state(
+                                &adapter,
+                                &writer,
+                                &selected_adapter_id,
+                                &allowed,
+                                &connected_nodes,
+                                &reconnect_states,
+                                &mut scanning,
+                                &mut current_scan_reason,
+                                manual_scan_deadline,
+                                &last_advertisement_at,
+                            )
+                            .await?;
                         }
                     }
                     _ => {}
@@ -624,6 +1470,7 @@ async fn run_session(
                         .unwrap_or(CentralState::Unknown),
                 ),
                 scan_state: "stopped".to_string(),
+                scan_reason: None,
                 selected_adapter_id: Some(selected_adapter_id),
                 last_advertisement_at,
                 issue: None,
@@ -633,6 +1480,80 @@ async fn run_session(
     Ok(())
 }
 
+async fn peripheral_for_event(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    event_name: &str,
+    id: &btleplug::platform::PeripheralId,
+) -> Option<Peripheral> {
+    match adapter.peripheral(id).await {
+        Ok(peripheral) => Some(peripheral),
+        Err(error) => {
+            writer
+                .send(&Event::Log {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Skipping {event_name} event because the BLE device is no longer available: {error}"
+                    ),
+                    details: Some(json!({
+                        "event": event_name,
+                        "peripheralId": id.to_string(),
+                    })),
+                })
+                .await
+                .ok();
+            None
+        }
+    }
+}
+
+async fn peripheral_for_node(adapter: &Adapter, node: &DiscoveredNode) -> Option<Peripheral> {
+    let target_id = node.peripheral_id.as_deref()?;
+    let peripherals = adapter.peripherals().await.ok()?;
+
+    peripherals
+        .into_iter()
+        .find(|peripheral| peripheral.id().to_string() == target_id)
+}
+
+async fn discovered_node_for_event(
+    peripheral: &Peripheral,
+    writer: &EventWriter,
+    event_name: &str,
+    config: &Config,
+    allowed: &[ApprovedNodeRule],
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    allow_approved_identity_fallback: bool,
+) -> Option<DiscoveredNode> {
+    match discovered_node_from_peripheral(
+        peripheral,
+        config,
+        allowed,
+        known_device_ids,
+        allow_approved_identity_fallback,
+    )
+    .await
+    {
+        Ok(node) => node,
+        Err(error) => {
+            writer
+                .send(&Event::Log {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Skipping {event_name} event because discovery data could not be refreshed: {error}"
+                    ),
+                    details: Some(json!({
+                        "event": event_name,
+                        "peripheralId": peripheral.id().to_string(),
+                    })),
+                })
+                .await
+                .ok();
+            None
+        }
+    }
+}
+
 async fn connect_and_stream(
     peripheral: Peripheral,
     node: DiscoveredNode,
@@ -640,9 +1561,12 @@ async fn connect_and_stream(
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
-) -> Result<()> {
+    app_session_id: String,
+    reconnect: Option<ReconnectStatus>,
+    command_sender: mpsc::UnboundedSender<SessionCommand>,
+) -> Result<Option<String>> {
     if !is_approved(&node, &allowed_nodes.read().await) {
-        return Ok(());
+        return Ok(None);
     }
 
     writer
@@ -650,6 +1574,7 @@ async fn connect_and_stream(
             node: node.clone(),
             gateway_connection_state: "connecting".to_string(),
             reason: None,
+            reconnect: reconnect.clone(),
         })
         .await?;
 
@@ -671,58 +1596,171 @@ async fn connect_and_stream(
 
     let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&characteristic).await?;
+    send_app_session_bootstrap(&peripheral, &control_characteristic).await?;
     write_chunked_json_command(
         &peripheral,
         &control_characteristic,
         r#"{"type":"sync-now"}"#,
     )
     .await?;
-    writer
-        .send(&Event::NodeConnectionState {
-            node: node.clone(),
-            gateway_connection_state: "connected".to_string(),
-            reason: None,
-        })
-        .await?;
+    send_app_session_lease(&peripheral, &control_characteristic, &app_session_id).await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
+    let mut session_healthy_reported = false;
+    let mut connected_identity_confirmed = node.known_device_id.is_some();
+    let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
+    let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
+    let lease_peripheral = peripheral.clone();
+    let lease_characteristic = control_characteristic.clone();
+    let lease_session_id = app_session_id.clone();
+    let lease_task = tokio::spawn(async move {
+        let mut lease_heartbeat =
+            tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
+        lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        lease_heartbeat.tick().await;
 
-    while let Some(notification) = notifications.next().await {
-        if notification.uuid != config.telemetry_uuid {
-            continue;
-        }
-
-        for payload in decoder.push_bytes(&notification.value)? {
-            match serde_json::from_value::<TelemetryPayload>(payload) {
-                Ok(payload) => {
-                    if let Some(peripheral_id) = node.peripheral_id.clone() {
-                        known_device_ids
-                            .write()
-                            .await
-                            .insert(peripheral_id, payload.device_id.clone());
+        loop {
+            tokio::select! {
+                changed = lease_shutdown_rx.changed() => {
+                    if changed.is_ok() && *lease_shutdown_rx.borrow() {
+                        break;
                     }
-                    let mut enriched = node.clone();
-                    enriched.known_device_id = Some(payload.device_id.clone());
-                    writer
-                        .send(&Event::Telemetry {
-                            node: enriched,
-                            payload,
-                        })
-                        .await?;
                 }
-                Err(error) => {
-                    writer
-                        .error(
-                            format!("Failed to parse telemetry payload: {error}"),
-                            Some(json!({ "node": node.id })),
-                        )
-                        .await;
+                _ = lease_heartbeat.tick() => {
+                    if let Err(error) = send_app_session_lease(
+                        &lease_peripheral,
+                        &lease_characteristic,
+                        &lease_session_id,
+                    ).await {
+                        let _ = lease_failure_tx.send(error.to_string());
+                        break;
+                    }
                 }
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            notification = notifications.next() => {
+                let Some(notification) = notification else {
+                    break;
+                };
+
+                if notification.uuid != config.telemetry_uuid {
+                    continue;
+                }
+
+                for payload in decoder.push_bytes(&notification.value)? {
+                    match serde_json::from_value::<TelemetryPayload>(payload) {
+                        Ok(payload) => {
+                            if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                known_device_ids
+                                    .write()
+                                    .await
+                                    .insert(peripheral_id, payload.device_id.clone());
+                            }
+                            let mut enriched = node.clone();
+                            enriched.known_device_id = Some(payload.device_id.clone());
+                            if !session_healthy_reported {
+                                session_healthy_reported = true;
+                                let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+                                    node: enriched.clone(),
+                                });
+                                writer
+                                    .send(&Event::NodeConnectionState {
+                                        node: enriched.clone(),
+                                        gateway_connection_state: "connected".to_string(),
+                                        reason: None,
+                                        reconnect: reconnect.clone(),
+                                    })
+                                    .await?;
+                            }
+                            if !connected_identity_confirmed {
+                                connected_identity_confirmed = true;
+                            }
+                            writer
+                                .send(&Event::Telemetry {
+                                    node: enriched,
+                                    payload,
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            writer
+                                .error(
+                                    format!("Failed to parse telemetry payload: {error}"),
+                                    Some(json!({ "node": node.id })),
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+            _ = sleep(Duration::from_millis(CONNECTION_HEALTH_POLL_MS)) => {
+                if !is_approved(&node, &allowed_nodes.read().await) {
+                    let _ = lease_shutdown_tx.send(true);
+                    let _ = lease_task.await;
+                    if peripheral.is_connected().await.unwrap_or(false) {
+                        let _ = peripheral.disconnect().await;
+                    }
+                    return Ok(Some(format!(
+                        "{} was removed from allowed nodes.",
+                        node.label,
+                    )));
+                }
+                if !peripheral.is_connected().await.unwrap_or(false) {
+                    let _ = lease_shutdown_tx.send(true);
+                    let _ = lease_task.await;
+                    return Ok(Some(format!("BLE transport ended for {}.", node.label)));
+                }
+            }
+            Some(reason) = lease_failure_rx.recv() => {
+                let _ = lease_shutdown_tx.send(true);
+                let _ = lease_task.await;
+                return Ok(Some(format!(
+                    "App-session lease heartbeat failed for {}: {}",
+                    node.label,
+                    reason,
+                )));
             }
         }
     }
 
+    let _ = lease_shutdown_tx.send(true);
+    let _ = lease_task.await;
+
+    if peripheral.is_connected().await.unwrap_or(false) {
+        let _ = peripheral.disconnect().await;
+    }
+
     sleep(Duration::from_millis(100)).await;
-    Ok(())
+    Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
+}
+
+async fn send_app_session_lease(
+    peripheral: &Peripheral,
+    characteristic: &btleplug::api::Characteristic,
+    session_id: &str,
+) -> Result<()> {
+    let payload = json!({
+        "type": "app-session-lease",
+        "sessionId": session_id,
+        "expiresInMs": APP_SESSION_LEASE_TIMEOUT_MS,
+    })
+    .to_string();
+    write_chunked_json_command(peripheral, characteristic, &payload).await
+}
+
+async fn send_app_session_bootstrap(
+    peripheral: &Peripheral,
+    characteristic: &btleplug::api::Characteristic,
+) -> Result<()> {
+    write_chunked_json_command(
+        peripheral,
+        characteristic,
+        r#"{"type":"app-session-bootstrap"}"#,
+    )
+    .await
 }
 
 async fn write_chunked_json_command(
@@ -756,6 +1794,7 @@ async fn discovered_node_from_peripheral(
     config: &Config,
     allowed_nodes: &[ApprovedNodeRule],
     known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    allow_approved_identity_fallback: bool,
 ) -> Result<Option<DiscoveredNode>> {
     let Some(properties) = peripheral.properties().await? else {
         return Ok(None);
@@ -766,58 +1805,29 @@ async fn discovered_node_from_peripheral(
         .services
         .iter()
         .any(|uuid| *uuid == config.service_uuid);
-    let prefix_matches = local_name
-        .as_ref()
-        .map(|name| {
-            !config.device_name_prefix.is_empty() && name.starts_with(&config.device_name_prefix)
-        })
-        .unwrap_or(false);
+    let address = Some(properties.address.to_string());
+    let peripheral_id = peripheral.id().to_string();
+    let known_device_ids_guard = known_device_ids.read().await;
+    let classification = classify_discovery_candidate(
+        &peripheral_id,
+        address.as_deref(),
+        local_name.as_deref(),
+        has_runtime_service,
+        config,
+        allowed_nodes,
+        &known_device_ids_guard,
+    );
+    drop(known_device_ids_guard);
 
-    if !has_runtime_service && !prefix_matches {
+    let accepted = classification.runtime_service_matched
+        || classification.name_prefix_matched
+        || (allow_approved_identity_fallback && classification.approved_identity_matched);
+
+    if !accepted {
         return Ok(None);
     }
 
-    let address = Some(properties.address.to_string());
-    let peripheral_id = peripheral.id().to_string();
-    let known_device_id = known_device_ids
-        .read()
-        .await
-        .get(&peripheral_id)
-        .cloned()
-        .or_else(|| {
-            allowed_nodes.iter().find_map(|rule| {
-                if rule
-                    .peripheral_id
-                    .as_ref()
-                    .map(|value| value == &peripheral_id)
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                if rule
-                    .address
-                    .as_ref()
-                    .zip(address.as_ref())
-                    .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                if rule
-                    .local_name
-                    .as_ref()
-                    .zip(local_name.as_ref())
-                    .map(|(left, right)| left == right)
-                    .unwrap_or(false)
-                {
-                    return rule.known_device_id.clone();
-                }
-
-                None
-            })
-        });
+    let known_device_id = classification.matched_known_device_id;
     let label = local_name
         .clone()
         .or_else(|| known_device_id.clone())
@@ -836,31 +1846,7 @@ async fn discovered_node_from_peripheral(
 }
 
 fn is_approved(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
-    rules.iter().any(|rule| {
-        rule.known_device_id
-            .as_ref()
-            .zip(node.known_device_id.as_ref())
-            .map(|(left, right)| left == right)
-            .unwrap_or(false)
-            || rule
-                .peripheral_id
-                .as_ref()
-                .zip(node.peripheral_id.as_ref())
-                .map(|(left, right)| left == right)
-                .unwrap_or(false)
-            || rule
-                .address
-                .as_ref()
-                .zip(node.address.as_ref())
-                .map(|(left, right)| left.eq_ignore_ascii_case(right))
-                .unwrap_or(false)
-            || rule
-                .local_name
-                .as_ref()
-                .zip(node.local_name.as_ref())
-                .map(|(left, right)| left == right)
-                .unwrap_or(false)
-    })
+    approved_rule_id_for_node(node, rules).is_some()
 }
 
 fn normalize_adapter_state(state: CentralState) -> String {
@@ -898,7 +1884,18 @@ fn chrono_like_seconds(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::control_command_frames;
+    use super::{
+        allow_approved_identity_fallback, approved_nodes_pending_connection,
+        approved_rule_id_for_node, all_approved_nodes_connected, classify_discovery_candidate,
+        control_command_frames, disconnected_nodes_removed_from_allowed, mark_node_connected,
+        is_approved, node_key, prune_reconnect_states, scan_reason,
+        should_clear_reconnect_peripherals, should_scan, ApprovedReconnectState, Config,
+        APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
+    };
+    use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
+    use std::{collections::HashMap, time::{Duration, Instant}};
+    use serde_json::Value;
+    use uuid::Uuid;
 
     #[test]
     fn frames_runtime_control_commands_for_firmware_parser() {
@@ -910,5 +1907,626 @@ mod tests {
             Some(&br#"{"type":"sync-now"}"#[..])
         );
         assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn frames_app_session_bootstrap_commands_for_firmware_parser() {
+        let frames = control_command_frames(r#"{"type":"app-session-bootstrap"}"#);
+
+        assert_eq!(frames.first().map(Vec::as_slice), Some(&b"BEGIN:32"[..]));
+        assert_eq!(
+            frames.get(1).map(Vec::as_slice),
+            Some(&br#"{"type":"app-session-bootstrap"}"#[..])
+        );
+        assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn frames_app_session_lease_commands_for_firmware_parser() {
+        let payload = format!(
+            r#"{{"type":"app-session-lease","sessionId":"session-1","expiresInMs":{}}}"#,
+            APP_SESSION_LEASE_TIMEOUT_MS
+        );
+        let frames = control_command_frames(&payload);
+
+        assert_eq!(
+            frames.first().map(Vec::as_slice),
+            Some(format!("BEGIN:{}", payload.len()).as_bytes())
+        );
+
+        let body = frames[1..frames.len() - 1]
+            .iter()
+            .flat_map(|frame| frame.iter().copied())
+            .collect::<Vec<_>>();
+        let decoded: Value =
+            serde_json::from_slice(&body).expect("lease payload should decode as JSON");
+
+        assert_eq!(decoded["type"], "app-session-lease");
+        assert_eq!(decoded["sessionId"], "session-1");
+        assert_eq!(decoded["expiresInMs"], APP_SESSION_LEASE_TIMEOUT_MS);
+        assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
+    }
+
+    #[test]
+    fn scan_policy_stays_active_while_approved_nodes_are_missing() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::new();
+        let reconnect_states = HashMap::new();
+
+        assert!(approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn scan_policy_stops_once_all_approved_nodes_are_connected_without_manual_scan() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let mut connected = HashMap::new();
+        let reconnect_states = HashMap::new();
+        connected.insert(
+            "peripheral-1".to_string(),
+            DiscoveredNode {
+                id: "peripheral:peripheral-1".to_string(),
+                label: "Bench".to_string(),
+                peripheral_id: Some("peripheral-1".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+                last_rssi: None,
+                last_seen_at: None,
+            },
+        );
+
+        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn exhausted_approved_nodes_no_longer_keep_reconnect_scan_active() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::new();
+        let reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: 20,
+                retry_exhausted: true,
+            },
+        )]);
+
+        assert!(!approved_nodes_pending_connection(&rules, &connected, &reconnect_states));
+        assert!(!should_scan(
+            &rules,
+            &connected,
+            &reconnect_states,
+            None,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn healthy_connections_clear_pending_reconnect_even_without_device_connected_event() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+        }];
+        let mut connected = HashMap::new();
+        let mut reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: 7,
+                retry_exhausted: false,
+            },
+        )]);
+        let node = DiscoveredNode {
+            id: "known:stack-001".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+            last_rssi: None,
+            last_seen_at: None,
+        };
+
+        mark_node_connected(&mut connected, &mut reconnect_states, &node, &rules);
+
+        assert!(!approved_nodes_pending_connection(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
+        assert_eq!(
+            reconnect_states.get("node-1").map(|state| state.attempt),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn reconnect_scan_does_not_clear_peripherals_while_a_handshake_is_in_flight() {
+        let connected = HashMap::new();
+
+        assert!(!should_clear_reconnect_peripherals(&connected, 1));
+        assert!(should_clear_reconnect_peripherals(&connected, 0));
+    }
+
+    #[test]
+    fn refresh_scan_policy_prunes_exhausted_rules_that_are_no_longer_allowed() {
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-2".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-2".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let mut reconnect_states = HashMap::from([
+            (
+                "node-1".to_string(),
+                ApprovedReconnectState {
+                    attempt: 20,
+                    retry_exhausted: true,
+                },
+            ),
+            (
+                "node-2".to_string(),
+                ApprovedReconnectState {
+                    attempt: 2,
+                    retry_exhausted: false,
+                },
+            ),
+        ]);
+
+        prune_reconnect_states(&mut reconnect_states, &allowed);
+
+        assert!(!reconnect_states.contains_key("node-1"));
+        assert_eq!(
+            reconnect_states.get("node-2").map(|state| state.attempt),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn removed_allowed_nodes_are_selected_for_disconnect() {
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-2".to_string(),
+            label: "Bench 2".to_string(),
+            peripheral_id: Some("peripheral-2".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let connected = HashMap::from([
+            (
+                "peripheral-1".to_string(),
+                DiscoveredNode {
+                    id: "peripheral:peripheral-1".to_string(),
+                    label: "Bench 1".to_string(),
+                    peripheral_id: Some("peripheral-1".to_string()),
+                    address: None,
+                    local_name: None,
+                    known_device_id: None,
+                    last_rssi: None,
+                    last_seen_at: None,
+                },
+            ),
+            (
+                "peripheral-2".to_string(),
+                DiscoveredNode {
+                    id: "peripheral:peripheral-2".to_string(),
+                    label: "Bench 2".to_string(),
+                    peripheral_id: Some("peripheral-2".to_string()),
+                    address: None,
+                    local_name: None,
+                    known_device_id: None,
+                    last_rssi: None,
+                    last_seen_at: None,
+                },
+            ),
+        ]);
+
+        let removed = disconnected_nodes_removed_from_allowed(&connected, &allowed);
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].peripheral_id.as_deref(), Some("peripheral-1"));
+    }
+
+    #[test]
+    fn shared_local_name_alone_does_not_make_a_node_approved() {
+        let rules = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+        ];
+        let node = DiscoveredNode {
+            id: "peripheral:peripheral-9".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-9".to_string()),
+            address: None,
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: None,
+            last_rssi: None,
+            last_seen_at: None,
+        };
+
+        assert!(!is_approved(&node, &rules));
+    }
+
+    #[test]
+    fn approved_reconnect_scan_reason_stays_silent_without_manual_scan_window() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(&rules, &HashMap::new(), &HashMap::new(), None, Instant::now()),
+            Some("approved-reconnect")
+        );
+    }
+
+    #[test]
+    fn manual_scan_reason_overrides_silent_reconnect_when_operator_starts_scan() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(
+                &rules,
+                &HashMap::new(),
+                &HashMap::new(),
+                Some(Instant::now() + Duration::from_secs(5)),
+                Instant::now(),
+            ),
+            Some("manual")
+        );
+    }
+
+    #[test]
+    fn approved_identity_fallback_applies_while_any_approved_node_is_still_missing() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            Instant::now()
+        ));
+
+        let mut connected_nodes = HashMap::new();
+        connected_nodes.insert(
+            "node-1".to_string(),
+            DiscoveredNode {
+                id: "stack-node-1".to_string(),
+                label: "Bench".to_string(),
+                address: None,
+                local_name: Some("GymMotion-bench".to_string()),
+                last_rssi: None,
+                last_seen_at: None,
+                peripheral_id: Some("peripheral-1".to_string()),
+                known_device_id: None,
+            },
+        );
+
+        assert!(!allow_approved_identity_fallback(
+            &rules,
+            &connected_nodes,
+            &HashMap::new(),
+            None,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn manual_scan_reason_does_not_disable_approved_identity_fallback_for_missing_nodes() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+
+        assert_eq!(
+            scan_reason(
+                &rules,
+                &HashMap::new(),
+                &HashMap::new(),
+                Some(Instant::now() + Duration::from_secs(5)),
+                Instant::now(),
+            ),
+            Some("manual")
+        );
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            Some(Instant::now() + Duration::from_secs(5)),
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn manual_scan_keeps_approved_identity_fallback_for_retry_exhausted_nodes() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: None,
+            known_device_id: None,
+        }];
+        let reconnect_states = HashMap::from([(
+            "node-1".to_string(),
+            ApprovedReconnectState {
+                attempt: RECONNECT_ATTEMPT_LIMIT,
+                retry_exhausted: true,
+            },
+        )]);
+        let now = Instant::now();
+
+        assert!(allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &reconnect_states,
+            Some(now + Duration::from_secs(5)),
+            now
+        ));
+
+        assert!(!allow_approved_identity_fallback(
+            &rules,
+            &HashMap::new(),
+            &reconnect_states,
+            None,
+            now
+        ));
+    }
+
+    #[test]
+    fn approved_reconnect_candidate_matches_by_peripheral_id_without_service_uuid() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-1",
+            Some("AA:BB"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(classification.approved_identity_matched);
+        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+        assert!(!classification.runtime_service_matched);
+        assert!(!classification.name_prefix_matched);
+    }
+
+    #[test]
+    fn approved_reconnect_candidate_matches_by_address_without_service_uuid() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: None,
+            address: Some("AA:BB".to_string()),
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-2",
+            Some("aa:bb"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(classification.approved_identity_matched);
+        assert_eq!(classification.matched_known_device_id.as_deref(), Some("stack-001"));
+    }
+
+    #[test]
+    fn manual_discovery_stays_strict_when_only_approved_identity_matches() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: Some("stack-001".to_string()),
+        }];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-1",
+            Some("AA:BB"),
+            None,
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        let manual_discovery_accepted =
+            classification.runtime_service_matched || classification.name_prefix_matched;
+
+        assert!(classification.approved_identity_matched);
+        assert!(!manual_discovery_accepted);
+    }
+
+    #[test]
+    fn approved_reconnect_does_not_match_shared_local_name_without_stronger_identity() {
+        let config = Config {
+            service_uuid: Uuid::nil(),
+            telemetry_uuid: Uuid::nil(),
+            control_uuid: Uuid::nil(),
+            device_name_prefix: "GymMotion-".to_string(),
+        };
+        let allowed = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: Some("stack-001".to_string()),
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: Some("stack-002".to_string()),
+            },
+        ];
+
+        let classification = classify_discovery_candidate(
+            "peripheral-9",
+            None,
+            Some("GymMotion-f4e9d4"),
+            false,
+            &config,
+            &allowed,
+            &HashMap::new(),
+        );
+
+        assert!(!classification.approved_identity_matched);
+        assert!(classification.matched_known_device_id.is_none());
+    }
+
+    #[test]
+    fn duplicate_name_only_rules_do_not_bind_one_connected_node_to_multiple_approvals() {
+        let rules = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+        ];
+        let node = DiscoveredNode {
+            id: "peripheral:peripheral-9".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-9".to_string()),
+            address: None,
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: None,
+            last_rssi: None,
+            last_seen_at: None,
+        };
+        let connected = HashMap::from([(node_key(&node), node.clone())]);
+        let reconnect_states = HashMap::new();
+
+        assert!(approved_rule_id_for_node(&node, &rules).is_none());
+        assert!(!all_approved_nodes_connected(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
     }
 }

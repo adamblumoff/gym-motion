@@ -3,6 +3,9 @@ import type {
   DiscoveredNodeSummary,
   GatewayRuntimeDeviceSummary,
 } from "@core/contracts";
+import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
+
+export { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
 
 type DiscoveryIdentity = {
   peripheralId: string | null;
@@ -50,13 +53,63 @@ export function createApprovedNodeRule(
 export function matchesApprovedNodeRule(
   rule: ApprovedNodeRule,
   identity: DiscoveryIdentity,
+  approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
+  const canUseLocalNameFallback =
+    !rule.knownDeviceId &&
+    !rule.peripheralId &&
+    !rule.address &&
+    Boolean(rule.localName) &&
+    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
+
   return Boolean(
     (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
       (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
-      (rule.address && identity.address === rule.address) ||
-      (rule.localName && identity.localName === rule.localName),
+      addressIdentityMatch(rule.address, identity.address) ||
+      (canUseLocalNameFallback && identity.localName === rule.localName),
   );
+}
+
+function addressIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
+export function reconcileApprovedNodeRule(
+  approvedNode: ApprovedNodeRule,
+  devices: GatewayRuntimeDeviceSummary[],
+  approvedNodes: ApprovedNodeRule[] = [approvedNode],
+): ApprovedNodeRule {
+  const matchingDevice = findMatchingGatewayDeviceForApprovedNode(
+    approvedNode,
+    devices,
+    approvedNodes,
+  );
+
+  if (!matchingDevice) {
+    return approvedNode;
+  }
+
+  const nextKnownDeviceId = matchingDevice.id;
+  const nextPeripheralId = matchingDevice.peripheralId ?? approvedNode.peripheralId;
+  const nextAddress = matchingDevice.address ?? approvedNode.address;
+  const nextLocalName = matchingDevice.advertisedName ?? approvedNode.localName;
+
+  return {
+    id: nodeRuleId({
+      knownDeviceId: nextKnownDeviceId,
+      peripheralId: nextPeripheralId,
+      address: nextAddress,
+      localName: nextLocalName,
+    }),
+    label: matchingDevice.machineLabel ?? approvedNode.label,
+    peripheralId: nextPeripheralId,
+    address: nextAddress,
+    localName: nextLocalName,
+    knownDeviceId: nextKnownDeviceId,
+  };
 }
 
 export function createNodeIdentity(

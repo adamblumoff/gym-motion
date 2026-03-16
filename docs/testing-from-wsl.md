@@ -18,7 +18,7 @@ Windows validation:
 3. Copy `.env.local` into that Windows repo.
 4. On Windows, install the Rust MSVC toolchain if it is not already present.
 5. On Windows, run `bun install` and `bun run dev`.
-6. Use the `Setup` tab to run a manual scan and connect a node.
+6. Use the `Setup` tab to run a manual scan when you need to discover or pair a node for the first time.
 7. Build the Windows package on the Windows side with `bun run build:win`.
 8. From WSL, run `bun run test:windows-desktop` if you want a helper to launch an already-built `.exe`.
 
@@ -28,7 +28,7 @@ This keeps the edit/build loop comfortable in WSL while still making it easy to 
 
 The Windows-side repo now builds a Rust WinRT BLE sidecar before `bun run dev` and `bun run build:win`, so Windows is the source of truth for native BLE validation.
 
-Managed-node reconnect on Windows now sends a runtime `sync-now` control command after BLE reconnect so the node republishes its current telemetry without waiting for a new motion event.
+Managed nodes on Windows should now reconnect automatically in the background after app restarts or BLE link loss. The desktop app keeps that approved-node search visually quiet until the node is rediscovered and a real reconnect attempt starts. After 20 failed reconnect attempts for one paired node, auto-reconnect stops for that node and the forget-device prompt appears only inside that node's homepage sensor card. After BLE reconnect, the gateway sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for a new motion event. Firmware also now expects a Windows app-session lease every 5 seconds and should drop a stale BLE session after 15 seconds without that lease so app restarts can recover cleanly.
 
 ## Current Limitation
 

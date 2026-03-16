@@ -25,6 +25,7 @@ pub struct AdapterSummary {
 pub struct GatewayStatePayload {
     pub adapter_state: String,
     pub scan_state: String,
+    pub scan_reason: Option<String>,
     pub selected_adapter_id: Option<String>,
     pub last_advertisement_at: Option<String>,
     pub issue: Option<String>,
@@ -40,6 +41,13 @@ pub struct DiscoveredNode {
     pub known_device_id: Option<String>,
     pub last_rssi: Option<i16>,
     pub last_seen_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconnectStatus {
+    pub attempt: u32,
+    pub attempt_limit: u32,
+    pub retry_exhausted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,6 +75,7 @@ pub enum Command {
     Start,
     Stop,
     Rescan,
+    RefreshScanPolicy,
     Shutdown,
 }
 
@@ -85,11 +94,13 @@ pub enum Event {
     },
     NodeDiscovered {
         node: DiscoveredNode,
+        scan_reason: Option<String>,
     },
     NodeConnectionState {
         node: DiscoveredNode,
         gateway_connection_state: String,
         reason: Option<String>,
+        reconnect: Option<ReconnectStatus>,
     },
     Telemetry {
         node: DiscoveredNode,
@@ -119,6 +130,14 @@ mod tests {
 
         assert_eq!(value["type"], "select_adapter");
         assert_eq!(value["adapter_id"], "winrt:0");
+    }
+
+    #[test]
+    fn serializes_refresh_scan_policy_command() {
+        let value =
+            serde_json::to_value(Command::RefreshScanPolicy).expect("command should serialize");
+
+        assert_eq!(value["type"], "refresh_scan_policy");
     }
 
     #[test]
@@ -196,6 +215,29 @@ mod tests {
         assert_eq!(value["type"], "telemetry");
         assert_eq!(value["payload"]["state"], "moving");
         assert_eq!(value["node"]["known_device_id"], "device-1");
+    }
+
+    #[test]
+    fn serializes_discovery_event_with_scan_reason() {
+        let event = Event::NodeDiscovered {
+            node: super::DiscoveredNode {
+                id: "peripheral:abc".to_string(),
+                label: "GymMotion-123".to_string(),
+                peripheral_id: Some("abc".to_string()),
+                address: Some("AA:BB".to_string()),
+                local_name: Some("GymMotion-123".to_string()),
+                known_device_id: None,
+                last_rssi: Some(-61),
+                last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
+            },
+            scan_reason: Some("approved-reconnect".to_string()),
+        };
+
+        let value = serde_json::to_value(event).expect("event should serialize");
+
+        assert_eq!(value["type"], "node_discovered");
+        assert_eq!(value["scan_reason"], "approved-reconnect");
+        assert_eq!(value["node"]["address"], "AA:BB");
     }
 
     #[test]

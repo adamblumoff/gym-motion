@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import process from "node:process";
+import readline from "node:readline";
 
 import noble from "@abandonware/noble";
 import { createJsonObjectDecoder } from "./ble-json-decoder.mjs";
@@ -33,7 +34,7 @@ const config = {
   runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
   runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
 };
-const approvedNodeRules = parseApprovedNodeRules(
+let approvedNodeRules = parseApprovedNodeRules(
   process.env.GATEWAY_APPROVED_NODE_RULES,
 );
 
@@ -52,6 +53,8 @@ const POLL_INTERVAL_MS = Number(process.env.GATEWAY_BLE_POLL_MS ?? 2_000);
 const CONTROL_COMMAND_CHUNK_SIZE = Number(
   process.env.GATEWAY_BLE_CONTROL_CHUNK_SIZE ?? 120,
 );
+const APP_SESSION_HEARTBEAT_MS = 5_000;
+const APP_SESSION_LEASE_TIMEOUT_MS = 15_000;
 
 function normalizeUuid(value) {
   return value.replaceAll("-", "").toLowerCase();
@@ -68,6 +71,13 @@ function parseApprovedNodeRules(raw) {
   } catch {
     return [];
   }
+}
+
+function updateApprovedNodeRules(nodes) {
+  approvedNodeRules = Array.isArray(nodes) ? nodes : [];
+  debug("updated approved node rules", {
+    count: approvedNodeRules.length,
+  });
 }
 
 function log(message, details) {
@@ -120,6 +130,8 @@ function createDeviceContext(deviceId, overrides = {}) {
     otaFailureDetail: null,
     otaLastStatusMessage: null,
     otaProgressMilestone: -1,
+    appSessionId: overrides.appSessionId ?? null,
+    stopLeaseHeartbeat: overrides.stopLeaseHeartbeat ?? null,
     ...overrides,
   };
 }
@@ -677,6 +689,46 @@ async function writeChunkedJsonCommand(characteristic, payload) {
   }
 
   await writeCharacteristic(characteristic, "END");
+}
+
+async function writeAppSessionBootstrap(controlCharacteristic) {
+  await writeChunkedJsonCommand(controlCharacteristic, {
+    type: "app-session-bootstrap",
+  });
+}
+
+async function writeAppSessionLease(controlCharacteristic, sessionId) {
+  await writeChunkedJsonCommand(controlCharacteristic, {
+    type: "app-session-lease",
+    sessionId,
+    expiresInMs: APP_SESSION_LEASE_TIMEOUT_MS,
+  });
+}
+
+async function startAppSessionLeaseHeartbeat(context) {
+  if (!context.controlCharacteristic) {
+    return () => {};
+  }
+
+  const sessionId = context.appSessionId ?? crypto.randomUUID();
+  context.appSessionId = sessionId;
+
+  await writeAppSessionBootstrap(context.controlCharacteristic);
+  await writeAppSessionLease(context.controlCharacteristic, sessionId);
+
+  const intervalId = setInterval(() => {
+    void writeAppSessionLease(context.controlCharacteristic, sessionId).catch((error) => {
+      debug(
+        `failed to refresh app session lease for ${context.deviceId}`,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }, APP_SESSION_HEARTBEAT_MS);
+  intervalId.unref?.();
+
+  return () => {
+    clearInterval(intervalId);
+  };
 }
 
 async function runHistorySync(context, payload) {
@@ -1298,6 +1350,7 @@ async function registerPeripheral(peripheral) {
     peripheral,
     connected: false,
     stopPolling: [],
+    stopLeaseHeartbeat: null,
   };
   peripherals.set(peripheral.id, peripheralContext);
   const peripheralInfo = describePeripheral(peripheral, advertisedName);
@@ -1326,6 +1379,8 @@ async function registerPeripheral(peripheral) {
     for (const stopPolling of peripheralContext.stopPolling) {
       stopPolling();
     }
+    peripheralContext.stopLeaseHeartbeat?.();
+    peripheralContext.stopLeaseHeartbeat = null;
 
     for (const context of deviceContexts.values()) {
       if (context.peripheralId !== peripheral.id || !context.updateInFlight) {
@@ -1529,6 +1584,16 @@ async function registerPeripheral(peripheral) {
       telemetryDelivery,
     });
 
+    const sessionContext = createDeviceContext(knownDeviceId ?? peripheral.id, {
+      controlCharacteristic,
+      otaDataCharacteristic,
+      peripheralId: peripheral.id,
+      address: peripheral.address,
+      advertisedName: advertisedName || null,
+      rssi: peripheral.rssi,
+    });
+    peripheralContext.stopLeaseHeartbeat = await startAppSessionLeaseHeartbeat(sessionContext);
+
     peripheralContext.connected = true;
     runtimeServer.noteConnected({
       ...peripheralInfo,
@@ -1548,6 +1613,8 @@ async function registerPeripheral(peripheral) {
     log(`connected to ${advertisedName || peripheral.id}`);
   } catch (error) {
     console.error(`[gateway] failed to connect to ${advertisedName || peripheral.id}`, error);
+    peripheralContext.stopLeaseHeartbeat?.();
+    peripheralContext.stopLeaseHeartbeat = null;
     queueNodeLog(peripheralInfo, {
       level: "warn",
       code: "node.connect_failed",
@@ -1566,6 +1633,31 @@ async function registerPeripheral(peripheral) {
 
 async function start() {
   await runtimeServer.start();
+
+  const commandReader = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+
+  commandReader.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    try {
+      const command = JSON.parse(trimmed);
+
+      if (command?.type === "set_allowed_nodes") {
+        updateApprovedNodeRules(command.nodes);
+      }
+    } catch (error) {
+      debug(
+        "ignoring malformed gateway command",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  });
 
   noble.on("stateChange", async (state) => {
     log(`bluetooth adapter state: ${state}`);

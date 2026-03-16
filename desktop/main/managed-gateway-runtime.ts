@@ -18,12 +18,14 @@ import {
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
+import { liveStatusLabelForScan } from "@core/gateway-scan";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import { listBleAdapters } from "./ble-adapters";
 import { createDesktopApiServer, type DesktopDataEvent } from "./desktop-api-server";
 import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
 import { hasApprovedSetupNode } from "./setup-nodes";
+import { matchingApprovedSetupNodeId } from "./setup-nodes";
 import {
   resolveGatewayScriptPath,
   resolveWindowsSidecarPath,
@@ -38,7 +40,9 @@ import type { PreferencesStore } from "./preferences-store";
 import {
   createApprovedNodeRule,
   createNodeIdentity,
+  findMatchingGatewayDeviceForApprovedNode,
   matchesApprovedNodeRule,
+  reconcileApprovedNodeRule,
 } from "./setup-selection";
 
 type ManagedGatewayRuntime = {
@@ -48,6 +52,7 @@ type ManagedGatewayRuntime = {
   getSnapshot: () => Promise<DesktopSnapshot>;
   getSetupState: () => Promise<DesktopSetupState>;
   rescanAdapters: () => Promise<DesktopSetupState>;
+  requestSilentReconnect: () => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
@@ -60,6 +65,7 @@ const EMPTY_GATEWAY: GatewayStatusSummary = {
   sessionId: "unavailable",
   adapterState: "unknown",
   scanState: "stopped",
+  scanReason: null,
   connectedNodeCount: 0,
   reconnectingNodeCount: 0,
   knownNodeCount: 0,
@@ -165,8 +171,8 @@ export function createManagedGatewayRuntime(
   let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
 
-  function sendWindowsGatewayCommand(command: Record<string, unknown>) {
-    if (!usesWindowsNativeGateway(process.platform) || !child?.stdin || child.killed) {
+  function sendGatewayCommand(command: Record<string, unknown>) {
+    if (!child?.stdin || child.killed) {
       return;
     }
 
@@ -203,15 +209,13 @@ export function createManagedGatewayRuntime(
       return "Gateway live";
     }
 
-    if (
-      snapshotState.gateway.scanState === "scanning" &&
-      snapshotState.gateway.reconnectingNodeCount > 0
-    ) {
-      return "Reconnecting approved nodes";
-    }
-
-    if (snapshotState.gateway.scanState === "scanning") {
-      return "Scanning for BLE nodes";
+    const scanStatusLabel = liveStatusLabelForScan(
+      snapshotState.gateway.scanState,
+      snapshotState.gateway.scanReason,
+      snapshotState.gateway.reconnectingNodeCount,
+    );
+    if (scanStatusLabel) {
+      return scanStatusLabel;
     }
 
     if (snapshotState.gateway.adapterState !== "poweredOn") {
@@ -250,6 +254,30 @@ export function createManagedGatewayRuntime(
 
   function readApprovedNodes() {
     return normalizeApprovedNodes(store);
+  }
+
+  function reconcileApprovedNodesWithSnapshot() {
+    const currentApprovedNodes = readApprovedNodes();
+    const nextApprovedNodes = dedupeApprovedNodes(
+      currentApprovedNodes.map((node) =>
+        reconcileApprovedNodeRule(node, snapshot.devices, currentApprovedNodes),
+      ),
+    );
+
+    if (JSON.stringify(nextApprovedNodes) === JSON.stringify(currentApprovedNodes)) {
+      return currentApprovedNodes;
+    }
+
+    store.setJson(APPROVED_NODES_KEY, nextApprovedNodes);
+
+    if (child) {
+      sendGatewayCommand({
+        type: "set_allowed_nodes",
+        nodes: nextApprovedNodes,
+      });
+    }
+
+    return nextApprovedNodes;
   }
 
   function selectedAdapter() {
@@ -336,7 +364,7 @@ export function createManagedGatewayRuntime(
   }
 
   function mergeSetupNodes(nodes: DiscoveredNodeSummary[]) {
-    const approvedNodes = readApprovedNodes();
+    const approvedNodes = reconcileApprovedNodesWithSnapshot();
     const byId = new Map<string, DiscoveredNodeSummary>();
 
     for (const node of nodes) {
@@ -344,14 +372,12 @@ export function createManagedGatewayRuntime(
     }
 
     for (const approvedNode of approvedNodes) {
-      const matchingDevice = snapshot.devices.find((device) =>
-        matchesApprovedNodeRule(approvedNode, {
-          ...createNodeIdentity(device),
-          knownDeviceId: device.id,
-        }),
+      const matchingDevice = findMatchingGatewayDeviceForApprovedNode(
+        approvedNode,
+        snapshot.devices,
       );
 
-      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode);
+      const alreadyPresent = hasApprovedSetupNode(byId, approvedNode, approvedNodes);
 
       if (!alreadyPresent) {
         byId.set(approvedNode.id, {
@@ -377,7 +403,34 @@ export function createManagedGatewayRuntime(
           gatewayConnectionState: matchingDevice?.gatewayConnectionState ?? "visible",
           isApproved: true,
         });
+        continue;
       }
+
+      const matchingNodeId = matchingApprovedSetupNodeId(byId, approvedNode, approvedNodes);
+      const matchingNode = matchingNodeId ? byId.get(matchingNodeId) ?? null : null;
+
+      if (!matchingNode || matchingNode.id === approvedNode.id) {
+        continue;
+      }
+
+      byId.delete(matchingNode.id);
+      byId.set(approvedNode.id, {
+        ...matchingNode,
+        id: approvedNode.id,
+        label:
+          matchingDevice?.machineLabel ??
+          matchingNode.machineLabel ??
+          approvedNode.label ??
+          matchingNode.label,
+        peripheralId: matchingDevice?.peripheralId ?? matchingNode.peripheralId,
+        localName: matchingDevice?.advertisedName ?? matchingNode.localName,
+        knownDeviceId: approvedNode.knownDeviceId ?? matchingNode.knownDeviceId,
+        machineLabel: matchingDevice?.machineLabel ?? matchingNode.machineLabel,
+        siteId: matchingDevice?.siteId ?? matchingNode.siteId,
+        gatewayConnectionState:
+          matchingDevice?.gatewayConnectionState ?? matchingNode.gatewayConnectionState,
+        isApproved: true,
+      });
     }
 
     setupState = {
@@ -429,10 +482,11 @@ export function createManagedGatewayRuntime(
               ...createNodeIdentity(device),
               knownDeviceId: device.id,
             },
+            readApprovedNodes(),
           ),
         );
       const isApproved = readApprovedNodes().some((approvedNode) =>
-        matchesApprovedNodeRule(approvedNode, node),
+        matchesApprovedNodeRule(approvedNode, node, readApprovedNodes()),
       );
 
       return {
@@ -902,13 +956,26 @@ export function createManagedGatewayRuntime(
       await refreshAdapters();
       return setupState;
     },
+    async requestSilentReconnect() {
+      if (usesWindowsNativeGateway(process.platform)) {
+        if (child) {
+          sendGatewayCommand({ type: "request_silent_reconnect" });
+          return;
+        }
+
+        await restartRuntime();
+        return;
+      }
+
+      await refreshAdapters();
+    },
     async setAllowedNodes(nodes) {
       const nextNodes = dedupeApprovedNodes(nodes);
       store.setJson(APPROVED_NODES_KEY, nextNodes);
       await refreshAdapters();
 
       if (usesWindowsNativeGateway(process.platform)) {
-        sendWindowsGatewayCommand({
+        sendGatewayCommand({
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });

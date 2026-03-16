@@ -7,6 +7,32 @@ type DiscoveryIdentity = {
   knownDeviceId: string | null;
 };
 
+type ForgetIdentity = DiscoveryIdentity & {
+  id: string | null;
+};
+
+function exactIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left === right);
+}
+
+function addressIdentityMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
+function forgetFieldMatches(
+  ruleValue: string | null | undefined,
+  identityValue: string | null | undefined,
+  matcher: (left: string | null | undefined, right: string | null | undefined) => boolean,
+) {
+  return Boolean(ruleValue && identityValue && matcher(ruleValue, identityValue));
+}
+
 export function resolveVisibleNodes(setup: DesktopSetupState) {
   return setup.nodes.length > 0
     ? setup.nodes
@@ -60,24 +86,70 @@ export function buildApprovedNodeRules(
 
 export function forgetApprovedNodeRules(
   approvedNodes: ApprovedNodeRule[],
-  runtimeDeviceId: string,
+  identity: string | ForgetIdentity,
 ) {
-  return approvedNodes.filter(
-    (rule) =>
-      rule.id !== runtimeDeviceId &&
-      rule.knownDeviceId !== runtimeDeviceId &&
-      rule.peripheralId !== runtimeDeviceId,
+  const forgetIdentity: ForgetIdentity =
+    typeof identity === "string"
+      ? {
+          id: identity,
+          knownDeviceId: identity,
+          peripheralId: identity,
+          address: null,
+          localName: null,
+        }
+      : identity;
+
+  const localNameMatches = approvedNodes.filter((rule) =>
+    forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch),
   );
+  const allowLocalNameFallback = localNameMatches.length === 1;
+
+  return approvedNodes.filter((rule) => {
+    const strongIdentityMatch =
+      forgetFieldMatches(rule.id, forgetIdentity.id, exactIdentityMatch) ||
+      forgetFieldMatches(
+        rule.knownDeviceId,
+        forgetIdentity.knownDeviceId,
+        exactIdentityMatch,
+      ) ||
+      forgetFieldMatches(
+        rule.peripheralId,
+        forgetIdentity.peripheralId,
+        exactIdentityMatch,
+      ) ||
+      forgetFieldMatches(rule.address, forgetIdentity.address, addressIdentityMatch);
+
+    if (strongIdentityMatch) {
+      return false;
+    }
+
+    if (
+      allowLocalNameFallback &&
+      forgetFieldMatches(rule.localName, forgetIdentity.localName, exactIdentityMatch)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function matchesApprovedNodeIdentity(
   rule: ApprovedNodeRule,
   identity: DiscoveryIdentity,
+  approvedNodes: ApprovedNodeRule[] = [rule],
 ) {
+  const canUseLocalNameFallback =
+    !rule.knownDeviceId &&
+    !rule.peripheralId &&
+    !rule.address &&
+    Boolean(rule.localName) &&
+    approvedNodes.filter((approvedNode) => approvedNode.localName === rule.localName).length === 1;
+
   return Boolean(
-    (rule.knownDeviceId && identity.knownDeviceId === rule.knownDeviceId) ||
-      (rule.peripheralId && identity.peripheralId === rule.peripheralId) ||
-      (rule.address && identity.address === rule.address) ||
-      (rule.localName && identity.localName === rule.localName),
+    exactIdentityMatch(rule.knownDeviceId, identity.knownDeviceId) ||
+      exactIdentityMatch(rule.peripheralId, identity.peripheralId) ||
+      addressIdentityMatch(rule.address, identity.address) ||
+      (canUseLocalNameFallback && exactIdentityMatch(rule.localName, identity.localName)),
   );
 }

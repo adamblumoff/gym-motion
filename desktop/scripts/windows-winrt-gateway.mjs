@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
+import { shouldWriteDiscoveryLog } from "./windows-winrt-gateway-logging.mjs";
 
 const config = {
   apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -47,6 +48,7 @@ let shuttingDown = false;
 let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
 let scanRequestedFromBoot = config.startScanOnBoot;
+let currentScanReason = null;
 
 function log(message, details) {
   if (details !== undefined) {
@@ -243,9 +245,48 @@ async function forwardTelemetry(payload, node = {}) {
   context.advertisedName = node.localName ?? context.advertisedName ?? null;
   context.rssi = node.lastRssi ?? node.rssi ?? context.rssi ?? null;
 
-  flushNodeLogs(payload.deviceId, describeNode(node), payload);
+  const peripheralInfo = {
+    ...describeNode(node),
+    deviceId: payload.deviceId,
+    knownDeviceId: payload.deviceId,
+  };
 
-  const telemetryResult = await runtimeServer.noteTelemetry(payload, describeNode(node));
+  flushNodeLogs(payload.deviceId, peripheralInfo, payload);
+
+  const connectionBeforeTelemetry = runtimeServer.inspectNodeConnection({
+    deviceId: payload.deviceId,
+    knownDeviceId: payload.deviceId,
+    peripheralId: peripheralInfo.peripheralId,
+    localName: peripheralInfo.localName,
+    address: peripheralInfo.address,
+  });
+
+  if (connectionBeforeTelemetry?.gatewayConnectionState !== "connected") {
+    const transition = runtimeServer.noteConnected(peripheralInfo);
+
+    if (
+      transition?.before?.gatewayConnectionState &&
+      transition.before.gatewayConnectionState !== "connected"
+    ) {
+      void writeDeviceLog({
+        deviceId: payload.deviceId,
+        level: "info",
+        code: "node.transport_reasserted_by_telemetry",
+        message: "Live BLE telemetry reasserted the Windows transport connection.",
+        bootId: payload.bootId ?? null,
+        firmwareVersion: payload.firmwareVersion ?? null,
+        hardwareId: payload.hardwareId ?? null,
+        metadata: {
+          peripheralId: peripheralInfo.peripheralId,
+          address: peripheralInfo.address,
+          transportStateBefore: transition.before.gatewayConnectionState,
+          transportStateAfter: transition.after?.gatewayConnectionState ?? "connected",
+        },
+      });
+    }
+  }
+
+  const telemetryResult = await runtimeServer.noteTelemetry(payload, peripheralInfo);
   const connectionStateBeforeTelemetry = telemetryResult?.before?.gatewayConnectionState ?? null;
 
   if (
@@ -307,10 +348,20 @@ async function forwardTelemetry(payload, node = {}) {
   context.lastHeartbeatForwardedAt = Date.now();
 }
 
-function handleNodeDiscovered(node) {
+function handleNodeDiscovered(node, scanReason = null) {
   const peripheralInfo = describeNode(node);
 
-  runtimeServer.noteDiscovery(peripheralInfo);
+  runtimeServer.noteDiscovery({
+    ...peripheralInfo,
+    reconnectAttempt: node.reconnect?.attempt ?? null,
+    reconnectAttemptLimit: node.reconnect?.attempt_limit ?? null,
+    reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
+  });
+
+  if (!shouldWriteDiscoveryLog(scanReason)) {
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
     code: "node.discovered",
     message: `Gateway discovered ${node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node"}.`,
@@ -332,13 +383,21 @@ function handleNodeConnectionState(event) {
     event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
   if (connectionState === "connecting") {
-    const transition = runtimeServer.noteConnecting(peripheralInfo);
+    const transition = runtimeServer.noteConnecting({
+      ...peripheralInfo,
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
+    });
     queueNodeLog(peripheralInfo, {
       code: "node.connecting",
       message: `Gateway is connecting to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
         lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
@@ -350,13 +409,19 @@ function handleNodeConnectionState(event) {
   }
 
   if (connectionState === "connected") {
-    const transition = runtimeServer.noteConnected(peripheralInfo);
+    const transition = runtimeServer.noteConnected({
+      ...peripheralInfo,
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+    });
     queueNodeLog(peripheralInfo, {
       code: "node.connected",
       message: `Gateway connected to ${label}.`,
       metadata: {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? "connected",
         lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
@@ -370,6 +435,9 @@ function handleNodeConnectionState(event) {
   const transition = runtimeServer.noteDisconnected({
     ...peripheralInfo,
     reason: event.reason ?? "ble-disconnected",
+    reconnectAttempt: event.reconnect?.attempt ?? null,
+    reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+    reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
   });
   if (!transition?.applied) {
     queueNodeLog(peripheralInfo, {
@@ -380,6 +448,9 @@ function handleNodeConnectionState(event) {
         peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
         address: node.address ?? null,
         reason: event.reason ?? "ble-disconnected",
+        reconnectAttempt: event.reconnect?.attempt ?? null,
+        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
         transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
         transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
         lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
@@ -390,14 +461,21 @@ function handleNodeConnectionState(event) {
     return;
   }
 
+  if (transition.before?.gatewayConnectionState === "disconnected") {
+    return;
+  }
+
   queueNodeLog(peripheralInfo, {
-    level: connectionState === "reconnecting" ? "warn" : "info",
+    level: "warn",
     code: "node.disconnected",
     message: `Gateway lost ${label}.`,
     metadata: {
       peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
       address: node.address ?? null,
       reason: event.reason ?? "ble-disconnected",
+      reconnectAttempt: event.reconnect?.attempt ?? null,
+      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
+      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
       transportStateBefore: transition.before?.gatewayConnectionState ?? null,
       transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
       lastTelemetryAt: transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,
@@ -463,6 +541,11 @@ function attachControlReader() {
 
       if (command.type === "rescan") {
         sendCommand("rescan");
+        return;
+      }
+
+      if (command.type === "request_silent_reconnect") {
+        sendCommand("refresh_scan_policy");
       }
     } catch (error) {
       console.error("[gateway-winrt] failed to parse control command", error);
@@ -515,14 +598,21 @@ function handleSidecarEvent(event) {
       }
       break;
     case "gateway_state":
+      currentScanReason = event.gateway?.scan_reason ?? event.scanReason ?? null;
       runtimeServer.setAdapterState(
         event.gateway?.adapter_state ?? event.adapterState ?? "unknown",
       );
-      runtimeServer.setScanState(event.gateway?.scan_state ?? event.scanState ?? "stopped");
+      runtimeServer.setScanState(
+        event.gateway?.scan_state ?? event.scanState ?? "stopped",
+        currentScanReason,
+      );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       break;
     case "node_discovered":
-      handleNodeDiscovered(event.node ?? {});
+      handleNodeDiscovered(
+        event.node ?? {},
+        event.scan_reason ?? event.scanReason ?? null,
+      );
       break;
     case "node_connection_state":
       handleNodeConnectionState(event);
@@ -611,8 +701,9 @@ async function startSidecar() {
   attachJsonLineReader(sidecar.stdout, handleSidecarEvent);
   sidecar.once("exit", (code, signal) => {
     sidecar = null;
+    currentScanReason = null;
     runtimeServer.setAdapterState("unknown");
-    runtimeServer.setScanState("stopped");
+    runtimeServer.setScanState("stopped", null);
 
     if (!shuttingDown) {
       setRuntimeIssue(`Windows BLE sidecar exited (${signal ?? code ?? "unknown"}).`);

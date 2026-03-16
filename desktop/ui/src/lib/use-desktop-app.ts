@@ -177,6 +177,9 @@ export function useDesktopApp() {
         setup,
       }));
     },
+    async requestSilentReconnect() {
+      await window.gymMotionDesktop.requestSilentReconnect();
+    },
     async setAllowedNodes(nodes: ApprovedNodeRule[]) {
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => ({

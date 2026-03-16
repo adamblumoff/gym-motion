@@ -74,6 +74,91 @@ describe("setup-rules", () => {
     expect(forgetApprovedNodeRules(setup.approvedNodes, "stack-001")).toEqual([]);
   });
 
+  it("forgets approved nodes by runtime identity fields from the dashboard", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "address:AA:BB",
+        label: "Stack 001",
+        peripheralId: null,
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral-1",
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not forget unrelated approved nodes that only share null identity fields", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "known:stack-001",
+        label: "Stack 001",
+        peripheralId: "peripheral-1",
+        address: null,
+        localName: null,
+        knownDeviceId: "stack-001",
+      },
+      {
+        id: "known:stack-002",
+        label: "Stack 002",
+        peripheralId: "peripheral-2",
+        address: null,
+        localName: null,
+        knownDeviceId: "stack-002",
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral-1",
+        address: null,
+        localName: null,
+      }),
+    ).toEqual([approvedNodes[1]!]);
+  });
+
+  it("does not forget every approved node that only shares a local name", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "name:GymMotion-f4e9d4-a",
+        label: "Stack 001",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      {
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Stack 002",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      forgetApprovedNodeRules(approvedNodes, {
+        id: "stack-001",
+        knownDeviceId: null,
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+      }),
+    ).toEqual(approvedNodes);
+  });
+
   it("matches approved nodes by identity fields, not only exact ids", () => {
     const [rule] = createSetupState().approvedNodes;
 
@@ -85,5 +170,52 @@ describe("setup-rules", () => {
         knownDeviceId: null,
       }),
     ).toBe(true);
+  });
+
+  it("matches approved node addresses case-insensitively", () => {
+    const [rule] = createSetupState().approvedNodes;
+
+    expect(
+      matchesApprovedNodeIdentity(rule, {
+        peripheralId: null,
+        address: "aa:bb",
+        localName: null,
+        knownDeviceId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat shared local names as proof a visible node is already paired", () => {
+    const approvedNodes: DesktopSetupState["approvedNodes"] = [
+      {
+        id: "name:GymMotion-f4e9d4-a",
+        label: "Stack 001",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      {
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Stack 002",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    expect(
+      matchesApprovedNodeIdentity(
+        approvedNodes[0]!,
+        {
+          peripheralId: null,
+          address: null,
+          localName: "GymMotion-f4e9d4",
+          knownDeviceId: null,
+        },
+        approvedNodes,
+      ),
+    ).toBe(false);
   });
 });

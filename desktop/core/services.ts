@@ -16,6 +16,7 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   getSetupState: "runtime:get-setup-state",
   restartGatewayRuntime: "runtime:restart-gateway-runtime",
   rescanAdapters: "runtime:rescan-adapters",
+  requestSilentReconnect: "runtime:request-silent-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
   updated: "runtime:updated",
 } as const;
@@ -69,6 +70,7 @@ export type DesktopApi = {
   getSetupState: () => Promise<DesktopSetupState>;
   restartGatewayRuntime: () => Promise<DesktopSnapshot>;
   rescanAdapters: () => Promise<DesktopSetupState>;
+  requestSilentReconnect: () => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;

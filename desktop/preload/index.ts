@@ -20,6 +20,9 @@ const desktopApi: DesktopApi = {
   async rescanAdapters() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
   },
+  async requestSilentReconnect() {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect);
+  },
   async setAllowedNodes(nodes: ApprovedNodeRule[]) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);
   },

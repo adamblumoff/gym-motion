@@ -10,7 +10,7 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
-const char* FIRMWARE_VERSION = "0.5.1";
+const char* FIRMWARE_VERSION = "0.5.2";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREF_DEVICE_ID = "device_id";
@@ -39,6 +39,10 @@ const int MOTION_THRESHOLD = 70;
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
+const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 8000;
+const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
+const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
+const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
@@ -57,10 +61,12 @@ Preferences preferences;
 BLEServer* bleServer = nullptr;
 BLECharacteristic* provisioningControlCharacteristic = nullptr;
 BLECharacteristic* provisioningStatusCharacteristic = nullptr;
+BLE2902* provisioningStatusDescriptor = nullptr;
 BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
 BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeOtaDataCharacteristic = nullptr;
+BLE2902* runtimeTelemetryDescriptor = nullptr;
 String provisioningCommandBuffer;
 String runtimeCommandBuffer;
 
@@ -76,13 +82,25 @@ int lastReportedDelta = 0;
 unsigned long lastTelemetryAt = 0;
 bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
+bool runtimeAppSessionConnected = false;
+bool runtimeBootstrapLeasePending = false;
+bool runtimeLeaseRequired = false;
+bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
 unsigned long pendingRebootAt = 0;
+unsigned long runtimeBleConnectedAt = 0;
+unsigned long lastAppSessionLeaseAt = 0;
+unsigned long lastDisconnectedAdvertisingLogAt = 0;
+unsigned long lastConnectedRuntimeDebugAt = 0;
+unsigned long lastRuntimeControlAt = 0;
+unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
 unsigned long ackedHistorySequence = 0;
 unsigned long lastJournaledSequence = 0;
 unsigned long historyDroppedCount = 0;
 bool historyOverflowed = false;
+uint16_t runtimeBleConnId = 0;
+String runtimeAppSessionId;
 
 struct OtaTransferState {
   bool active = false;
@@ -553,26 +571,40 @@ void setupADXL345() {
 }
 
 void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  Serial.print("BLE -> ");
-  Serial.println(payload);
-
-  if (characteristic == nullptr || !connected) {
+  if (characteristic == nullptr) {
+    Serial.print("BLE notify skipped (missing characteristic): ");
+    Serial.println(payload);
     return;
   }
 
+  if (!connected) {
+    Serial.print("BLE notify skipped (runtime client disconnected): ");
+    Serial.println(payload);
+    return;
+  }
+
+  Serial.print("BLE notify sent: ");
+  Serial.println(payload);
   characteristic->setValue(payload.c_str());
   characteristic->notify();
   delay(30);
 }
 
 void notifyCharacteristicChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  Serial.print("BLE -> ");
-  Serial.println(payload);
-
-  if (characteristic == nullptr || !connected) {
+  if (characteristic == nullptr) {
+    Serial.print("BLE chunked notify skipped (missing characteristic): ");
+    Serial.println(payload);
     return;
   }
 
+  if (!connected) {
+    Serial.print("BLE chunked notify skipped (runtime client disconnected): ");
+    Serial.println(payload);
+    return;
+  }
+
+  Serial.print("BLE chunked notify sent: ");
+  Serial.println(payload);
   characteristic->setValue(("BEGIN:" + String(payload.length())).c_str());
   characteristic->notify();
   delay(30);
@@ -615,6 +647,260 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
 
   payload += "}";
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+}
+
+void logRuntimeTransportEvent(const String& message) {
+  Serial.print("[runtime] ");
+  Serial.println(message);
+}
+
+void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
+  if (advertising == nullptr) {
+    return;
+  }
+
+  advertising->stop();
+  advertising->reset();
+  advertising->setScanResponse(true);
+
+  BLEAdvertisementData advertisementData;
+  advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+  advertisementData.setName(createBleDeviceName());
+  advertisementData.setCompleteServices(BLEUUID(PROVISIONING_SERVICE_UUID));
+  advertising->setAdvertisementData(advertisementData);
+
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setPartialServices(BLEUUID(RUNTIME_SERVICE_UUID));
+  advertising->setScanResponseData(scanResponseData);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+}
+
+void startRuntimeAdvertising(const String& reason) {
+  if (bleServer == nullptr) {
+    return;
+  }
+
+  BLEAdvertising* advertising = bleServer->getAdvertising();
+
+  if (advertising == nullptr) {
+    return;
+  }
+
+  configureRuntimeAdvertisingPayload(advertising);
+  advertising->start();
+  lastDisconnectedAdvertisingLogAt = millis();
+  logRuntimeTransportEvent(
+    "Advertising for Windows app reconnect (" + reason + ") as " +
+    createBleDeviceName() + " with runtime scan response."
+  );
+}
+
+void logRuntimeLeaseState(const char* reason, unsigned long now) {
+  Serial.print("[runtime] ");
+  Serial.print(reason);
+  Serial.print(" connected=");
+  Serial.print(runtimeBleConnected ? 1 : 0);
+  Serial.print(" leased=");
+  Serial.print(runtimeAppSessionConnected ? 1 : 0);
+  Serial.print(" connKnown=");
+  Serial.print(runtimeBleConnIdKnown ? 1 : 0);
+  Serial.print(" connId=");
+  Serial.print(runtimeBleConnIdKnown ? runtimeBleConnId : 0);
+  Serial.print(" msSinceConnect=");
+  Serial.print(runtimeBleConnectedAt > 0 ? now - runtimeBleConnectedAt : 0);
+  Serial.print(" msSinceLease=");
+  Serial.print(lastAppSessionLeaseAt > 0 ? now - lastAppSessionLeaseAt : 0);
+  Serial.print(" msSinceControl=");
+  Serial.print(lastRuntimeControlAt > 0 ? now - lastRuntimeControlAt : 0);
+  Serial.print(" leaseTimeoutMs=");
+  Serial.print(appSessionLeaseTimeoutMs);
+  Serial.print(" sessionId=");
+  if (runtimeAppSessionId.length() > 0) {
+    Serial.println(runtimeAppSessionId);
+    return;
+  }
+
+  Serial.println("(none)");
+}
+
+void resetRuntimeAppSessionState() {
+  runtimeAppSessionConnected = false;
+  runtimeBootstrapLeasePending = false;
+  runtimeLeaseRequired = false;
+  runtimeAppSessionId = "";
+  lastAppSessionLeaseAt = 0;
+  lastRuntimeControlAt = 0;
+  appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
+}
+
+void armRuntimeBootstrapWatchdog(const String& message) {
+  if (!runtimeBleConnected || runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+    return;
+  }
+
+  runtimeBootstrapLeasePending = true;
+  logRuntimeTransportEvent(message);
+}
+
+void disarmRuntimeBootstrapWatchdog() {
+  runtimeBootstrapLeasePending = false;
+}
+
+void markRuntimeAppSessionOnline(
+  const String& sessionId,
+  unsigned long expiresInMs,
+  unsigned long timestamp
+) {
+  const unsigned long nextTimeout =
+    expiresInMs > 0 ? expiresInMs : APP_SESSION_LEASE_DEFAULT_MS;
+  const bool sessionChanged =
+    !runtimeAppSessionConnected || runtimeAppSessionId != sessionId;
+
+  runtimeAppSessionConnected = true;
+  runtimeAppSessionId = sessionId;
+  lastAppSessionLeaseAt = timestamp;
+  lastRuntimeControlAt = timestamp;
+  appSessionLeaseTimeoutMs = nextTimeout;
+
+  if (!sessionChanged) {
+    logRuntimeLeaseState("Lease refreshed.", timestamp);
+    return;
+  }
+
+  logRuntimeTransportEvent(
+    "Windows app session lease is active for session " + sessionId + "."
+  );
+
+  journalNodeLog(
+    "info",
+    "runtime.app_session.online",
+    "Windows app session lease is active.",
+    timestamp
+  );
+}
+
+void noteRuntimeAppSessionExpired(unsigned long timestamp) {
+  const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
+  resetRuntimeAppSessionState();
+
+  if (!hadSession) {
+    return;
+  }
+
+  logRuntimeTransportEvent(
+    "Windows app session lease expired; dropping BLE client and resuming advertising."
+  );
+
+  journalNodeLog(
+    "warn",
+    "runtime.app_session.expired",
+    "Windows app session lease expired; resetting BLE advertising.",
+    timestamp
+  );
+}
+
+void noteRuntimeTransportDisconnected(unsigned long timestamp) {
+  const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
+  resetRuntimeAppSessionState();
+  runtimeBleConnIdKnown = false;
+  runtimeBleConnId = 0;
+
+  logRuntimeTransportEvent(
+    "BLE runtime transport disconnected from the Windows app."
+  );
+
+  if (!hadSession) {
+    return;
+  }
+
+  journalNodeLog(
+    "warn",
+    "runtime.app_session.offline",
+    "BLE runtime transport disconnected from the Windows app.",
+    timestamp
+  );
+}
+
+void enforceRuntimeAppSessionLease() {
+  if (!runtimeBleConnected) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (runtimeBootstrapLeasePending) {
+    if (
+      runtimeBleConnectedAt > 0 &&
+      now - runtimeBleConnectedAt >= APP_SESSION_BOOTSTRAP_TIMEOUT_MS
+    ) {
+      logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.missing",
+        "BLE client connected without runtime control traffic; dropping stale client.",
+        now
+      );
+      logRuntimeTransportEvent(
+        "BLE client never started a runtime session; dropping stale client."
+      );
+      resetRuntimeAppSessionState();
+
+      if (bleServer != nullptr && runtimeBleConnIdKnown) {
+        bleServer->disconnect(runtimeBleConnId);
+        return;
+      }
+
+      startRuntimeAdvertising("missing runtime bootstrap");
+    }
+
+    return;
+  }
+
+  if (!runtimeLeaseRequired) {
+    return;
+  }
+
+  if (!runtimeAppSessionConnected || lastAppSessionLeaseAt == 0) {
+    if (
+      runtimeBleConnectedAt > 0 &&
+      now - runtimeBleConnectedAt >= APP_SESSION_BOOTSTRAP_TIMEOUT_MS
+    ) {
+      logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.missing",
+        "BLE client connected without an app session lease; dropping stale client.",
+        now
+      );
+      logRuntimeTransportEvent(
+        "BLE client never leased the Windows app session; dropping stale client."
+      );
+      resetRuntimeAppSessionState();
+
+      if (bleServer != nullptr && runtimeBleConnIdKnown) {
+        bleServer->disconnect(runtimeBleConnId);
+        return;
+      }
+
+      startRuntimeAdvertising("missing app-session lease");
+    }
+
+    return;
+  }
+  if (now - lastAppSessionLeaseAt < appSessionLeaseTimeoutMs) {
+    return;
+  }
+
+  logRuntimeLeaseState("Lease expiry timeout fired.", now);
+  noteRuntimeAppSessionExpired(now);
+
+  if (bleServer != nullptr && runtimeBleConnIdKnown) {
+    bleServer->disconnect(runtimeBleConnId);
+    return;
+  }
+
+  startRuntimeAdvertising("expired app-session lease");
 }
 
 void sendTelemetry(int delta, unsigned long timestamp, bool force = false) {
@@ -754,6 +1040,7 @@ void completeOtaTransfer() {
 }
 
 void handleProvisioningCommand(const String& payload) {
+  runtimeBootstrapLeasePending = false;
   const String type = extractJsonString(payload, "type");
 
   if (type != "provision") {
@@ -786,28 +1073,64 @@ void handleProvisioningCommand(const String& payload) {
 
 void handleRuntimeControl(const String& payload) {
   const String type = extractJsonString(payload, "type");
+  lastRuntimeControlAt = millis();
+
+  if (type == "app-session-bootstrap") {
+    disarmRuntimeBootstrapWatchdog();
+    runtimeLeaseRequired = true;
+    return;
+  }
+
+  if (type == "app-session-lease") {
+    disarmRuntimeBootstrapWatchdog();
+    runtimeLeaseRequired = true;
+    const String sessionId = extractJsonString(payload, "sessionId");
+    const unsigned long expiresInMs = extractJsonUnsignedLong(
+      payload,
+      "expiresInMs",
+      APP_SESSION_LEASE_DEFAULT_MS
+    );
+
+    if (sessionId.length() == 0) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.invalid",
+        "Ignored app session lease without a session id.",
+        millis()
+      );
+      return;
+    }
+
+    markRuntimeAppSessionOnline(sessionId, expiresInMs, millis());
+    return;
+  }
 
   if (type == "sync-now") {
+    disarmRuntimeBootstrapWatchdog();
     sendTelemetry(lastReportedDelta, millis(), true);
     return;
   }
 
   if (type == "ota-begin") {
+    disarmRuntimeBootstrapWatchdog();
     beginOtaTransfer(payload);
     return;
   }
 
   if (type == "ota-end") {
+    disarmRuntimeBootstrapWatchdog();
     completeOtaTransfer();
     return;
   }
 
   if (type == "ota-abort") {
+    disarmRuntimeBootstrapWatchdog();
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
 
   if (type == "history-sync-begin") {
+    disarmRuntimeBootstrapWatchdog();
     const unsigned long afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
     const size_t maxRecords = extractJsonSize(payload, "maxRecords", HISTORY_SYNC_PAGE_SIZE);
     streamHistoryRecords(afterSequence, maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE);
@@ -815,6 +1138,7 @@ void handleRuntimeControl(const String& payload) {
   }
 
   if (type == "history-ack") {
+    disarmRuntimeBootstrapWatchdog();
     const unsigned long sequence = extractJsonUnsignedLong(payload, "sequence", 0);
     acknowledgeHistoryThrough(sequence);
     return;
@@ -823,16 +1147,37 @@ void handleRuntimeControl(const String& payload) {
 
 class GymServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
+    (void)server;
+  }
+
+  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     provisioningBleConnected = true;
     runtimeBleConnected = true;
+    runtimeBleConnectedAt = millis();
+    lastDisconnectedAdvertisingLogAt = 0;
+    lastConnectedRuntimeDebugAt = 0;
+    runtimeBleConnIdKnown = param != nullptr;
+    runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
+    resetRuntimeAppSessionState();
+    armRuntimeBootstrapWatchdog(
+      "BLE client connected; waiting for runtime or provisioning traffic."
+    );
     sendProvisioningReady();
     sendTelemetry(lastReportedDelta, millis(), true);
   }
 
   void onDisconnect(BLEServer* server) override {
+    (void)server;
+  }
+
+  void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
+    (void)param;
     provisioningBleConnected = false;
     runtimeBleConnected = false;
-    server->getAdvertising()->start();
+    runtimeBleConnectedAt = 0;
+    lastConnectedRuntimeDebugAt = 0;
+    noteRuntimeTransportDisconnected(millis());
+    startRuntimeAdvertising("BLE client disconnected");
   }
 };
 
@@ -843,6 +1188,8 @@ class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
     if (value.length() == 0) {
       return;
     }
+
+    disarmRuntimeBootstrapWatchdog();
 
     if (value.startsWith("BEGIN:")) {
       provisioningCommandBuffer = "";
@@ -857,6 +1204,32 @@ class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
     }
 
     provisioningCommandBuffer += value;
+  }
+};
+
+class ProvisioningStatusDescriptorCallbacks : public BLEDescriptorCallbacks {
+  void onWrite(BLEDescriptor* descriptor) override {
+    if (descriptor == nullptr) {
+      return;
+    }
+
+    const uint8_t* value = descriptor->getValue();
+    const size_t length = descriptor->getLength();
+    const bool notificationsEnabled =
+      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
+
+    if (!notificationsEnabled) {
+      return;
+    }
+
+    if (!runtimeBleConnected || !runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    disarmRuntimeBootstrapWatchdog();
+    logRuntimeTransportEvent(
+      "Provisioning status notifications enabled; leaving runtime lease watchdog idle."
+    );
   }
 };
 
@@ -881,6 +1254,56 @@ class RuntimeControlCallbacks : public BLECharacteristicCallbacks {
     }
 
     runtimeCommandBuffer += value;
+  }
+};
+
+class RuntimeTelemetryCallbacks : public BLECharacteristicCallbacks {
+#if defined(CONFIG_NIMBLE_ENABLED)
+  void onSubscribe(
+    BLECharacteristic* characteristic,
+    ble_gap_conn_desc* desc,
+    uint16_t subValue
+  ) override {
+    (void)characteristic;
+    (void)desc;
+
+    if (subValue == 0) {
+      return;
+    }
+
+    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    armRuntimeBootstrapWatchdog(
+      "Runtime telemetry subscribed; waiting for runtime control traffic."
+    );
+  }
+#endif
+};
+
+class RuntimeTelemetryDescriptorCallbacks : public BLEDescriptorCallbacks {
+  void onWrite(BLEDescriptor* descriptor) override {
+    if (descriptor == nullptr) {
+      return;
+    }
+
+    const uint8_t* value = descriptor->getValue();
+    const size_t length = descriptor->getLength();
+    const bool notificationsEnabled =
+      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
+
+    if (!notificationsEnabled) {
+      return;
+    }
+
+    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+      return;
+    }
+
+    armRuntimeBootstrapWatchdog(
+      "Runtime telemetry notifications enabled; waiting for runtime control traffic."
+    );
   }
 };
 
@@ -937,6 +1360,44 @@ void updateMotionState() {
   lastZ = z;
 }
 
+void logConnectedRuntimeHeartbeat() {
+  if (!runtimeBleConnected) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (
+    lastConnectedRuntimeDebugAt > 0 &&
+    now - lastConnectedRuntimeDebugAt < CONNECTED_RUNTIME_DEBUG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastConnectedRuntimeDebugAt = now;
+  logRuntimeLeaseState("Connected heartbeat.", now);
+}
+
+void logDisconnectedAdvertisingHeartbeat() {
+  if (runtimeBleConnected || bleServer == nullptr) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (
+    lastDisconnectedAdvertisingLogAt > 0 &&
+    now - lastDisconnectedAdvertisingLogAt < DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastDisconnectedAdvertisingLogAt = now;
+  logRuntimeTransportEvent(
+    "Still waiting for the Windows app; BLE advertising is active."
+  );
+}
+
 void setupBle() {
   BLEDevice::init(createBleDeviceName().c_str());
   bleServer = BLEDevice::createServer();
@@ -952,7 +1413,9 @@ void setupBle() {
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
   provisioningControlCharacteristic->setCallbacks(new ProvisioningControlCallbacks());
-  provisioningStatusCharacteristic->addDescriptor(new BLE2902());
+  provisioningStatusDescriptor = new BLE2902();
+  provisioningStatusDescriptor->setCallbacks(new ProvisioningStatusDescriptorCallbacks());
+  provisioningStatusCharacteristic->addDescriptor(provisioningStatusDescriptor);
   provisioningStatusCharacteristic->setValue(createProvisioningReadyPayload().c_str());
   provisioningService->start();
 
@@ -974,16 +1437,23 @@ void setupBle() {
     BLECharacteristic::PROPERTY_WRITE
   );
 
-  runtimeTelemetryCharacteristic->addDescriptor(new BLE2902());
+  runtimeTelemetryDescriptor = new BLE2902();
+  runtimeTelemetryDescriptor->setCallbacks(new RuntimeTelemetryDescriptorCallbacks());
+  runtimeTelemetryCharacteristic->addDescriptor(runtimeTelemetryDescriptor);
   runtimeStatusCharacteristic->addDescriptor(new BLE2902());
+  runtimeTelemetryCharacteristic->setCallbacks(new RuntimeTelemetryCallbacks());
   runtimeControlCharacteristic->setCallbacks(new RuntimeControlCallbacks());
   runtimeOtaDataCharacteristic->setCallbacks(new RuntimeOtaDataCallbacks());
   runtimeService->start();
 
   BLEAdvertising* advertising = bleServer->getAdvertising();
-  advertising->addServiceUUID(PROVISIONING_SERVICE_UUID);
-  advertising->addServiceUUID(RUNTIME_SERVICE_UUID);
+  configureRuntimeAdvertisingPayload(advertising);
   advertising->start();
+  lastDisconnectedAdvertisingLogAt = millis();
+  logRuntimeTransportEvent(
+    "BLE advertising started as " + createBleDeviceName() +
+    " with runtime scan response."
+  );
 }
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
@@ -1048,6 +1518,9 @@ void setup() {
 
 void loop() {
   finishPendingRestart();
+  enforceRuntimeAppSessionLease();
+  logConnectedRuntimeHeartbeat();
+  logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
   delay(LOOP_DELAY_MS);
 }
