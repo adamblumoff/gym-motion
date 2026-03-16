@@ -1636,59 +1636,93 @@ async fn connect_and_stream(
         })
         .await?;
 
-    writer.send(&log_handshake_step("checking transport connection")).await?;
-    if !peripheral.is_connected().await.unwrap_or(false) {
-        writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
+    let setup_result = async {
+        writer.send(&log_handshake_step("checking transport connection")).await?;
+        if !peripheral.is_connected().await.unwrap_or(false) {
+            writer.send(&log_handshake_step("calling peripheral.connect()")).await?;
+            peripheral
+                .connect()
+                .await
+                .with_context(|| format!("connect step failed for {}", node.label))?;
+        }
+        writer.send(&log_handshake_step("discovering services")).await?;
         peripheral
-            .connect()
+            .discover_services()
             .await
-            .with_context(|| format!("connect step failed for {}", node.label))?;
+            .with_context(|| format!("discover_services step failed for {}", node.label))?;
+
+        writer
+            .send(&log_handshake_step("resolving telemetry characteristic"))
+            .await?;
+        let characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|candidate| candidate.uuid == config.telemetry_uuid)
+            .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
+        writer
+            .send(&log_handshake_step("resolving control characteristic"))
+            .await?;
+        let control_characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|candidate| candidate.uuid == config.control_uuid)
+            .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
+
+        writer.send(&log_handshake_step("opening notifications stream")).await?;
+        let notifications = peripheral
+            .notifications()
+            .await
+            .with_context(|| format!("notifications step failed for {}", node.label))?;
+        writer.send(&log_handshake_step("subscribing to telemetry")).await?;
+        peripheral
+            .subscribe(&characteristic)
+            .await
+            .with_context(|| format!("subscribe step failed for {}", node.label))?;
+        writer.send(&log_handshake_step("sending app-session bootstrap")).await?;
+        send_app_session_bootstrap(&peripheral, &control_characteristic)
+            .await
+            .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
+        writer.send(&log_handshake_step("sending sync-now")).await?;
+        write_chunked_json_command(
+            &peripheral,
+            &control_characteristic,
+            r#"{"type":"sync-now"}"#,
+        )
+        .await
+        .with_context(|| format!("sync-now step failed for {}", node.label))?;
+        writer.send(&log_handshake_step("sending app-session lease")).await?;
+        send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
+            .await
+            .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
+
+        Ok::<_, anyhow::Error>((notifications, control_characteristic))
     }
-    writer.send(&log_handshake_step("discovering services")).await?;
-    peripheral
-        .discover_services()
-        .await
-        .with_context(|| format!("discover_services step failed for {}", node.label))?;
+    .await;
 
-    writer.send(&log_handshake_step("resolving telemetry characteristic")).await?;
-    let characteristic = peripheral
-        .characteristics()
-        .into_iter()
-        .find(|candidate| candidate.uuid == config.telemetry_uuid)
-        .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
-    writer.send(&log_handshake_step("resolving control characteristic")).await?;
-    let control_characteristic = peripheral
-        .characteristics()
-        .into_iter()
-        .find(|candidate| candidate.uuid == config.control_uuid)
-        .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
+    let (mut notifications, control_characteristic) = match setup_result {
+        Ok(result) => result,
+        Err(error) => {
+            if peripheral.is_connected().await.unwrap_or(false) {
+                writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Reconnect handshake failed before session health; disconnecting stale BLE client.".to_string(),
+                        details: Some(json!({
+                            "peripheralId": node.peripheral_id,
+                            "knownDeviceId": node.known_device_id,
+                            "address": node.address,
+                            "reconnect": reconnect,
+                            "error": error.to_string(),
+                        })),
+                    })
+                    .await?;
+                let _ = peripheral.disconnect().await;
+                sleep(Duration::from_millis(100)).await;
+            }
+            return Err(error);
+        }
+    };
 
-    writer.send(&log_handshake_step("opening notifications stream")).await?;
-    let mut notifications = peripheral
-        .notifications()
-        .await
-        .with_context(|| format!("notifications step failed for {}", node.label))?;
-    writer.send(&log_handshake_step("subscribing to telemetry")).await?;
-    peripheral
-        .subscribe(&characteristic)
-        .await
-        .with_context(|| format!("subscribe step failed for {}", node.label))?;
-    writer.send(&log_handshake_step("sending app-session bootstrap")).await?;
-    send_app_session_bootstrap(&peripheral, &control_characteristic)
-        .await
-        .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
-    writer.send(&log_handshake_step("sending sync-now")).await?;
-    write_chunked_json_command(
-        &peripheral,
-        &control_characteristic,
-        r#"{"type":"sync-now"}"#,
-    )
-    .await
-    .with_context(|| format!("sync-now step failed for {}", node.label))?;
-    writer.send(&log_handshake_step("sending app-session lease")).await?;
-    send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
-        .await
-        .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
     writer.send(&log_handshake_step("waiting for telemetry")).await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut session_healthy_reported = false;
