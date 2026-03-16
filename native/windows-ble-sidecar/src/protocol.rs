@@ -67,6 +67,23 @@ pub struct TelemetryPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeStatusPayload {
+    #[serde(rename = "type")]
+    pub status_type: String,
+    #[serde(alias = "deviceId")]
+    pub device_id: Option<String>,
+    #[serde(alias = "sessionId")]
+    pub session_id: Option<String>,
+    #[serde(alias = "firmwareVersion")]
+    pub firmware_version: Option<String>,
+    #[serde(alias = "hardwareId")]
+    pub hardware_id: Option<String>,
+    pub phase: Option<String>,
+    pub message: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     ListAdapters,

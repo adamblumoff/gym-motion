@@ -652,6 +652,15 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
+void sendRuntimeAppSessionOnline(const String& sessionId) {
+  String payload =
+    "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
+    "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
+    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
+  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+}
+
 void logRuntimeTransportEvent(const String& message) {
   Serial.print("[runtime] ");
   Serial.println(message);
@@ -774,6 +783,7 @@ void markRuntimeAppSessionOnline(
   logRuntimeTransportEvent(
     "Windows app session lease is active for session " + sessionId + "."
   );
+  sendRuntimeAppSessionOnline(sessionId);
 
   journalNodeLog(
     "info",

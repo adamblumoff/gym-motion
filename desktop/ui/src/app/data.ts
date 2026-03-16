@@ -6,9 +6,7 @@ import type {
   DiscoveredNodeSummary,
   GatewayConnectionState,
   GatewayRuntimeDeviceSummary,
-  HealthStatus,
   MotionEventSummary,
-  TelemetryFreshness,
 } from "@core/contracts";
 import { findMatchingGatewayDeviceForApprovedNode } from "@core/approved-node-runtime-match";
 import { matchesApprovedNodeIdentity } from "../lib/setup-rules";
@@ -26,8 +24,6 @@ export type BluetoothNodeData = {
   macAddress: string | null;
   isConnected: boolean;
   connectionState: GatewayConnectionState;
-  healthStatus: HealthStatus;
-  telemetryFreshness: TelemetryFreshness;
   isMoving: boolean;
   signalStrength: number | null;
   batteryLevel: number | null;
@@ -103,12 +99,7 @@ export function buildBluetoothNodes(snapshot: DesktopSnapshot): BluetoothNodeDat
     macAddress: displayNodeAddress(device),
     isConnected: device.gatewayConnectionState === "connected",
     connectionState: device.gatewayConnectionState,
-    healthStatus: device.healthStatus,
-    telemetryFreshness: device.telemetryFreshness,
-    isMoving:
-      device.gatewayConnectionState === "connected" &&
-      device.lastState === "moving" &&
-      device.telemetryFreshness === "fresh",
+    isMoving: device.gatewayConnectionState === "connected" && device.lastState === "moving",
     signalStrength: rssiToPercent(device.lastRssi),
     batteryLevel: null,
     reconnectAttempt: device.reconnectAttempt,

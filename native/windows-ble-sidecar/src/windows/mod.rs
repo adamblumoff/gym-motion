@@ -27,7 +27,7 @@ use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
         AdapterSummary, ApprovedNodeRule, Command, DiscoveredNode, Event, GatewayStatePayload,
-        ReconnectStatus, TelemetryPayload,
+        ReconnectStatus, RuntimeStatusPayload, TelemetryPayload,
     },
 };
 
@@ -35,6 +35,7 @@ const PROTOCOL_VERSION: u32 = 1;
 const SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001";
 const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
+const STATUS_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
@@ -44,6 +45,7 @@ const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 4_000;
 const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
+const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 2_000;
 const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 const CONTROL_CHUNK_SIZE: usize = 120;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 3;
@@ -55,6 +57,7 @@ struct Config {
     service_uuid: Uuid,
     telemetry_uuid: Uuid,
     control_uuid: Uuid,
+    status_uuid: Uuid,
     device_name_prefix: String,
 }
 
@@ -64,6 +67,7 @@ impl Config {
             service_uuid: parse_uuid("BLE_RUNTIME_SERVICE_UUID", SERVICE_UUID_FALLBACK)?,
             telemetry_uuid: parse_uuid("BLE_TELEMETRY_UUID", TELEMETRY_UUID_FALLBACK)?,
             control_uuid: parse_uuid("BLE_CONTROL_UUID", CONTROL_UUID_FALLBACK)?,
+            status_uuid: parse_uuid("BLE_STATUS_UUID", STATUS_UUID_FALLBACK)?,
             device_name_prefix: env::var("BLE_DEVICE_NAME_PREFIX")
                 .unwrap_or_else(|_| DEVICE_PREFIX_FALLBACK.to_string()),
         })
@@ -964,14 +968,6 @@ async fn run_session(
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
     reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reconnect_diagnostic_tick.tick().await;
-    let mut reconnect_scan_restart_tick =
-        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS));
-    reconnect_scan_restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    reconnect_scan_restart_tick.tick().await;
-    let mut reconnect_scan_burst = 0_u32;
-    let mut advertisements_seen_this_burst = 0_u32;
-    let mut rejected_candidates_this_burst = 0_u32;
-    let mut classified_candidates_this_burst = 0_u32;
 
     {
         let allowed = allowed_nodes.read().await.clone();
@@ -1201,45 +1197,6 @@ async fn run_session(
                     }).await?;
                 }
             }
-            _ = reconnect_scan_restart_tick.tick() => {
-                let allowed = allowed_nodes.read().await.clone();
-                if !scanning {
-                    continue;
-                }
-
-                let active_connection_count = active_connections.lock().await.len();
-
-                if !should_restart_approved_reconnect_scan(
-                    &allowed,
-                    &connected_nodes,
-                    &reconnect_states,
-                    manual_scan_deadline,
-                    Instant::now(),
-                    active_connection_count,
-                ) {
-                    continue;
-                }
-
-                restart_approved_reconnect_scan(
-                    &adapter,
-                    &writer,
-                    &selected_adapter_id,
-                    &allowed,
-                    &connected_nodes,
-                    &reconnect_states,
-                    &last_advertisement_at,
-                    reconnect_scan_burst,
-                    advertisements_seen_this_burst,
-                    rejected_candidates_this_burst,
-                    classified_candidates_this_burst,
-                    active_connection_count,
-                )
-                .await?;
-                reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
-                advertisements_seen_this_burst = 0;
-                rejected_candidates_this_burst = 0;
-                classified_candidates_this_burst = 0;
-            }
             event = events.next() => {
                 let Some(event) = event else {
                     break;
@@ -1274,9 +1231,6 @@ async fn run_session(
                             continue;
                         }
 
-                        advertisements_seen_this_burst =
-                            advertisements_seen_this_burst.saturating_add(1);
-
                         let Some(peripheral) =
                             peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
                         else {
@@ -1307,8 +1261,6 @@ async fn run_session(
                         )
                         .await
                         {
-                            classified_candidates_this_burst =
-                                classified_candidates_this_burst.saturating_add(1);
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered {
                                 node: node.clone(),
@@ -1478,9 +1430,6 @@ async fn run_session(
                                     active_connections_clone.lock().await.remove(&key);
                                 });
                             }
-                        } else {
-                            rejected_candidates_this_burst =
-                                rejected_candidates_this_burst.saturating_add(1);
                         }
                     }
                     CentralEvent::DeviceDisconnected(id) => {
@@ -1874,12 +1823,27 @@ async fn connect_and_stream(
             .into_iter()
             .find(|candidate| candidate.uuid == config.control_uuid)
             .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
+        writer
+            .send(&log_handshake_step("resolving runtime status characteristic"))
+            .await?;
+        let status_characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|candidate| candidate.uuid == config.status_uuid)
+            .ok_or_else(|| anyhow!("runtime status characteristic not found"))?;
 
         writer.send(&log_handshake_step("opening notifications stream")).await?;
         let notifications = peripheral
             .notifications()
             .await
             .with_context(|| format!("notifications step failed for {}", node.label))?;
+        writer
+            .send(&log_handshake_step("subscribing to runtime status"))
+            .await?;
+        peripheral
+            .subscribe(&status_characteristic)
+            .await
+            .with_context(|| format!("status subscribe step failed for {}", node.label))?;
         writer.send(&log_handshake_step("subscribing to telemetry")).await?;
         peripheral
             .subscribe(&characteristic)
@@ -1889,14 +1853,6 @@ async fn connect_and_stream(
         send_app_session_bootstrap(&peripheral, &control_characteristic)
             .await
             .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
-        writer.send(&log_handshake_step("sending sync-now")).await?;
-        write_chunked_json_command(
-            &peripheral,
-            &control_characteristic,
-            r#"{"type":"sync-now"}"#,
-        )
-        .await
-        .with_context(|| format!("sync-now step failed for {}", node.label))?;
         writer.send(&log_handshake_step("sending app-session lease")).await?;
         send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
             .await
@@ -1930,9 +1886,18 @@ async fn connect_and_stream(
         }
     };
 
-    writer.send(&log_handshake_step("waiting for telemetry")).await?;
+    writer
+        .send(&log_handshake_step("waiting for session health ack"))
+        .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
+    let mut status_decoder = JsonObjectDecoder::new(format!("status:{}", node.label));
     let mut session_healthy_reported = false;
+    let session_health_deadline = Instant::now() + Duration::from_millis(SESSION_HEALTH_ACK_TIMEOUT_MS);
+    let session_health_sleep = tokio::time::sleep_until(session_health_deadline.into());
+    tokio::pin!(session_health_sleep);
+    let mut telemetry_fallback_node: Option<DiscoveredNode> = None;
+    let mut ack_session_id: Option<String> = None;
+    let mut ack_received = false;
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
     let (lease_failure_tx, mut lease_failure_rx) = mpsc::unbounded_channel::<String>();
     let lease_peripheral = peripheral.clone();
@@ -1972,6 +1937,87 @@ async fn connect_and_stream(
                     break;
                 };
 
+                if notification.uuid == config.status_uuid {
+                    for payload in status_decoder.push_bytes(&notification.value)? {
+                        match serde_json::from_value::<RuntimeStatusPayload>(payload) {
+                            Ok(status) => {
+                                if status.status_type != "app-session-online" {
+                                    continue;
+                                }
+
+                                if let Some(session_id) = status.session_id.clone() {
+                                    if session_id != app_session_id {
+                                        continue;
+                                    }
+                                    ack_session_id = Some(session_id);
+                                }
+
+                                ack_received = true;
+                                let mut enriched = node.clone();
+                                if let Some(device_id) = status.device_id.clone() {
+                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                        known_device_ids
+                                            .write()
+                                            .await
+                                            .insert(peripheral_id, device_id.clone());
+                                    }
+                                    enriched.known_device_id = Some(device_id);
+                                }
+
+                                if !session_healthy_reported {
+                                    session_healthy_reported = true;
+                                    let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+                                        node: enriched.clone(),
+                                    });
+                                    writer
+                                        .send(&Event::NodeConnectionState {
+                                            node: enriched.clone(),
+                                            gateway_connection_state: "connected".to_string(),
+                                            reason: None,
+                                            reconnect: reconnect.clone(),
+                                        })
+                                        .await?;
+                                    writer
+                                        .send(&log_handshake_step("sending sync-now"))
+                                        .await?;
+                                    if let Err(error) = write_chunked_json_command(
+                                        &peripheral,
+                                        &control_characteristic,
+                                        r#"{"type":"sync-now"}"#,
+                                    )
+                                    .await
+                                    {
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "warn".to_string(),
+                                                message: format!(
+                                                    "sync-now step failed for {}",
+                                                    node.label
+                                                ),
+                                                details: Some(json!({
+                                                    "peripheralId": enriched.peripheral_id,
+                                                    "knownDeviceId": enriched.known_device_id,
+                                                    "address": enriched.address,
+                                                    "error": format!("{:#}", error),
+                                                })),
+                                            })
+                                            .await?;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                writer
+                                    .error(
+                                        format!("Failed to parse runtime status payload: {error}"),
+                                        Some(json!({ "node": node.id })),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 if notification.uuid != config.telemetry_uuid {
                     continue;
                 }
@@ -1987,19 +2033,8 @@ async fn connect_and_stream(
                             }
                             let mut enriched = node.clone();
                             enriched.known_device_id = Some(payload.device_id.clone());
-                            if !session_healthy_reported {
-                                session_healthy_reported = true;
-                                let _ = command_sender.send(SessionCommand::ConnectionHealthy {
-                                    node: enriched.clone(),
-                                });
-                                writer
-                                    .send(&Event::NodeConnectionState {
-                                        node: enriched.clone(),
-                                        gateway_connection_state: "connected".to_string(),
-                                        reason: None,
-                                        reconnect: reconnect.clone(),
-                                    })
-                                    .await?;
+                            if telemetry_fallback_node.is_none() {
+                                telemetry_fallback_node = Some(enriched.clone());
                             }
                             writer
                                 .send(&Event::Telemetry {
@@ -2018,6 +2053,38 @@ async fn connect_and_stream(
                         }
                     }
                 }
+            }
+            _ = &mut session_health_sleep, if !session_healthy_reported && !ack_received => {
+                let Some(enriched) = telemetry_fallback_node.clone() else {
+                    continue;
+                };
+
+                session_healthy_reported = true;
+                let _ = command_sender.send(SessionCommand::ConnectionHealthy {
+                    node: enriched.clone(),
+                });
+                writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Session health ack did not arrive before timeout; using telemetry fallback.".to_string(),
+                        details: Some(json!({
+                            "peripheralId": enriched.peripheral_id,
+                            "knownDeviceId": enriched.known_device_id,
+                            "address": enriched.address,
+                            "expectedSessionId": app_session_id,
+                            "ackSessionId": ack_session_id,
+                            "timeoutMs": SESSION_HEALTH_ACK_TIMEOUT_MS,
+                        })),
+                    })
+                    .await?;
+                writer
+                    .send(&Event::NodeConnectionState {
+                        node: enriched.clone(),
+                        gateway_connection_state: "connected".to_string(),
+                        reason: None,
+                        reconnect: reconnect.clone(),
+                    })
+                    .await?;
             }
             _ = sleep(Duration::from_millis(CONNECTION_HEALTH_POLL_MS)) => {
                 if !is_approved(&node, &allowed_nodes.read().await) {
@@ -2731,6 +2798,7 @@ mod tests {
             service_uuid: Uuid::nil(),
             telemetry_uuid: Uuid::nil(),
             control_uuid: Uuid::nil(),
+            status_uuid: Uuid::nil(),
             device_name_prefix: "GymMotion-".to_string(),
         };
         let allowed = vec![ApprovedNodeRule {
@@ -2764,6 +2832,7 @@ mod tests {
             service_uuid: Uuid::nil(),
             telemetry_uuid: Uuid::nil(),
             control_uuid: Uuid::nil(),
+            status_uuid: Uuid::nil(),
             device_name_prefix: "GymMotion-".to_string(),
         };
         let allowed = vec![ApprovedNodeRule {
@@ -2795,6 +2864,7 @@ mod tests {
             service_uuid: Uuid::nil(),
             telemetry_uuid: Uuid::nil(),
             control_uuid: Uuid::nil(),
+            status_uuid: Uuid::nil(),
             device_name_prefix: "GymMotion-".to_string(),
         };
         let allowed = vec![ApprovedNodeRule {
@@ -2829,6 +2899,7 @@ mod tests {
             service_uuid: Uuid::nil(),
             telemetry_uuid: Uuid::nil(),
             control_uuid: Uuid::nil(),
+            status_uuid: Uuid::nil(),
             device_name_prefix: "GymMotion-".to_string(),
         };
         let allowed = vec![

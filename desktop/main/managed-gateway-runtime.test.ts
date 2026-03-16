@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { mergeRepositoryDeviceIntoGatewaySnapshot } from "./gateway-snapshot";
 
 describe("managed gateway runtime snapshot merge", () => {
-  it("treats first telemetry-only updates as fresh discovered devices", () => {
+  it("keeps first telemetry-only updates disconnected until transport reconnects", () => {
     const timestamp = new Date().toISOString();
 
     const device = mergeRepositoryDeviceIntoGatewaySnapshot([], {
@@ -27,7 +27,7 @@ describe("managed gateway runtime snapshot merge", () => {
       healthStatus: "online",
     });
 
-    expect(device.gatewayConnectionState).toBe("discovered");
+    expect(device.gatewayConnectionState).toBe("disconnected");
     expect(device.telemetryFreshness).toBe("fresh");
     expect(device.gatewayLastTelemetryAt).toBe(timestamp);
   });

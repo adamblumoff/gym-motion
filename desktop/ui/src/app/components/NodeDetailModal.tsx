@@ -15,52 +15,26 @@ function connectionStatus(node: BluetoothNodeData) {
   switch (node.connectionState) {
     case 'connected':
       return {
-        label: 'Online',
+        label: 'Connected',
         className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
       };
     case 'connecting':
-      return {
-        label: 'Connecting',
-        className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-      };
     case 'reconnecting':
       return {
         label: 'Reconnecting',
         className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
       };
-    case 'discovered':
-      return {
-        label: 'Discovered',
-        className: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
-      };
-    case 'unreachable':
-      return {
-        label: 'Unreachable',
-        className: 'bg-red-500/10 text-red-400 border-red-500/20',
-      };
     default:
       return {
         label: 'Disconnected',
-        className: 'bg-zinc-800 text-zinc-500 border-zinc-700',
+        className: 'bg-red-500/10 text-red-400 border-red-500/20',
       };
-  }
-}
-
-function telemetryStatus(node: BluetoothNodeData) {
-  switch (node.telemetryFreshness) {
-    case 'fresh':
-      return 'Fresh';
-    case 'stale':
-      return 'Stale';
-    default:
-      return 'Missing';
   }
 }
 
 export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalProps) {
   if (!node) return null;
   const status = connectionStatus(node);
-  const telemetry = telemetryStatus(node);
 
   const batteryColor =
     node.batteryLevel === null
@@ -91,11 +65,10 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
         <div className="grid grid-cols-4 gap-3 mt-2">
           <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
             <Wifi className={`size-4 mx-auto mb-1.5 ${node.isConnected ? 'text-blue-400' : 'text-zinc-600'}`} />
-            <div className="text-xs text-zinc-400">Signal / Telemetry</div>
+            <div className="text-xs text-zinc-400">Signal</div>
             <div className="text-sm text-zinc-100 font-mono">
               {node.signalStrength === null ? '--' : `${node.signalStrength}%`}
             </div>
-            <div className="text-[11px] text-zinc-500 mt-1">{telemetry}</div>
           </div>
           <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
             <Activity className={`size-4 mx-auto mb-1.5 ${node.isMoving ? 'text-blue-400' : 'text-zinc-600'}`} />

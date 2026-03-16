@@ -58,13 +58,12 @@ function telemetryFreshnessFromTimestamp(timestamp) {
   return Date.now() - parseIsoTime(timestamp) <= TELEMETRY_FRESH_MS ? "fresh" : "stale";
 }
 
-function healthStatusFromRuntime(connectionState, telemetryFreshness) {
-  if (connectionState === "connected" && telemetryFreshness === "fresh") {
+function healthStatusFromRuntime(connectionState) {
+  if (connectionState === "connected") {
     return "online";
   }
 
   if (
-    (connectionState === "connected" && telemetryFreshness !== "fresh") ||
     connectionState === "connecting" ||
     connectionState === "reconnecting" ||
     connectionState === "discovered"
@@ -341,7 +340,7 @@ export function createGatewayRuntimeServer({
       updateTargetVersion: metadata?.updateTargetVersion ?? null,
       updateDetail: metadata?.updateDetail ?? null,
       updateUpdatedAt: metadata?.updateUpdatedAt ?? null,
-      healthStatus: healthStatusFromRuntime(connectionState, telemetryFreshness),
+      healthStatus: healthStatusFromRuntime(connectionState),
       gatewayConnectionState: connectionState,
       telemetryFreshness,
       peripheralId: runtime?.peripheralId ?? known?.peripheralId ?? null,
@@ -806,6 +805,24 @@ export function createGatewayRuntimeServer({
         scanReason: scanState === "scanning" ? scanReason : null,
       });
 
+      if (scanState === "scanning" && scanReason === "approved-reconnect") {
+        for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
+          if (
+            runtime.gatewayConnectionState !== "disconnected" ||
+            runtime.reconnectRetryExhausted
+          ) {
+            continue;
+          }
+
+          runtimeByDeviceId.set(deviceId, {
+            ...runtime,
+            gatewayConnectionState: "reconnecting",
+            updatedAt: nowIso(),
+          });
+          emitDevice(deviceId);
+        }
+      }
+
       if (scanState !== "scanning") {
         normalizeIdleConnectionStates();
       }
@@ -915,7 +932,8 @@ export function createGatewayRuntimeServer({
 
       const nextConnectionState =
         previous?.gatewayConnectionState === "disconnected" ||
-        previous?.gatewayConnectionState === "unreachable"
+        previous?.gatewayConnectionState === "unreachable" ||
+        previous?.gatewayConnectionState === "reconnecting"
           ? "reconnecting"
           : "connecting";
 

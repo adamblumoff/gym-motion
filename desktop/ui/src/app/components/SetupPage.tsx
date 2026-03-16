@@ -28,27 +28,16 @@ export function SetupPage() {
           icon: Check,
         };
       case 'connecting':
-        return {
-          label: 'Connecting',
-          className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-          icon: RefreshCw,
-        };
       case 'reconnecting':
         return {
           label: 'Reconnecting',
           className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
           icon: RefreshCw,
         };
-      case 'unreachable':
-        return {
-          label: 'Unreachable',
-          className: 'bg-red-500/10 text-red-400 border-red-500/20',
-          icon: Bluetooth,
-        };
       default:
         return {
           label: 'Disconnected',
-          className: 'bg-zinc-800 text-zinc-400 border-zinc-700',
+          className: 'bg-red-500/10 text-red-400 border-red-500/20',
           icon: Bluetooth,
         };
     }
@@ -233,9 +222,7 @@ export function SetupPage() {
                               <Badge className={`${badge.className} text-xs`}>
                                 <BadgeIcon
                                   className={`size-3 mr-1 ${
-                                    badge.label === 'Reconnecting' || badge.label === 'Connecting'
-                                      ? 'animate-spin'
-                                      : ''
+                                    badge.label === 'Reconnecting' ? 'animate-spin' : ''
                                   }`}
                                 />
                                 {badge.label}

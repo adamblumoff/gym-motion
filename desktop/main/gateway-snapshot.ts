@@ -40,8 +40,7 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
 
   return {
     gatewayConnectionState:
-      existing?.gatewayConnectionState ??
-      (inferredTelemetryTimestamp ? "discovered" : "unreachable"),
+      existing?.gatewayConnectionState ?? "disconnected",
     telemetryFreshness: hasNewerTelemetry
       ? "fresh"
       : existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),

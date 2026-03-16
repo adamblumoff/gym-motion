@@ -156,7 +156,6 @@ describe("buildBluetoothNodes", () => {
     const [node] = buildBluetoothNodes(snapshot);
 
     expect(node?.connectionState).toBe("disconnected");
-    expect(node?.telemetryFreshness).toBe("fresh");
     expect(node?.isConnected).toBe(false);
     expect(node?.isMoving).toBe(false);
   });

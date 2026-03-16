@@ -21,49 +21,15 @@ function connectionBadge(node: BluetoothNodeData) {
         className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
       };
     case 'connecting':
-      return {
-        label: 'Connecting',
-        className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-      };
     case 'reconnecting':
       return {
         label: 'Reconnecting',
         className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
       };
-    case 'discovered':
-      return {
-        label: 'Discovered',
-        className: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
-      };
-    case 'unreachable':
-      return {
-        label: 'Unreachable',
-        className: 'bg-red-500/10 text-red-400 border-red-500/20',
-      };
     default:
       return {
         label: 'Disconnected',
-        className: 'bg-zinc-800 text-zinc-500 border-zinc-700',
-      };
-  }
-}
-
-function freshnessBadge(node: BluetoothNodeData) {
-  switch (node.telemetryFreshness) {
-    case 'fresh':
-      return {
-        label: 'Telemetry live',
-        className: 'text-emerald-400',
-      };
-    case 'stale':
-      return {
-        label: 'Telemetry stale',
-        className: 'text-amber-400',
-      };
-    default:
-      return {
-        label: 'No telemetry',
-        className: 'text-zinc-500',
+        className: 'bg-red-500/10 text-red-400 border-red-500/20',
       };
   }
 }
@@ -73,7 +39,6 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
   const [confirmForget, setConfirmForget] = useState(false);
   const [dismissedReconnectPrompt, setDismissedReconnectPrompt] = useState(false);
   const statusBadge = connectionBadge(node);
-  const freshness = freshnessBadge(node);
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
     node.reconnectRetryExhausted &&
@@ -142,9 +107,6 @@ export function BluetoothNode({ node, onClick, onForget }: BluetoothNodeProps) {
             >
               {statusBadge.label}
             </Badge>
-            <div className={`text-[11px] font-medium ${freshness.className}`}>
-              {freshness.label}
-            </div>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
                 <div className="flex gap-0.5">
