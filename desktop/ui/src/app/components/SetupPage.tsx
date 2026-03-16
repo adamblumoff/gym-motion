@@ -123,13 +123,25 @@ export function SetupPage() {
     setPendingPairIds((current) => addToSet(current, deviceId));
     const nextIds = new Set(setup.approvedNodes.map((node) => node.id));
     nextIds.add(deviceId);
+    let pairedSaved = false;
 
     try {
       await setAllowedNodes(buildApprovedNodeRules(setup, nextIds));
+      pairedSaved = true;
+      await recoverApprovedNode(deviceId);
       setPendingPairIds((current) => removeFromSet(current, deviceId));
-      toast.success('Device paired.');
+      toast.success('Device paired. Connecting...');
     } catch (error) {
       setPendingPairIds((current) => removeFromSet(current, deviceId));
+      if (pairedSaved) {
+        toast.error(
+          error instanceof Error
+            ? `Device paired, but failed to start connecting: ${error.message}`
+            : 'Device paired, but failed to start connecting.',
+        );
+        return;
+      }
+
       toast.error(error instanceof Error ? error.message : 'Failed to pair device.');
     }
   };
