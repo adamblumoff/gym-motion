@@ -65,6 +65,8 @@ const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 1_000;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 2;
 const GATT_SETUP_RETRY_DELAY_MS: u64 = 300;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 2;
+const PRE_SESSION_SETUP_RETRY_DELAY_MS: u64 = 350;
+const PRE_SESSION_SETUP_ATTEMPTS: u32 = 2;
 
 struct SessionHandle {
     shutdown: watch::Sender<bool>,
@@ -1747,62 +1749,96 @@ async fn connect_and_stream(
     }
 
     let peripheral = active_peripheral;
+    let mut setup_result = Err(anyhow!("pre-session setup did not run"));
+    for setup_attempt in 1..=PRE_SESSION_SETUP_ATTEMPTS {
+        setup_result = async {
+            let (message, details) = log_handshake_step("resolving telemetry characteristic");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            let characteristic = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|candidate| candidate.uuid == config.telemetry_uuid)
+                .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
+            let (message, details) = log_handshake_step("resolving control characteristic");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            let control_characteristic = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|candidate| candidate.uuid == config.control_uuid)
+                .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
+            let (message, details) = log_handshake_step("resolving runtime status characteristic");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            let status_characteristic = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|candidate| candidate.uuid == config.status_uuid)
+                .ok_or_else(|| anyhow!("runtime status characteristic not found"))?;
 
-    let setup_result = async {
-        let (message, details) = log_handshake_step("resolving telemetry characteristic");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        let characteristic = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|candidate| candidate.uuid == config.telemetry_uuid)
-            .ok_or_else(|| anyhow!("telemetry characteristic not found"))?;
-        let (message, details) = log_handshake_step("resolving control characteristic");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        let control_characteristic = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|candidate| candidate.uuid == config.control_uuid)
-            .ok_or_else(|| anyhow!("runtime control characteristic not found"))?;
-        let (message, details) = log_handshake_step("resolving runtime status characteristic");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        let status_characteristic = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|candidate| candidate.uuid == config.status_uuid)
-            .ok_or_else(|| anyhow!("runtime status characteristic not found"))?;
+            let (message, details) = log_handshake_step("opening notifications stream");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            let notifications = peripheral
+                .notifications()
+                .await
+                .with_context(|| format!("notifications step failed for {}", node.label))?;
+            let (message, details) = log_handshake_step("subscribing to runtime status");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            peripheral
+                .subscribe(&status_characteristic)
+                .await
+                .with_context(|| format!("status subscribe step failed for {}", node.label))?;
+            let (message, details) = log_handshake_step("subscribing to telemetry");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            peripheral
+                .subscribe(&characteristic)
+                .await
+                .with_context(|| format!("subscribe step failed for {}", node.label))?;
+            let (message, details) = log_handshake_step("sending app-session bootstrap");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            send_app_session_bootstrap(&peripheral, &control_characteristic)
+                .await
+                .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
+            let (message, details) = log_handshake_step("sending app-session lease");
+            emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
+                .await
+                .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
 
-        let (message, details) = log_handshake_step("opening notifications stream");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        let notifications = peripheral
-            .notifications()
-            .await
-            .with_context(|| format!("notifications step failed for {}", node.label))?;
-        let (message, details) = log_handshake_step("subscribing to runtime status");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
+            Ok::<_, anyhow::Error>((notifications, control_characteristic))
+        }
+        .await;
+
+        let Err(error) = &setup_result else {
+            break;
+        };
+
+        if setup_attempt == PRE_SESSION_SETUP_ATTEMPTS
+            || !is_subscription_setup_error(error)
+            || !peripheral.is_connected().await.unwrap_or(false)
+        {
+            break;
+        }
+
+        writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: "Runtime characteristic subscribe was not ready; retrying setup once before disconnecting.".to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "reconnect": reconnect,
+                    "setupAttempt": setup_attempt,
+                    "setupAttemptLimit": PRE_SESSION_SETUP_ATTEMPTS,
+                    "error": error.to_string(),
+                })),
+            })
+            .await?;
+        sleep(Duration::from_millis(PRE_SESSION_SETUP_RETRY_DELAY_MS)).await;
         peripheral
-            .subscribe(&status_characteristic)
+            .discover_services()
             .await
-            .with_context(|| format!("status subscribe step failed for {}", node.label))?;
-        let (message, details) = log_handshake_step("subscribing to telemetry");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        peripheral
-            .subscribe(&characteristic)
-            .await
-            .with_context(|| format!("subscribe step failed for {}", node.label))?;
-        let (message, details) = log_handshake_step("sending app-session bootstrap");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        send_app_session_bootstrap(&peripheral, &control_characteristic)
-            .await
-            .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
-        let (message, details) = log_handshake_step("sending app-session lease");
-        emit_verbose_log(&writer, config.verbose_logging, message, details).await?;
-        send_app_session_lease(&peripheral, &control_characteristic, &app_session_id)
-            .await
-            .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
-
-        Ok::<_, anyhow::Error>((notifications, control_characteristic))
+            .with_context(|| format!("refresh services before retry failed for {}", node.label))?;
     }
-    .await;
 
     let (mut notifications, control_characteristic) = match setup_result {
         Ok(result) => result,
@@ -2131,6 +2167,11 @@ async fn connect_and_stream(
 
     sleep(Duration::from_millis(100)).await;
     Ok(Some(format!("Telemetry stream ended for {}.", node.label)))
+}
+
+fn is_subscription_setup_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("status subscribe step failed") || message.contains("subscribe step failed")
 }
 
 fn normalize_adapter_state(state: CentralState) -> String {
@@ -2832,6 +2873,15 @@ mod tests {
             classification.matched_known_device_id.as_deref(),
             Some("stack-001")
         );
+    }
+
+    #[test]
+    fn only_subscription_setup_failures_use_the_inline_setup_retry() {
+        let subscribe_error = anyhow!("status subscribe step failed for Bench");
+        let bootstrap_error = anyhow!("app-session-bootstrap step failed for Bench");
+
+        assert!(is_subscription_setup_error(&subscribe_error));
+        assert!(!is_subscription_setup_error(&bootstrap_error));
     }
 
     #[test]
