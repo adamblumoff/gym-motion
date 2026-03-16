@@ -312,6 +312,28 @@ impl Peripheral {
             trace!("Could not emit an event. AdapterManager has been dropped");
         }
     }
+
+    fn is_closed_handle_error(error: &Error) -> bool {
+        error.to_string().contains("The object has been closed.")
+    }
+
+    async fn write_once(
+        &self,
+        characteristic: &Characteristic,
+        data: &[u8],
+        write_type: WriteType,
+    ) -> Result<()> {
+        let ble_service = &*self
+            .shared
+            .ble_services
+            .get(&characteristic.service_uuid)
+            .ok_or_else(|| Error::NotSupported("Service not found for write".into()))?;
+        let ble_characteristic = ble_service
+            .characteristics
+            .get(&characteristic.uuid)
+            .ok_or_else(|| Error::NotSupported("Characteristic not found for write".into()))?;
+        ble_characteristic.write_value(data, write_type).await
+    }
 }
 
 impl Display for Peripheral {
@@ -533,16 +555,21 @@ impl ApiPeripheral for Peripheral {
         data: &[u8],
         write_type: WriteType,
     ) -> Result<()> {
-        let ble_service = &*self
-            .shared
-            .ble_services
-            .get(&characteristic.service_uuid)
-            .ok_or_else(|| Error::NotSupported("Service not found for write".into()))?;
-        let ble_characteristic = ble_service
-            .characteristics
-            .get(&characteristic.uuid)
-            .ok_or_else(|| Error::NotSupported("Characteristic not found for write".into()))?;
-        ble_characteristic.write_value(data, write_type).await
+        match self.write_once(characteristic, data, write_type).await {
+            Ok(()) => Ok(()),
+            Err(error)
+                if Self::is_closed_handle_error(&error)
+                    && self.shared.connected.load(Ordering::Relaxed) =>
+            {
+                warn!(
+                    "WinRT characteristic handle was closed for {}; refreshing services and retrying write",
+                    self.shared.address
+                );
+                self.discover_services().await?;
+                self.write_once(characteristic, data, write_type).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Enables either notify or indicate (depending on support) for the specified characteristic.
@@ -665,6 +692,24 @@ impl ApiPeripheral for Peripheral {
             Some(device) => device.request_connection_parameters(preset),
             None => Err(Error::NotConnected),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_closed_winrt_handle_errors() {
+        let closed = Error::Other(
+            "Error { code: HRESULT(0x80000013), message: \"The object has been closed.\" }"
+                .to_string()
+                .into(),
+        );
+        let other = Error::NotConnected;
+
+        assert!(Peripheral::is_closed_handle_error(&closed));
+        assert!(!Peripheral::is_closed_handle_error(&other));
     }
 }
 
