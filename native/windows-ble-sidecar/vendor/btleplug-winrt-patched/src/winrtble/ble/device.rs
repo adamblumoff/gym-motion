@@ -126,7 +126,7 @@ impl BLEDevice {
         timeout(CONNECT_WAIT_TIMEOUT, async {
             loop {
                 if self.is_connected().await? {
-                    return Ok(());
+                    return Ok::<(), Error>(());
                 }
 
                 sleep(CONNECT_POLL_INTERVAL).await;
