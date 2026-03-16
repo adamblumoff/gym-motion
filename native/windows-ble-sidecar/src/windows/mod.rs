@@ -294,8 +294,8 @@ fn pause_approved_reconnect_for_operator_decision(
     allowed: &[ApprovedNodeRule],
     connected_nodes: &HashMap<String, DiscoveredNode>,
     reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
-) -> usize {
-    let mut paused_rules = 0_usize;
+) -> Vec<ApprovedNodeRule> {
+    let mut paused_rules = Vec::new();
 
     for rule in allowed {
         let already_connected = connected_nodes
@@ -312,10 +312,34 @@ fn pause_approved_reconnect_for_operator_decision(
 
         state.retry_exhausted = true;
         state.awaiting_user_decision = true;
-        paused_rules = paused_rules.saturating_add(1);
+        paused_rules.push(rule.clone());
     }
 
     paused_rules
+}
+
+fn disconnected_node_from_rule(rule: &ApprovedNodeRule) -> DiscoveredNode {
+    DiscoveredNode {
+        id: rule
+            .known_device_id
+            .clone()
+            .map(|value| format!("known:{value}"))
+            .or_else(|| {
+                rule.peripheral_id
+                    .clone()
+                    .map(|value| format!("peripheral:{value}"))
+            })
+            .or_else(|| rule.address.clone().map(|value| format!("address:{value}")))
+            .or_else(|| rule.local_name.clone().map(|value| format!("name:{value}")))
+            .unwrap_or_else(|| rule.id.clone()),
+        label: rule.label.clone(),
+        peripheral_id: rule.peripheral_id.clone(),
+        address: rule.address.clone(),
+        local_name: rule.local_name.clone(),
+        known_device_id: rule.known_device_id.clone(),
+        last_rssi: None,
+        last_seen_at: None,
+    }
 }
 
 async fn restart_approved_reconnect_scan(
@@ -1049,11 +1073,27 @@ async fn run_session(
                             details: Some(json!({
                                 "scanBurstLimit": APPROVED_RECONNECT_SCAN_BURST_LIMIT,
                                 "scanBurstCount": reconnect_scan_burst,
-                                "pausedRuleCount": paused_rules,
+                                "pausedRuleCount": paused_rules.len(),
                                 "connectedApprovedCount": connected_nodes.len(),
                             })),
                         })
                         .await?;
+                    for paused_rule in paused_rules {
+                        writer
+                            .send(&Event::NodeConnectionState {
+                                node: disconnected_node_from_rule(&paused_rule),
+                                gateway_connection_state: "disconnected".to_string(),
+                                reason: Some(format!(
+                                    "Auto-reconnect paused after {} scan bursts.",
+                                    APPROVED_RECONNECT_SCAN_BURST_LIMIT
+                                )),
+                                reconnect: reconnect_status_for_rule(
+                                    Some(paused_rule.id.as_str()),
+                                    &reconnect_states,
+                                ),
+                            })
+                            .await?;
+                    }
                     sync_scan_state(
                         &adapter,
                         &writer,
@@ -3020,7 +3060,8 @@ mod tests {
             &mut reconnect_states,
         );
 
-        assert_eq!(paused_rules, 1);
+        assert_eq!(paused_rules.len(), 1);
+        assert_eq!(paused_rules[0].id, "node-2");
         assert_eq!(
             reconnect_states
                 .get("node-2")
@@ -3028,6 +3069,27 @@ mod tests {
             Some(true)
         );
         assert!(!reconnect_states.contains_key("node-1"));
+    }
+
+    #[test]
+    fn disconnected_node_from_rule_preserves_approved_identity_fields() {
+        let rule = ApprovedNodeRule {
+            id: "rule-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-bench".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+        };
+
+        let node = disconnected_node_from_rule(&rule);
+
+        assert_eq!(node.id, "known:stack-001");
+        assert_eq!(node.label, "Bench");
+        assert_eq!(node.peripheral_id.as_deref(), Some("peripheral-1"));
+        assert_eq!(node.address.as_deref(), Some("AA:BB"));
+        assert_eq!(node.local_name.as_deref(), Some("GymMotion-bench"));
+        assert_eq!(node.known_device_id.as_deref(), Some("stack-001"));
     }
 
     #[test]
