@@ -41,7 +41,8 @@ const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
-const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 4_000;
+const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 5_000;
+const APPROVED_RECONNECT_STALL_MS: u64 = 15_000;
 const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
@@ -401,6 +402,7 @@ async fn sync_scan_state(
     current_scan_reason: &mut Option<String>,
     manual_scan_deadline: Option<Instant>,
     last_advertisement_at: &Option<String>,
+    last_scan_progress_at: &mut Option<Instant>,
 ) -> Result<()> {
     let now = Instant::now();
     let should_scan_now =
@@ -414,6 +416,7 @@ async fn sync_scan_state(
         adapter.start_scan(ScanFilter::default()).await?;
         *scanning = true;
         *current_scan_reason = next_scan_reason.map(str::to_string);
+        *last_scan_progress_at = Some(now);
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -466,6 +469,7 @@ async fn sync_scan_state(
         let _ = adapter.stop_scan().await;
         *scanning = false;
         *current_scan_reason = None;
+        *last_scan_progress_at = None;
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -575,19 +579,29 @@ fn should_restart_approved_reconnect_scan(
     reconnect_states: &HashMap<String, ApprovedReconnectState>,
     manual_scan_deadline: Option<Instant>,
     now: Instant,
+    last_scan_progress_at: Option<Instant>,
     active_connection_count: usize,
 ) -> bool {
     if active_connection_count > 0 {
         return false;
     }
 
-    scan_reason(
+    if scan_reason(
         allowed,
         connected_nodes,
         reconnect_states,
         manual_scan_deadline,
         now,
-    ) == Some("approved-reconnect")
+    ) != Some("approved-reconnect")
+    {
+        return false;
+    }
+
+    let Some(last_progress) = last_scan_progress_at else {
+        return false;
+    };
+
+    now.duration_since(last_progress) >= Duration::from_millis(APPROVED_RECONNECT_STALL_MS)
 }
 
 fn next_reconnect_attempt(state: &ApprovedReconnectState, active_for_node: bool) -> Option<u32> {
@@ -962,12 +976,21 @@ async fn run_session(
     let mut last_advertisement_at = None;
     let mut scanning = false;
     let mut current_scan_reason = None;
+    let mut last_scan_progress_at = None;
     let mut manual_scan_deadline = None;
     let mut manual_recover_rule_id: Option<String> = None;
     let mut reconnect_diagnostic_tick =
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
     reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reconnect_diagnostic_tick.tick().await;
+    let mut reconnect_scan_restart_tick =
+        tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS));
+    reconnect_scan_restart_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect_scan_restart_tick.tick().await;
+    let mut reconnect_scan_burst = 0_u32;
+    let mut advertisements_seen_this_burst = 0_u32;
+    let mut rejected_candidates_this_burst = 0_u32;
+    let mut classified_candidates_this_burst = 0_u32;
 
     {
         let allowed = allowed_nodes.read().await.clone();
@@ -982,6 +1005,7 @@ async fn run_session(
             &mut current_scan_reason,
             manual_scan_deadline,
             &last_advertisement_at,
+            &mut last_scan_progress_at,
         )
         .await?;
     }
@@ -1098,6 +1122,7 @@ async fn run_session(
                             &mut current_scan_reason,
                             manual_scan_deadline,
                             &last_advertisement_at,
+                            &mut last_scan_progress_at,
                         )
                         .await?;
                         continue;
@@ -1147,6 +1172,7 @@ async fn run_session(
                             &mut current_scan_reason,
                             manual_scan_deadline,
                             &last_advertisement_at,
+                            &mut last_scan_progress_at,
                         )
                         .await?;
                         continue;
@@ -1165,6 +1191,7 @@ async fn run_session(
                     &mut current_scan_reason,
                     manual_scan_deadline,
                     &last_advertisement_at,
+                    &mut last_scan_progress_at,
                 )
                 .await?;
             }
@@ -1189,6 +1216,7 @@ async fn run_session(
                     &mut current_scan_reason,
                     manual_scan_deadline,
                     &last_advertisement_at,
+                    &mut last_scan_progress_at,
                 )
                 .await?;
             }
@@ -1212,6 +1240,47 @@ async fn run_session(
                         })),
                     }).await?;
                 }
+            }
+            _ = reconnect_scan_restart_tick.tick() => {
+                let allowed = allowed_nodes.read().await.clone();
+                if !scanning {
+                    continue;
+                }
+
+                let active_connection_count = active_connections.lock().await.len();
+
+                if !should_restart_approved_reconnect_scan(
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    manual_scan_deadline,
+                    Instant::now(),
+                    last_scan_progress_at,
+                    active_connection_count,
+                ) {
+                    continue;
+                }
+
+                restart_approved_reconnect_scan(
+                    &adapter,
+                    &writer,
+                    &selected_adapter_id,
+                    &allowed,
+                    &connected_nodes,
+                    &reconnect_states,
+                    &last_advertisement_at,
+                    reconnect_scan_burst,
+                    advertisements_seen_this_burst,
+                    rejected_candidates_this_burst,
+                    classified_candidates_this_burst,
+                    active_connection_count,
+                )
+                .await?;
+                reconnect_scan_burst = reconnect_scan_burst.saturating_add(1);
+                advertisements_seen_this_burst = 0;
+                rejected_candidates_this_burst = 0;
+                classified_candidates_this_burst = 0;
+                last_scan_progress_at = Some(Instant::now());
             }
             event = events.next() => {
                 let Some(event) = event else {
@@ -1247,6 +1316,10 @@ async fn run_session(
                             continue;
                         }
 
+                        advertisements_seen_this_burst =
+                            advertisements_seen_this_burst.saturating_add(1);
+                        last_scan_progress_at = Some(Instant::now());
+
                         let Some(peripheral) =
                             peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
                         else {
@@ -1277,6 +1350,8 @@ async fn run_session(
                         )
                         .await
                         {
+                            classified_candidates_this_burst =
+                                classified_candidates_this_burst.saturating_add(1);
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered {
                                 node: node.clone(),
@@ -1367,6 +1442,7 @@ async fn run_session(
                                         &last_advertisement_at,
                                     )
                                     .await?;
+                                    last_scan_progress_at = None;
                                 }
                                 let manual_recover_rule_id_for_log = manual_recover_rule_id
                                     .as_ref()
@@ -1449,6 +1525,10 @@ async fn run_session(
                                 });
                             }
                         }
+                        else {
+                            rejected_candidates_this_burst =
+                                rejected_candidates_this_burst.saturating_add(1);
+                        }
                     }
                     CentralEvent::DeviceDisconnected(id) => {
                         let Some(peripheral) = peripheral_for_event(
@@ -1519,6 +1599,7 @@ async fn run_session(
                                 &mut current_scan_reason,
                                 manual_scan_deadline,
                                 &last_advertisement_at,
+                                &mut last_scan_progress_at,
                             )
                             .await?;
                         }
@@ -2626,6 +2707,7 @@ mod tests {
             &HashMap::new(),
             None,
             Instant::now(),
+            Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
             1,
         ));
 
@@ -2635,6 +2717,39 @@ mod tests {
             &HashMap::new(),
             None,
             Instant::now(),
+            Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+            0,
+        ));
+    }
+
+    #[test]
+    fn approved_reconnect_scan_restart_waits_for_a_real_stall() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let now = Instant::now();
+
+        assert!(!should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            now,
+            Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS - 1)),
+            0,
+        ));
+        assert!(should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            now,
+            Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
             0,
         ));
     }
