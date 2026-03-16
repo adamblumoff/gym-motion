@@ -41,8 +41,9 @@ const SCAN_WINDOW_SECS: u64 = 15;
 const DISCONNECT_CONFIRM_MS: u64 = 500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const APPROVED_RECONNECT_DIAGNOSTIC_MS: u64 = 10_000;
-const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 5_000;
+const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
 const APPROVED_RECONNECT_STALL_MS: u64 = 15_000;
+const APPROVED_RECONNECT_STARTUP_BURST_MS: u64 = 12_000;
 const APPROVED_RECONNECT_SCAN_RESTART_DELAY_MS: u64 = 300;
 const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
@@ -403,6 +404,7 @@ async fn sync_scan_state(
     manual_scan_deadline: Option<Instant>,
     last_advertisement_at: &Option<String>,
     last_scan_progress_at: &mut Option<Instant>,
+    startup_burst_deadline: &mut Option<Instant>,
 ) -> Result<()> {
     let now = Instant::now();
     let should_scan_now =
@@ -417,6 +419,10 @@ async fn sync_scan_state(
         *scanning = true;
         *current_scan_reason = next_scan_reason.map(str::to_string);
         *last_scan_progress_at = Some(now);
+        if next_scan_reason == Some("approved-reconnect") && startup_burst_deadline.is_none() {
+            *startup_burst_deadline =
+                Some(now + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS));
+        }
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -470,6 +476,7 @@ async fn sync_scan_state(
         *scanning = false;
         *current_scan_reason = None;
         *last_scan_progress_at = None;
+        *startup_burst_deadline = None;
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -580,6 +587,7 @@ fn should_restart_approved_reconnect_scan(
     manual_scan_deadline: Option<Instant>,
     now: Instant,
     last_scan_progress_at: Option<Instant>,
+    startup_burst_deadline: Option<Instant>,
     active_connection_count: usize,
 ) -> bool {
     if active_connection_count > 0 {
@@ -601,7 +609,16 @@ fn should_restart_approved_reconnect_scan(
         return false;
     };
 
-    now.duration_since(last_progress) >= Duration::from_millis(APPROVED_RECONNECT_STALL_MS)
+    let restart_after = if startup_burst_deadline
+        .map(|deadline| deadline > now)
+        .unwrap_or(false)
+    {
+        Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS)
+    } else {
+        Duration::from_millis(APPROVED_RECONNECT_STALL_MS)
+    };
+
+    now.duration_since(last_progress) >= restart_after
 }
 
 fn next_reconnect_attempt(state: &ApprovedReconnectState, active_for_node: bool) -> Option<u32> {
@@ -977,6 +994,7 @@ async fn run_session(
     let mut scanning = false;
     let mut current_scan_reason = None;
     let mut last_scan_progress_at = None;
+    let mut startup_burst_deadline = None;
     let mut manual_scan_deadline = None;
     let mut manual_recover_rule_id: Option<String> = None;
     let mut reconnect_diagnostic_tick =
@@ -1006,6 +1024,7 @@ async fn run_session(
             manual_scan_deadline,
             &last_advertisement_at,
             &mut last_scan_progress_at,
+            &mut startup_burst_deadline,
         )
         .await?;
     }
@@ -1123,6 +1142,7 @@ async fn run_session(
                             manual_scan_deadline,
                             &last_advertisement_at,
                             &mut last_scan_progress_at,
+                            &mut startup_burst_deadline,
                         )
                         .await?;
                         continue;
@@ -1173,6 +1193,7 @@ async fn run_session(
                             manual_scan_deadline,
                             &last_advertisement_at,
                             &mut last_scan_progress_at,
+                            &mut startup_burst_deadline,
                         )
                         .await?;
                         continue;
@@ -1192,6 +1213,7 @@ async fn run_session(
                     manual_scan_deadline,
                     &last_advertisement_at,
                     &mut last_scan_progress_at,
+                    &mut startup_burst_deadline,
                 )
                 .await?;
             }
@@ -1217,6 +1239,7 @@ async fn run_session(
                     manual_scan_deadline,
                     &last_advertisement_at,
                     &mut last_scan_progress_at,
+                    &mut startup_burst_deadline,
                 )
                 .await?;
             }
@@ -1256,6 +1279,7 @@ async fn run_session(
                     manual_scan_deadline,
                     Instant::now(),
                     last_scan_progress_at,
+                    startup_burst_deadline,
                     active_connection_count,
                 ) {
                     continue;
@@ -1281,6 +1305,12 @@ async fn run_session(
                 rejected_candidates_this_burst = 0;
                 classified_candidates_this_burst = 0;
                 last_scan_progress_at = Some(Instant::now());
+                if startup_burst_deadline
+                    .map(|deadline| deadline <= Instant::now())
+                    .unwrap_or(false)
+                {
+                    startup_burst_deadline = None;
+                }
             }
             event = events.next() => {
                 let Some(event) = event else {
@@ -1443,6 +1473,7 @@ async fn run_session(
                                     )
                                     .await?;
                                     last_scan_progress_at = None;
+                                    startup_burst_deadline = None;
                                 }
                                 let manual_recover_rule_id_for_log = manual_recover_rule_id
                                     .as_ref()
@@ -1600,6 +1631,7 @@ async fn run_session(
                                 manual_scan_deadline,
                                 &last_advertisement_at,
                                 &mut last_scan_progress_at,
+                                &mut startup_burst_deadline,
                             )
                             .await?;
                         }
@@ -2708,6 +2740,7 @@ mod tests {
             None,
             Instant::now(),
             Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+            Some(Instant::now() + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS)),
             1,
         ));
 
@@ -2718,6 +2751,7 @@ mod tests {
             None,
             Instant::now(),
             Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+            None,
             0,
         ));
     }
@@ -2741,6 +2775,7 @@ mod tests {
             None,
             now,
             Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS - 1)),
+            None,
             0,
         ));
         assert!(should_restart_approved_reconnect_scan(
@@ -2750,6 +2785,41 @@ mod tests {
             None,
             now,
             Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+            None,
+            0,
+        ));
+    }
+
+    #[test]
+    fn approved_reconnect_scan_restart_is_more_aggressive_during_startup_burst() {
+        let rules = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let now = Instant::now();
+
+        assert!(!should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            now,
+            Some(now - Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS - 1)),
+            Some(now + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS)),
+            0,
+        ));
+        assert!(should_restart_approved_reconnect_scan(
+            &rules,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            now,
+            Some(now - Duration::from_millis(APPROVED_RECONNECT_SCAN_BURST_MS)),
+            Some(now + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS)),
             0,
         ));
     }
