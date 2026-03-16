@@ -1318,7 +1318,6 @@ async fn run_session(
 
                         advertisements_seen_this_burst =
                             advertisements_seen_this_burst.saturating_add(1);
-                        last_scan_progress_at = Some(Instant::now());
 
                         let Some(peripheral) =
                             peripheral_for_event(&adapter, &writer, "device_discovered", &id).await
@@ -1352,6 +1351,7 @@ async fn run_session(
                         {
                             classified_candidates_this_burst =
                                 classified_candidates_this_burst.saturating_add(1);
+                            last_scan_progress_at = Some(Instant::now());
                             last_advertisement_at = node.last_seen_at.clone();
                             writer.send(&Event::NodeDiscovered {
                                 node: node.clone(),
