@@ -159,7 +159,7 @@ export function buildPairedDevices(
 ): SetupDevice[] {
   return setup.approvedNodes.map((node) => {
     const runtimeDevice = snapshot
-      ? findMatchingGatewayDeviceForApprovedNode(node, snapshot.devices)
+      ? findMatchingGatewayDeviceForApprovedNode(node, snapshot.devices, setup.approvedNodes)
       : null;
 
     return {

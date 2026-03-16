@@ -17,6 +17,7 @@ function addressIdentityMatch(
 export function findMatchingGatewayDeviceForApprovedNode(
   approvedNode: ApprovedNodeRule,
   devices: GatewayRuntimeDeviceSummary[],
+  approvedNodes: ApprovedNodeRule[] = [approvedNode],
 ) {
   const byKnownDeviceId = devices.find((device) =>
     exactIdentityMatch(approvedNode.knownDeviceId, device.id),
@@ -44,7 +45,8 @@ export function findMatchingGatewayDeviceForApprovedNode(
     !approvedNode.knownDeviceId &&
     !approvedNode.peripheralId &&
     !approvedNode.address &&
-    Boolean(approvedNode.localName);
+    Boolean(approvedNode.localName) &&
+    approvedNodes.filter((rule) => rule.localName === approvedNode.localName).length === 1;
   const byAdvertisedName = canUseLocalNameFallback
     ? devices.filter((device) => device.advertisedName === approvedNode.localName)
     : [];

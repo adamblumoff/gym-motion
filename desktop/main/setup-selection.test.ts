@@ -141,6 +141,75 @@ describe("setup selection helpers", () => {
     expect(device?.id).toBe("stack-001");
   });
 
+  it("does not bind duplicate name-only approvals to the same runtime device", () => {
+    const approvedNodes = [
+      {
+        id: "name:GymMotion-f4e9d4-a",
+        label: "Bench A",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+      {
+        id: "name:GymMotion-f4e9d4-b",
+        label: "Bench B",
+        peripheralId: null,
+        address: null,
+        localName: "GymMotion-f4e9d4",
+        knownDeviceId: null,
+      },
+    ];
+
+    const device = findMatchingGatewayDeviceForApprovedNode(
+      approvedNodes[0],
+      [
+        {
+          id: "stack-001",
+          lastState: "still",
+          lastSeenAt: 0,
+          lastDelta: null,
+          updatedAt: new Date().toISOString(),
+          hardwareId: "hw-1",
+          bootId: "boot-2",
+          firmwareVersion: "0.5.2",
+          machineLabel: "Leg Press",
+          siteId: null,
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          updateTargetVersion: null,
+          updateDetail: null,
+          updateUpdatedAt: null,
+          lastHeartbeatAt: null,
+          lastEventReceivedAt: null,
+          healthStatus: "stale",
+          gatewayConnectionState: "reconnecting",
+          telemetryFreshness: "stale",
+          peripheralId: "peripheral-1",
+          address: "AA:BB",
+          gatewayLastAdvertisementAt: null,
+          gatewayLastConnectedAt: null,
+          gatewayLastDisconnectedAt: null,
+          gatewayLastTelemetryAt: null,
+          gatewayDisconnectReason: null,
+          advertisedName: "GymMotion-f4e9d4",
+          lastRssi: -60,
+          otaStatus: "idle",
+          otaTargetVersion: null,
+          otaProgressBytesSent: null,
+          otaTotalBytes: null,
+          otaLastPhase: null,
+          otaFailureDetail: null,
+          otaLastStatusMessage: null,
+          otaUpdatedAt: null,
+        },
+      ],
+      approvedNodes,
+    );
+
+    expect(device).toBeNull();
+  });
+
   it("upgrades approved nodes to known device ids after runtime identity resolves", () => {
     const reconciled = reconcileApprovedNodeRule(
       {

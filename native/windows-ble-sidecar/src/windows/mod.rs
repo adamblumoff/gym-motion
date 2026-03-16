@@ -136,7 +136,7 @@ struct DiscoveryClassification {
 
 fn approved_rule_id_for_node(node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> Option<String> {
     rules.iter()
-        .find(|rule| rule_matches_node(rule, node))
+        .find(|rule| rule_matches_node(rule, node, rules))
         .map(|rule| rule.id.clone())
 }
 
@@ -552,8 +552,30 @@ fn node_key(node: &DiscoveredNode) -> String {
         .unwrap_or_else(|| node.id.clone())
 }
 
-fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
-    rule.known_device_id
+fn unique_name_only_rule_id<'a>(
+    local_name: Option<&str>,
+    rules: &'a [ApprovedNodeRule],
+) -> Option<&'a str> {
+    let candidate_name = local_name?;
+    let mut matches = rules.iter().filter(|rule| {
+        rule.known_device_id.is_none()
+            && rule.peripheral_id.is_none()
+            && rule.address.is_none()
+            && rule
+                .local_name
+                .as_ref()
+                .map(|value| value == candidate_name)
+                .unwrap_or(false)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.id.as_str())
+}
+
+fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode, rules: &[ApprovedNodeRule]) -> bool {
+    let strong_identity_match = rule.known_device_id
         .as_ref()
         .zip(node.known_device_id.as_ref())
         .map(|(left, right)| left == right)
@@ -569,13 +591,15 @@ fn rule_matches_node(rule: &ApprovedNodeRule, node: &DiscoveredNode) -> bool {
             .as_ref()
             .zip(node.address.as_ref())
             .map(|(left, right)| left.eq_ignore_ascii_case(right))
-            .unwrap_or(false)
-        || rule
-            .local_name
-            .as_ref()
-            .zip(node.local_name.as_ref())
-            .map(|(left, right)| left == right)
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+    if strong_identity_match {
+        return true;
+    }
+
+    unique_name_only_rule_id(node.local_name.as_deref(), rules)
+        .map(|rule_id| rule_id == rule.id.as_str())
+        .unwrap_or(false)
 }
 
 fn all_approved_nodes_connected(
@@ -595,7 +619,7 @@ fn all_approved_nodes_connected(
 
             connected_nodes
                 .values()
-                .any(|node| rule_matches_node(rule, node))
+                .any(|node| rule_matches_node(rule, node, rules))
         })
 }
 
@@ -1825,10 +1849,10 @@ fn chrono_like_seconds(seconds: u64) -> String {
 mod tests {
     use super::{
         allow_approved_identity_fallback, approved_nodes_pending_connection,
-        classify_discovery_candidate, control_command_frames, scan_reason, should_scan,
-        mark_node_connected, prune_reconnect_states, should_clear_reconnect_peripherals,
-        ApprovedReconnectState, Config,
-        APP_SESSION_LEASE_TIMEOUT_MS,
+        approved_rule_id_for_node, all_approved_nodes_connected, classify_discovery_candidate,
+        control_command_frames, mark_node_connected, node_key, prune_reconnect_states,
+        scan_reason, should_clear_reconnect_peripherals, should_scan, ApprovedReconnectState,
+        Config, APP_SESSION_LEASE_TIMEOUT_MS, RECONNECT_ATTEMPT_LIMIT,
     };
     use crate::protocol::{ApprovedNodeRule, DiscoveredNode};
     use std::{collections::HashMap, time::{Duration, Instant}};
@@ -2126,14 +2150,10 @@ mod tests {
                 label: "Bench".to_string(),
                 address: None,
                 local_name: Some("GymMotion-bench".to_string()),
-                rssi: None,
+                last_rssi: None,
                 last_seen_at: None,
-                status: None,
                 peripheral_id: Some("peripheral-1".to_string()),
                 known_device_id: None,
-                reconnect_attempt: 0,
-                reconnect_attempt_limit: APPROVED_RECONNECT_ATTEMPT_LIMIT,
-                reconnect_retry_exhausted: false,
             },
         );
 
@@ -2190,7 +2210,7 @@ mod tests {
         let reconnect_states = HashMap::from([(
             "node-1".to_string(),
             ApprovedReconnectState {
-                attempt: APPROVED_RECONNECT_ATTEMPT_LIMIT,
+                attempt: RECONNECT_ATTEMPT_LIMIT,
                 retry_exhausted: true,
             },
         )]);
@@ -2350,5 +2370,46 @@ mod tests {
 
         assert!(!classification.approved_identity_matched);
         assert!(classification.matched_known_device_id.is_none());
+    }
+
+    #[test]
+    fn duplicate_name_only_rules_do_not_bind_one_connected_node_to_multiple_approvals() {
+        let rules = vec![
+            ApprovedNodeRule {
+                id: "node-1".to_string(),
+                label: "Bench A".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: None,
+                address: None,
+                local_name: Some("GymMotion-f4e9d4".to_string()),
+                known_device_id: None,
+            },
+        ];
+        let node = DiscoveredNode {
+            id: "peripheral:peripheral-9".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: Some("peripheral-9".to_string()),
+            address: None,
+            local_name: Some("GymMotion-f4e9d4".to_string()),
+            known_device_id: None,
+            last_rssi: None,
+            last_seen_at: None,
+        };
+        let connected = HashMap::from([(node_key(&node), node.clone())]);
+        let reconnect_states = HashMap::new();
+
+        assert!(approved_rule_id_for_node(&node, &rules).is_none());
+        assert!(!all_approved_nodes_connected(
+            &rules,
+            &connected,
+            &reconnect_states
+        ));
     }
 }

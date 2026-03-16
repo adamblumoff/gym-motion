@@ -82,27 +82,11 @@ export function reconcileApprovedNodeRule(
   devices: GatewayRuntimeDeviceSummary[],
   approvedNodes: ApprovedNodeRule[] = [approvedNode],
 ): ApprovedNodeRule {
-  const localNameRuleMatches =
-    !approvedNode.knownDeviceId &&
-    !approvedNode.peripheralId &&
-    !approvedNode.address &&
-    approvedNode.localName
-      ? approvedNodes.filter((node) => node.localName === approvedNode.localName)
-      : [];
-  const canUseLocalNameFallback = localNameRuleMatches.length === 1;
-
-  const matchingDevice = findMatchingGatewayDeviceForApprovedNode(approvedNode, devices);
-  if (
-    matchingDevice &&
-    approvedNode.localName &&
-    !approvedNode.knownDeviceId &&
-    !approvedNode.peripheralId &&
-    !approvedNode.address &&
-    !canUseLocalNameFallback &&
-    matchingDevice.advertisedName === approvedNode.localName
-  ) {
-    return approvedNode;
-  }
+  const matchingDevice = findMatchingGatewayDeviceForApprovedNode(
+    approvedNode,
+    devices,
+    approvedNodes,
+  );
 
   if (!matchingDevice) {
     return approvedNode;

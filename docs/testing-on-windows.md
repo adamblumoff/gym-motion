@@ -113,4 +113,5 @@ Validate the same Setup and reconnect flow in the packaged app.
 - `scanReason` is a newer field. On legacy/non-Windows gateways, manual discovery may still only report `scanState: "scanning"` without a reason, and the desktop runtime/UI should continue to treat that as an operator-visible scan instead of a silent reconnect search.
 - Paired sensor rows should keep showing the saved BLE address when one is known, even if the live runtime device also has an opaque WinRT peripheral handle.
 - Those paired rows should also bind to live runtime devices by strongest available identity first (`knownDeviceId`, then peripheral/address, then only safe fallbacks). A shared local name must not let one live sensor borrow another paired row's address, signal, or connection badge.
+- That same duplicate-name guard applies to reconnect bookkeeping too: one connected/recovered node must never satisfy multiple saved name-only approvals just because they share a `localName`.
 - The legacy noble / raw-USB BLE path is now the non-Windows fallback, not the primary Windows implementation.
