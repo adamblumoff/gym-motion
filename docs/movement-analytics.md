@@ -27,11 +27,8 @@ Related:
 - Canonical movement buckets are currently computed from stored `motion_events` using `received_at` time on the gateway/backend side.
 - The renderer does not compute canonical history from raw snapshot events anymore.
 - The renderer may still build a short live provisional overlay from snapshot movement events for the current tail.
-
-Important:
-
-- This repo does not yet have the full Windows-side firmware history replay path wired through the sidecar/runtime stack.
-- That means the new analytics architecture is in place on the desktop/backend side, but long offline firmware archive replay still needs its own follow-up implementation.
+- The Windows runtime now requests firmware history pages from the sidecar after a session becomes healthy, persists each page through child-process IPC, and only then acks firmware compaction.
+- Firmware archive replay still reuses raw motion history rows today; compact boot-session span archival is still a future firmware-format improvement rather than a desktop/runtime gap.
 
 ## Desktop Cache
 
@@ -44,3 +41,4 @@ Important:
 - If a device has cached canonical analytics, show it immediately and refresh in the background.
 - If a device has no canonical analytics yet, the page can show a live provisional chart while history is being built.
 - Sync problems and compaction/storage-pressure notices belong on the analytics page, not the dashboard.
+- Storage-pressure notices can come from either persisted compaction logs or `device_sync_state.last_overflow_detected_at` when the firmware reported overflow during replay.

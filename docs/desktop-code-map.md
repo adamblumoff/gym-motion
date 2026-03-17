@@ -14,6 +14,7 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Renderer runtime provider: [desktop/ui/src/app/runtime-context.tsx](/home/adamblumoff/gym-motion/desktop/ui/src/app/runtime-context.tsx)
 - Movement analytics controller/cache: [desktop/main/managed-gateway-runtime/analytics-controller.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/analytics-controller.ts)
 - Windows gateway script: [desktop/scripts/windows-winrt-gateway.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway.mjs)
+- Windows history replay coordinator: [desktop/scripts/windows-winrt-gateway-history-sync.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-history-sync.mjs)
 - Windows gateway child-to-main bridge: [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
 - Runtime server root: [backend/runtime/gateway-runtime-server/core.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.mjs)
 - Sidecar runtime root: [native/windows-ble-sidecar/src/windows/core_impl.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/core_impl.rs)
@@ -54,6 +55,10 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Device logs or telemetry are reaching the gateway console but not the per-device UI history:
   - start in [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
   - then check [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
+- Firmware history replay reaches the sidecar but never appears in canonical analytics:
+  - start in [desktop/scripts/windows-winrt-gateway-history-sync.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-history-sync.mjs)
+  - then check [desktop/main/managed-gateway-runtime/gateway-child-ipc.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/gateway-child-ipc.ts)
+  - then check [native/windows-ble-sidecar/src/windows/session_transport_monitor.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session_transport_monitor.rs)
 - Movement analytics page is showing stale or wrong buckets:
   - start in [backend/data/repository/movement-analytics.ts](/home/adamblumoff/gym-motion/backend/data/repository/movement-analytics.ts)
   - then check [shared/movement-analytics.ts](/home/adamblumoff/gym-motion/shared/movement-analytics.ts)
