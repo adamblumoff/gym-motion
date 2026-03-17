@@ -1,6 +1,7 @@
 import { sendRequestToDesktop as defaultSendRequestToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
 
 const DEFAULT_HISTORY_PAGE_SIZE = 250;
+const DEFAULT_AUTO_START_DELAY_MS = 0;
 
 function connectionKeyForNode(node = {}) {
   return node.peripheralId ?? node.peripheral_id ?? node.id ?? null;
@@ -148,8 +149,21 @@ export function createHistorySyncCoordinator({
   sendRequestToDesktop = defaultSendRequestToDesktop,
   onHistorySyncStateChanged = () => {},
   pageSize = DEFAULT_HISTORY_PAGE_SIZE,
+  autoStartDelayMs = DEFAULT_AUTO_START_DELAY_MS,
+  scheduleAutoStart = setTimeout,
+  clearScheduledAutoStart = clearTimeout,
 }) {
   const sessions = new Map();
+  const autoStartTimers = new Map();
+
+  function clearAutoStartTimer(connectionId) {
+    if (!connectionId || !autoStartTimers.has(connectionId)) {
+      return;
+    }
+
+    clearScheduledAutoStart(autoStartTimers.get(connectionId));
+    autoStartTimers.delete(connectionId);
+  }
 
   function publishState(details = {}, state, error = null) {
     if (!details.deviceId && !details.connectionId) {
@@ -205,6 +219,7 @@ export function createHistorySyncCoordinator({
       return false;
     }
 
+    clearAutoStartTimer(nextSession.connectionId);
     sessions.set(nextSession.connectionId, {
       ...nextSession,
       records: [],
@@ -222,7 +237,27 @@ export function createHistorySyncCoordinator({
   }
 
   function handleNodeConnected(node = {}) {
-    requestHistorySyncForNode(node);
+    const connectionId = connectionKeyForNode(node);
+
+    if (!connectionId) {
+      debug("skipped delayed history sync start because the node had no connection key", node);
+      return;
+    }
+
+    clearAutoStartTimer(connectionId);
+
+    if (autoStartDelayMs <= 0) {
+      requestHistorySyncForNode(node);
+      return;
+    }
+
+    autoStartTimers.set(
+      connectionId,
+      scheduleAutoStart(() => {
+        autoStartTimers.delete(connectionId);
+        requestHistorySyncForNode(node);
+      }, autoStartDelayMs),
+    );
   }
 
   function handleNodeDisconnected(event = {}) {
@@ -232,6 +267,7 @@ export function createHistorySyncCoordinator({
     const details = buildSessionDetails(node, existing);
 
     if (connectionId) {
+      clearAutoStartTimer(connectionId);
       sessions.delete(connectionId);
     }
 
@@ -275,6 +311,7 @@ export function createHistorySyncCoordinator({
     };
 
     if (failure.connectionId) {
+      clearAutoStartTimer(failure.connectionId);
       sessions.delete(failure.connectionId);
     }
 
@@ -294,6 +331,8 @@ export function createHistorySyncCoordinator({
       ...buildSessionDetails(event.node ?? {}, sessions.get(connectionId) ?? null),
       deviceId: completion.deviceId,
     };
+
+    clearAutoStartTimer(connectionId);
 
     if (session.records.length !== completion.sentCount) {
       debug("history sync page size mismatch; leaving firmware records unacked", {

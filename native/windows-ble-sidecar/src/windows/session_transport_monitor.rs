@@ -33,6 +33,9 @@ use super::{
     writer::EventWriter,
 };
 
+const ACTIVE_SESSION_RECOVERY_ATTEMPTS: u32 = 2;
+const ACTIVE_SESSION_RECOVERY_RETRY_DELAY_MS: u64 = 250;
+
 #[derive(Clone, Copy)]
 pub(super) struct MonitorSessionConfig {
     pub(super) connection_health_poll_ms: u64,
@@ -92,6 +95,46 @@ async fn send_history_ack(
     write_chunked_json_command(peripheral, control_characteristic, &payload)
         .await
         .with_context(|| format!("history-ack failed for {}", node.label))
+}
+
+async fn recover_control_path_with_retry(
+    peripheral: &btleplug::platform::Peripheral,
+    writer: &EventWriter,
+    node: &DiscoveredNode,
+    reconnect: &Option<ReconnectStatus>,
+    control_uuid: uuid::Uuid,
+    app_session_id: &str,
+    app_session_nonce: &str,
+) -> Result<btleplug::api::Characteristic> {
+    let mut last_error = None;
+
+    for attempt in 1..=ACTIVE_SESSION_RECOVERY_ATTEMPTS {
+        match recover_active_session_control_path(
+            peripheral,
+            writer,
+            node,
+            reconnect,
+            control_uuid,
+            app_session_id,
+            app_session_nonce,
+        )
+        .await
+        {
+            Ok(control_characteristic) => return Ok(control_characteristic),
+            Err(error) => {
+                last_error = Some(error);
+
+                if attempt < ACTIVE_SESSION_RECOVERY_ATTEMPTS {
+                    sleep(Duration::from_millis(
+                        ACTIVE_SESSION_RECOVERY_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("active session recovery should retain the last error"))
 }
 
 pub(super) async fn monitor_active_session(
@@ -422,10 +465,8 @@ pub(super) async fn monitor_active_session(
                             let error_message = format!("{:#}", error);
                             let mut handled = false;
 
-                            if is_closed_handle_error_message(&error_message)
-                                && prepared.peripheral.is_connected().await.unwrap_or(false)
-                            {
-                                match recover_active_session_control_path(
+                            if is_closed_handle_error_message(&error_message) {
+                                match recover_control_path_with_retry(
                                     &prepared.peripheral,
                                     &writer,
                                     &node,
@@ -450,30 +491,20 @@ pub(super) async fn monitor_active_session(
                                         lease_failure_rx = new_failure_rx;
                                         lease_task = new_lease_task;
 
-                                        if let Err(retry_error) = send_history_sync_begin(
-                                            &prepared.peripheral,
-                                            &current_control_characteristic,
-                                            &node,
-                                            after_sequence,
-                                            max_records,
-                                        )
-                                        .await
-                                        {
-                                            writer
-                                                .send(&Event::Log {
-                                                    level: "warn".to_string(),
-                                                    message: "History replay start failed after control-path recovery; leaving the session online and deferring replay.".to_string(),
-                                                    details: Some(json!({
-                                                        "peripheralId": node.peripheral_id,
-                                                        "knownDeviceId": known_device_id,
-                                                        "address": node.address,
-                                                        "afterSequence": after_sequence,
-                                                        "maxRecords": max_records,
-                                                        "error": format!("{:#}", retry_error),
-                                                    })),
-                                                })
-                                                .await?;
-                                        }
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "warn".to_string(),
+                                                message: "History replay start failed, but the runtime control path recovered; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                                details: Some(json!({
+                                                    "peripheralId": node.peripheral_id,
+                                                    "knownDeviceId": known_device_id,
+                                                    "address": node.address,
+                                                    "afterSequence": after_sequence,
+                                                    "maxRecords": max_records,
+                                                    "error": error_message,
+                                                })),
+                                            })
+                                            .await?;
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
@@ -532,10 +563,8 @@ pub(super) async fn monitor_active_session(
                             let error_message = format!("{:#}", error);
                             let mut handled = false;
 
-                            if is_closed_handle_error_message(&error_message)
-                                && prepared.peripheral.is_connected().await.unwrap_or(false)
-                            {
-                                match recover_active_session_control_path(
+                            if is_closed_handle_error_message(&error_message) {
+                                match recover_control_path_with_retry(
                                     &prepared.peripheral,
                                     &writer,
                                     &node,
@@ -560,28 +589,19 @@ pub(super) async fn monitor_active_session(
                                         lease_failure_rx = new_failure_rx;
                                         lease_task = new_lease_task;
 
-                                        if let Err(retry_error) = send_history_ack(
-                                            &prepared.peripheral,
-                                            &current_control_characteristic,
-                                            &node,
-                                            sequence,
-                                        )
-                                        .await
-                                        {
-                                            writer
-                                                .send(&Event::Log {
-                                                    level: "warn".to_string(),
-                                                    message: "History replay ack failed after control-path recovery; leaving the session online and retrying on a later reconnect.".to_string(),
-                                                    details: Some(json!({
-                                                        "peripheralId": node.peripheral_id,
-                                                        "knownDeviceId": known_device_id,
-                                                        "address": node.address,
-                                                        "sequence": sequence,
-                                                        "error": format!("{:#}", retry_error),
-                                                    })),
-                                                })
-                                                .await?;
-                                        }
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "warn".to_string(),
+                                                message: "History replay ack failed, but the runtime control path recovered; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                                details: Some(json!({
+                                                    "peripheralId": node.peripheral_id,
+                                                    "knownDeviceId": known_device_id,
+                                                    "address": node.address,
+                                                    "sequence": sequence,
+                                                    "error": error_message,
+                                                })),
+                                            })
+                                            .await?;
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
@@ -760,10 +780,8 @@ pub(super) async fn monitor_active_session(
             Some(reason) = lease_failure_rx.recv() => {
                 let _ = lease_shutdown_tx.send(true);
                 let _ = lease_task.await;
-                if is_closed_handle_error_message(&reason)
-                    && prepared.peripheral.is_connected().await.unwrap_or(false)
-                {
-                    match recover_active_session_control_path(
+                if is_closed_handle_error_message(&reason) {
+                    match recover_control_path_with_retry(
                         &prepared.peripheral,
                         &writer,
                         &node,

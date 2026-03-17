@@ -21,6 +21,7 @@ describe("windows winrt gateway history sync", () => {
       },
       debug() {},
       pageSize: 2,
+      autoStartDelayMs: 0,
     });
 
     coordinator.handleNodeConnected({
@@ -159,6 +160,7 @@ describe("windows winrt gateway history sync", () => {
         return Promise.resolve();
       },
       debug() {},
+      autoStartDelayMs: 0,
     });
 
     coordinator.handleNodeConnected({
@@ -207,6 +209,7 @@ describe("windows winrt gateway history sync", () => {
         states.push(update);
       },
       debug() {},
+      autoStartDelayMs: 0,
     });
 
     coordinator.handleNodeConnected({
@@ -246,5 +249,54 @@ describe("windows winrt gateway history sync", () => {
           "History replay start failed; leaving the session online and deferring replay. The object has been closed.",
       },
     ]);
+  });
+
+  it("delays automatic history replay until after the configured post-connect delay", () => {
+    const commands = [];
+    const scheduled = [];
+    const cleared = [];
+
+    const coordinator = createHistorySyncCoordinator({
+      sendSidecarCommand(type, payload) {
+        commands.push({ type, payload });
+      },
+      sendRequestToDesktop() {
+        return Promise.resolve();
+      },
+      debug() {},
+      autoStartDelayMs: 5_000,
+      scheduleAutoStart(callback, delayMs) {
+        const token = { callback, delayMs };
+        scheduled.push(token);
+        return token;
+      },
+      clearScheduledAutoStart(token) {
+        cleared.push(token);
+      },
+    });
+
+    coordinator.handleNodeConnected({
+      peripheralId: "peripheral:jkl",
+      knownDeviceId: "stack-004",
+      localName: "GymMotion-004",
+    });
+
+    expect(commands).toEqual([]);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].delayMs).toBe(5_000);
+
+    scheduled[0].callback();
+
+    expect(commands).toEqual([
+      {
+        type: "start_history_sync",
+        payload: {
+          connection_id: "peripheral:jkl",
+          after_sequence: 0,
+          max_records: 250,
+        },
+      },
+    ]);
+    expect(cleared).toEqual([]);
   });
 });

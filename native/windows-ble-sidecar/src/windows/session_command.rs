@@ -52,7 +52,9 @@ pub(super) async fn handle_session_command(
                     .writer
                     .send(&Event::Log {
                         level: "warn".to_string(),
-                        message: "Skipping history sync request because the node is no longer connected.".to_string(),
+                        message:
+                            "Skipping history sync request because the node is no longer connected."
+                                .to_string(),
                         details: Some(json!({
                             "connectionId": connection_id,
                             "afterSequence": after_sequence,
@@ -96,7 +98,8 @@ pub(super) async fn handle_session_command(
                     .writer
                     .send(&Event::Log {
                         level: "warn".to_string(),
-                        message: "Skipping history ack because the node is no longer connected.".to_string(),
+                        message: "Skipping history ack because the node is no longer connected."
+                            .to_string(),
                         details: Some(json!({
                             "connectionId": connection_id,
                             "sequence": sequence,

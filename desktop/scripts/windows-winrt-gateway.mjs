@@ -70,6 +70,7 @@ const historySync = createHistorySyncCoordinator({
   onHistorySyncStateChanged(update) {
     runtimeServer.noteHistorySyncState(update);
   },
+  autoStartDelayMs: 5_000,
 });
 
 function setRuntimeIssue(issue) {

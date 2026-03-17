@@ -149,8 +149,12 @@ pub struct HistorySyncCompletePayload {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     ListAdapters,
-    SelectAdapter { adapter_id: String },
-    SetAllowedNodes { nodes: Vec<ApprovedNodeRule> },
+    SelectAdapter {
+        adapter_id: String,
+    },
+    SetAllowedNodes {
+        nodes: Vec<ApprovedNodeRule>,
+    },
     Start,
     Stop,
     Rescan,
@@ -165,9 +169,15 @@ pub enum Command {
         connection_id: String,
         sequence: u64,
     },
-    PairManualCandidate { candidate_id: String },
-    RecoverApprovedNode { rule_id: String },
-    ResumeApprovedNodeReconnect { rule_id: String },
+    PairManualCandidate {
+        candidate_id: String,
+    },
+    RecoverApprovedNode {
+        rule_id: String,
+    },
+    ResumeApprovedNodeReconnect {
+        rule_id: String,
+    },
     Shutdown,
 }
 
