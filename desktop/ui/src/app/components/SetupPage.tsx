@@ -12,10 +12,7 @@ import {
 import { toast } from 'sonner';
 
 import { isOperatorVisibleScan } from '@core/gateway-scan';
-import {
-  buildApprovedNodeRules,
-  resolveApprovedNodeRuleId,
-} from '../../lib/setup-rules';
+import { buildApprovedNodeRules } from '../../lib/setup-rules';
 import { buildPairedDevices, buildSetupVisibleDevices } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
 import { Badge } from './ui/badge';
@@ -41,7 +38,14 @@ function removeFromSet(current: Set<string>, value: string) {
 }
 
 export function SetupPage() {
-  const { setup, snapshot, rescanAdapters, recoverApprovedNode, setAllowedNodes } = useDesktopRuntime();
+  const {
+    setup,
+    snapshot,
+    rescanAdapters,
+    requestSilentReconnect,
+    recoverApprovedNode,
+    setAllowedNodes,
+  } = useDesktopRuntime();
   const discoveredDevices = setup
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
@@ -127,25 +131,12 @@ export function SetupPage() {
     const nextIds = new Set(setup.approvedNodes.map((node) => node.id));
     nextIds.add(deviceId);
     const nextRules = buildApprovedNodeRules(setup, nextIds);
-    const visibleNode =
-      setup.nodes.find((node) => node.id === deviceId) ??
-      setup.approvedNodes.find((node) => node.id === deviceId);
-    const ruleId = visibleNode
-      ? resolveApprovedNodeRuleId(nextRules, {
-          fallbackId: deviceId,
-          peripheralId: visibleNode.peripheralId ?? null,
-          address: visibleNode.address ?? null,
-          localName:
-            "localName" in visibleNode ? visibleNode.localName ?? null : null,
-          knownDeviceId: visibleNode.knownDeviceId ?? null,
-        })
-      : deviceId;
     let pairedSaved = false;
 
     try {
       await setAllowedNodes(nextRules);
       pairedSaved = true;
-      await recoverApprovedNode(ruleId);
+      await requestSilentReconnect();
       setPendingPairIds((current) => removeFromSet(current, deviceId));
       toast.success('Device paired. Connecting...');
     } catch (error) {

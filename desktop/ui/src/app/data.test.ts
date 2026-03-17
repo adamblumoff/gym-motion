@@ -382,7 +382,7 @@ describe("buildBluetoothNodes", () => {
     expect(buildBluetoothNodes(snapshot, approvedNodes)).toEqual([]);
   });
 
-  it("keeps connected devices visible while forget state converges", () => {
+  it("hides connected devices once they no longer match an approved rule", () => {
     const snapshot: DesktopSnapshot = {
       liveStatus: "Gateway live",
       trayHint: "Waiting",
@@ -450,7 +450,7 @@ describe("buildBluetoothNodes", () => {
       activities: [],
     };
 
-    expect(buildBluetoothNodes(snapshot, [])).toHaveLength(1);
+    expect(buildBluetoothNodes(snapshot, [])).toEqual([]);
   });
 });
 

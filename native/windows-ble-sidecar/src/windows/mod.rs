@@ -91,6 +91,7 @@ enum SessionCommand {
     },
     AllowedNodesUpdated {
         nodes: Vec<ApprovedNodeRule>,
+        added_rule_ids: Vec<String>,
     },
     ConnectionHealthy {
         node: DiscoveredNode,
@@ -99,6 +100,17 @@ enum SessionCommand {
         node: DiscoveredNode,
         reason: String,
     },
+}
+
+fn added_allowed_rule_ids(
+    previous_rules: &[ApprovedNodeRule],
+    next_rules: &[ApprovedNodeRule],
+) -> Vec<String> {
+    next_rules
+        .iter()
+        .filter(|rule| !previous_rules.iter().any(|previous| previous.id == rule.id))
+        .map(|rule| rule.id.clone())
+        .collect()
 }
 
 async fn emit_gateway_state(
@@ -552,10 +564,13 @@ impl Sidecar {
                 self.emit_adapters().await?;
             }
             Command::SetAllowedNodes { nodes } => {
+                let previous_nodes = self.allowed_nodes.read().await.clone();
+                let added_rule_ids = added_allowed_rule_ids(&previous_nodes, &nodes);
                 *self.allowed_nodes.write().await = nodes;
                 if let Some(session) = &self.session {
                     let _ = session.commands.send(SessionCommand::AllowedNodesUpdated {
                         nodes: self.allowed_nodes.read().await.clone(),
+                        added_rule_ids,
                     });
                 }
             }
@@ -845,6 +860,7 @@ async fn run_session(
                             &command_sender,
                             &shutdown,
                             &rule_id,
+                            true,
                         )
                         .await?
                         {
@@ -872,7 +888,10 @@ async fn run_session(
                         }).await?;
                         reconnect_scan_burst = 0;
                     }
-                    SessionCommand::AllowedNodesUpdated { nodes: allowed } => {
+                    SessionCommand::AllowedNodesUpdated {
+                        nodes: allowed,
+                        added_rule_ids,
+                    } => {
                         prune_reconnect_states(&mut reconnect_states, &allowed);
                         if manual_recover_rule_id
                             .as_ref()
@@ -896,6 +915,40 @@ async fn run_session(
                                     })),
                                 }).await?;
                                 let _ = peripheral.disconnect().await;
+                            }
+                        }
+                        for rule_id in added_rule_ids {
+                            if connected_nodes
+                                .values()
+                                .any(|node| approved_rule_id_for_node(node, &allowed).as_deref() == Some(rule_id.as_str()))
+                            {
+                                continue;
+                            }
+
+                            if recover_visible_approved_node(
+                                &adapter,
+                                &writer,
+                                &config,
+                                &selected_adapter_id,
+                                &allowed_nodes,
+                                &connected_nodes,
+                                &active_connections,
+                                &known_device_ids,
+                                &mut reconnect_states,
+                                &mut scanning,
+                                &mut current_scan_reason,
+                                manual_scan_deadline,
+                                &last_advertisement_at,
+                                &mut last_scan_progress_at,
+                                &mut startup_burst_deadline,
+                                &command_sender,
+                                &shutdown,
+                                &rule_id,
+                                false,
+                            )
+                            .await?
+                            {
+                                break;
                             }
                         }
                     }
@@ -1868,6 +1921,7 @@ async fn recover_visible_approved_node(
     command_sender: &mpsc::UnboundedSender<SessionCommand>,
     shutdown: &watch::Receiver<bool>,
     rule_id: &str,
+    manual_recovery: bool,
 ) -> Result<bool> {
     let allowed = allowed_nodes.read().await.clone();
     let allow_identity_fallback = allow_approved_identity_fallback(
@@ -1942,7 +1996,7 @@ async fn recover_visible_approved_node(
             rule_id.to_string(),
             next_attempt,
             format!(
-                "Approved node is already visible; starting immediate recovery for {}.",
+                "Approved node is already visible; starting immediate reconnect for {}.",
                 candidate.node.label
             ),
             json!({
@@ -1953,7 +2007,7 @@ async fn recover_visible_approved_node(
                 "runtimeServiceMatched": candidate.classification.runtime_service_matched,
                 "approvedIdentityMatched": candidate.classification.approved_identity_matched,
                 "namePrefixMatched": candidate.classification.name_prefix_matched,
-                "manualRecovery": true,
+                "manualRecovery": manual_recovery,
                 "immediateVisibleMatch": true,
             }),
         )
@@ -3237,6 +3291,31 @@ mod tests {
             reconnect_states.get("node-2").map(|state| state.attempt),
             Some(2)
         );
+    }
+
+    #[test]
+    fn allowed_node_updates_track_new_rule_ids_for_immediate_reconnect_checks() {
+        let previous = vec![ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench A".to_string(),
+            peripheral_id: Some("peripheral-1".to_string()),
+            address: None,
+            local_name: None,
+            known_device_id: None,
+        }];
+        let next = vec![
+            previous[0].clone(),
+            ApprovedNodeRule {
+                id: "node-2".to_string(),
+                label: "Bench B".to_string(),
+                peripheral_id: Some("peripheral-2".to_string()),
+                address: None,
+                local_name: None,
+                known_device_id: None,
+            },
+        ];
+
+        assert_eq!(added_allowed_rule_ids(&previous, &next), vec!["node-2".to_string()]);
     }
 
     #[test]

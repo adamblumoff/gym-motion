@@ -253,6 +253,17 @@ export function createManagedGatewayRuntime(
     emitSetup();
   }
 
+  function pruneSnapshotToApprovedNodes(approvedNodes = readApprovedNodes()) {
+    const nextSnapshot = pruneForgottenDevicesFromSnapshot(snapshot, approvedNodes);
+
+    if (nextSnapshot === snapshot) {
+      return false;
+    }
+
+    snapshot = nextSnapshot;
+    return true;
+  }
+
   async function refreshSetupNodes() {
     if (!child) {
       applySetupNodes([]);
@@ -382,6 +393,7 @@ export function createManagedGatewayRuntime(
         ...snapshot,
         devices: devicesPayload.devices,
       };
+      pruneSnapshotToApprovedNodes();
 
       if (usesWindowsNativeGateway(process.platform)) {
         await refreshAdapters();
@@ -399,6 +411,9 @@ export function createManagedGatewayRuntime(
       }
 
       for (const device of devicesPayload.devices) {
+        if (!snapshot.devices.some((currentDevice) => currentDevice.id === device.id)) {
+          continue;
+        }
         emit({ type: "device-upserted", device });
       }
     } catch (error) {
@@ -559,6 +574,10 @@ export function createManagedGatewayRuntime(
           ...snapshot,
           devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
         };
+        pruneSnapshotToApprovedNodes();
+        if (!snapshot.devices.some((currentDevice) => currentDevice.id === device.id)) {
+          break;
+        }
         emit({
           type: "device-upserted",
           device,
@@ -815,9 +834,7 @@ export function createManagedGatewayRuntime(
     async setAllowedNodes(nodes) {
       const nextNodes = dedupeApprovedNodes(nodes);
       store.setJson(APPROVED_NODES_KEY, nextNodes);
-      const nextSnapshot = pruneForgottenDevicesFromSnapshot(snapshot, nextNodes);
-      if (nextSnapshot !== snapshot) {
-        snapshot = nextSnapshot;
+      if (pruneSnapshotToApprovedNodes(nextNodes)) {
         emit({ type: "snapshot", snapshot });
       }
       await refreshAdapters();
@@ -827,6 +844,7 @@ export function createManagedGatewayRuntime(
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });
+        sendGatewayCommand({ type: "request_silent_reconnect" });
         applySetupNodes(setupState.nodes);
         return setupState;
       }

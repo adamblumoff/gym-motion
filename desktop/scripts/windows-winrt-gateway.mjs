@@ -480,6 +480,7 @@ function attachControlReader() {
           removedCount: removedRules.length,
         });
         syncAllowedNodes();
+        sendCommand("refresh_scan_policy");
         return;
       }
 

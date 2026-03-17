@@ -101,10 +101,6 @@ export function shouldDisplayDashboardDevice(
   device: GatewayRuntimeDeviceSummary,
   approvedNodes?: ApprovedNodeRule[],
 ) {
-  if (device.gatewayConnectionState === "connected") {
-    return true;
-  }
-
   if (approvedNodes === undefined) {
     return true;
   }
