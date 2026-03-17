@@ -14,8 +14,6 @@ const checks = [
       "desktop",
       "shared",
       "--glob",
-      "!desktop/core/**/*.test.ts",
-      "--glob",
       "!release/**",
       "--glob",
       "!dist/**",

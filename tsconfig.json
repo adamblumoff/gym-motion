@@ -27,6 +27,8 @@
     "electron.vite.config.ts"
   ],
   "exclude": [
-    "desktop/**/*.test.ts"
+    "desktop/**/*.test.ts",
+    "desktop/**/*.test-helpers.ts",
+    "shared/**/*.test.ts"
   ]
 }

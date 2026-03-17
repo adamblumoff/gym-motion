@@ -19,7 +19,7 @@
     "device:purge": "bun run ./scripts/purge-device.ts",
     "lint": "eslint desktop --ext .ts,.tsx",
     "test:boundaries": "node ./scripts/check-no-archive-imports.mjs && node ./scripts/check-file-sizes.mjs && node ./scripts/check-no-legacy-desktop-imports.mjs",
-    "test": "bun run test:boundaries && bun test ./desktop/main ./desktop/core ./desktop/ui ./desktop/scripts",
+    "test": "bun run test:boundaries && bun test ./desktop/main ./shared ./desktop/ui ./desktop/scripts",
     "typecheck": "tsc --noEmit",
     "test:windows-desktop": "./scripts/test-windows-desktop.sh"
   },
