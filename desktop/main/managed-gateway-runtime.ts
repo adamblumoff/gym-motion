@@ -48,6 +48,7 @@ import {
   liveStatusFor,
   normalizeGatewayHealth,
 } from "./managed-gateway-runtime/snapshot";
+import { pruneForgottenDevicesFromSnapshot } from "./managed-gateway-runtime/approved-node-prune";
 import {
   dedupeApprovedNodes,
   mergeSetupNodes,
@@ -812,6 +813,11 @@ export function createManagedGatewayRuntime(
     async setAllowedNodes(nodes) {
       const nextNodes = dedupeApprovedNodes(nodes);
       store.setJson(APPROVED_NODES_KEY, nextNodes);
+      const nextSnapshot = pruneForgottenDevicesFromSnapshot(snapshot, nextNodes);
+      if (nextSnapshot !== snapshot) {
+        snapshot = nextSnapshot;
+        emit({ type: "snapshot", snapshot });
+      }
       await refreshAdapters();
 
       if (usesWindowsNativeGateway(process.platform)) {
