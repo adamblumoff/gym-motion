@@ -21,7 +21,7 @@ The current product target is Windows only. The runtime BLE contract should be t
 ## Boundary Rules
 
 - The renderer should not call localhost HTTP routes; it talks to the gateway runtime via the preload intent API and typed events.
-- The Windows gateway child now sends device-log, ingest, and heartbeat persistence messages back to Electron main over dedicated child-process IPC, not localhost HTTP. Unknown-device raw sidecar logs stay console-only.
+- The Windows gateway child now sends ingest, heartbeat, and a narrow set of device-log persistence messages back to Electron main over dedicated child-process IPC, not localhost HTTP. Raw sidecar logs stay console-only, and UI device history is intentionally limited to motion plus connected/disconnected lifecycle events.
 - Native BLE access is owned by the Windows WinRT sidecar. The desktop product runtime no longer includes the older noble/HCI/USB BLE path.
 - The sidecar depends on the patched `btleplug` under [native/windows-ble-sidecar/vendor/btleplug-winrt-patched](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched) as part of the supported Windows transport contract.
 - Approved-node identity matching now lives under `shared/approved-node-runtime-match.ts`; that single resolver order (`knownDeviceId -> peripheralId -> address -> unique localName`) is the canonical source for both renderer selectors and main-process reconcilers.

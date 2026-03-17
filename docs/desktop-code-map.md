@@ -53,6 +53,8 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Device logs or telemetry are reaching the gateway console but not the per-device UI history:
   - start in [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
   - then check [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
+- Raw WinRT sidecar logs are visible in the gateway console but intentionally absent from UI device history:
+  - this is expected; only motion plus connected/disconnected lifecycle events are persisted for the UI
 - WinRT reconnect/handshake behavior is wrong:
   - start in [native/windows-ble-sidecar/src/windows/session_transport.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session_transport.rs)
   - then check [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md)

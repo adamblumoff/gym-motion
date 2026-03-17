@@ -1,34 +1,5 @@
-import { shouldWriteDiscoveryLog } from "./windows-winrt-gateway-logging.mjs";
 import { sendToDesktop as defaultSendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
 import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.mjs";
-
-function toMetadataRecord(input) {
-  if (!input || typeof input !== "object") {
-    return undefined;
-  }
-
-  const metadata = {};
-
-  for (const [key, value] of Object.entries(input)) {
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      value === null
-    ) {
-      metadata[key] = value;
-      continue;
-    }
-
-    try {
-      metadata[key] = JSON.stringify(value);
-    } catch {
-      metadata[key] = String(value);
-    }
-  }
-
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
 
 function trimMessage(message) {
   const normalized = typeof message === "string" ? message.trim() : "";
@@ -122,9 +93,9 @@ export function createRuntimeBridge({
         level: entry.level,
         code: entry.code,
         message: entry.message,
-        bootId: devicePayload?.bootId ?? null,
-        firmwareVersion: devicePayload?.firmwareVersion ?? null,
-        hardwareId: devicePayload?.hardwareId ?? null,
+        bootId: devicePayload?.bootId ?? undefined,
+        firmwareVersion: devicePayload?.firmwareVersion ?? undefined,
+        hardwareId: devicePayload?.hardwareId ?? undefined,
         metadata: entry.metadata,
       });
     }
@@ -154,36 +125,7 @@ export function createRuntimeBridge({
 
     flushNodeLogs(payload.deviceId, peripheralInfo, payload);
 
-    const telemetryResult = await runtimeServer.noteTelemetry(payload, peripheralInfo);
-    const connectionStateBeforeTelemetry =
-      telemetryResult?.before?.gatewayConnectionState ?? null;
-
-    if (
-      connectionStateBeforeTelemetry &&
-      connectionStateBeforeTelemetry !== "connected" &&
-      context.lastTelemetryConnectionState !== connectionStateBeforeTelemetry
-    ) {
-      writeDeviceLog({
-        deviceId: payload.deviceId,
-        level: "warn",
-        code: "node.telemetry_without_transport",
-        message: `Telemetry arrived while transport state was ${connectionStateBeforeTelemetry}.`,
-        bootId: payload.bootId ?? null,
-        firmwareVersion: payload.firmwareVersion ?? null,
-        hardwareId: payload.hardwareId ?? null,
-        metadata: {
-          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-          address: node.address ?? null,
-          transportStateBefore: connectionStateBeforeTelemetry,
-          transportStateAfter: telemetryResult?.after?.gatewayConnectionState ?? null,
-          telemetryFreshnessAfter: telemetryResult?.after?.telemetryFreshness ?? null,
-          lastTelemetryAt: telemetryResult?.after?.lastTelemetryAt ?? null,
-          lastConnectedAt: telemetryResult?.after?.lastConnectedAt ?? null,
-          lastDisconnectedAt: telemetryResult?.after?.lastDisconnectedAt ?? null,
-        },
-      });
-    }
-    context.lastTelemetryConnectionState = connectionStateBeforeTelemetry;
+    await runtimeServer.noteTelemetry(payload, peripheralInfo);
 
     const stateChanged = context.lastState !== payload.state;
 
@@ -234,36 +176,6 @@ export function createRuntimeBridge({
     });
   }
 
-  function handleSidecarLog(event) {
-    const details =
-      event?.details && typeof event.details === "object" && !Array.isArray(event.details)
-        ? event.details
-        : {};
-    const knownDeviceId = runtimeServer.resolveKnownDeviceId({
-      deviceId: details.deviceId ?? details.device_id ?? null,
-      knownDeviceId: details.knownDeviceId ?? details.known_device_id ?? null,
-      peripheralId: details.peripheralId ?? details.peripheral_id ?? null,
-      address: details.address ?? null,
-      localName: details.localName ?? details.local_name ?? null,
-    });
-
-    if (!knownDeviceId) {
-      return;
-    }
-
-    writeDeviceLog({
-      deviceId: knownDeviceId,
-      level: event?.level ?? "info",
-      code: "node.sidecar_log",
-      message: event?.message ?? "Windows BLE sidecar log",
-      bootId: typeof details.bootId === "string" ? details.bootId : null,
-      firmwareVersion:
-        typeof details.firmwareVersion === "string" ? details.firmwareVersion : null,
-      hardwareId: typeof details.hardwareId === "string" ? details.hardwareId : null,
-      metadata: toMetadataRecord(details),
-    });
-  }
-
   function handleNodeDiscovered(node, scanReason = null) {
     const peripheralInfo = describeNode(node);
 
@@ -296,21 +208,6 @@ export function createRuntimeBridge({
       reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
       reconnectAwaitingDecision: node.reconnect?.awaiting_user_decision ?? null,
     });
-
-    if (!shouldWriteDiscoveryLog(scanReason)) {
-      return;
-    }
-
-    queueNodeLog(peripheralInfo, {
-      code: "node.discovered",
-      message: `Gateway discovered ${node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node"}.`,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        advertisedName: node.localName ?? node.local_name ?? null,
-        rssi: node.lastRssi ?? node.last_rssi ?? node.rssi ?? null,
-      },
-    });
   }
 
   function handleNodeConnectionState(event) {
@@ -322,29 +219,12 @@ export function createRuntimeBridge({
       event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
     if (connectionState === "connecting") {
-      const transition = runtimeServer.noteConnecting({
+      runtimeServer.noteConnecting({
         ...peripheralInfo,
         reconnectAttempt: event.reconnect?.attempt ?? null,
         reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
         reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-      });
-      queueNodeLog(peripheralInfo, {
-        code: "node.connecting",
-        message: `Gateway is connecting to ${label}.`,
-        metadata: {
-          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-          address: node.address ?? null,
-          reconnectAttempt: event.reconnect?.attempt ?? null,
-          reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-          reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-          reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-          transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-          transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
-          lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
-          lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
-          lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
-        },
       });
       return;
     }
@@ -383,25 +263,6 @@ export function createRuntimeBridge({
       reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
     });
     if (!transition?.applied) {
-      queueNodeLog(peripheralInfo, {
-        level: "warn",
-        code: "node.disconnect_ignored",
-        message: `Gateway ignored a transient disconnect signal for ${label}.`,
-        metadata: {
-          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-          address: node.address ?? null,
-          reason: event.reason ?? "ble-disconnected",
-          reconnectAttempt: event.reconnect?.attempt ?? null,
-          reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-          reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-          reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-          transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-          transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
-          lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
-          lastConnectedAt: transition?.before?.lastConnectedAt ?? null,
-          lastDisconnectedAt: transition?.before?.lastDisconnectedAt ?? null,
-        },
-      });
       return;
     }
 
@@ -434,7 +295,6 @@ export function createRuntimeBridge({
 
   return {
     forwardTelemetry,
-    handleSidecarLog,
     handleNodeDiscovered,
     handleNodeConnectionState,
   };

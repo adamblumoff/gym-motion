@@ -151,7 +151,36 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
-  it("routes known sidecar logs to per-device persistence and leaves unknown logs console-only", () => {
+  it("keeps raw sidecar logs console-only", () => {
+    const messages = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop(message) {
+        messages.push(message);
+        return true;
+      },
+    });
+
+    expect(bridge).not.toHaveProperty("handleSidecarLog");
+    expect(messages).toEqual([]);
+  });
+
+  it("only persists connected and disconnected lifecycle logs", () => {
     const messages = [];
 
     const bridge = createRuntimeBridge({
@@ -172,6 +201,37 @@ describe("windows winrt gateway runtime bridge", () => {
 
           return null;
         },
+        noteDiscovery() {},
+        upsertManualScanCandidate() {},
+        noteConnecting() {
+          return {
+            before: { gatewayConnectionState: "disconnected" },
+            after: { gatewayConnectionState: "connecting" },
+          };
+        },
+        noteConnected() {
+          return {
+            before: { gatewayConnectionState: "connecting" },
+            after: {
+              gatewayConnectionState: "connected",
+              lastTelemetryAt: null,
+              lastConnectedAt: null,
+              lastDisconnectedAt: null,
+            },
+          };
+        },
+        noteDisconnected() {
+          return {
+            applied: true,
+            before: { gatewayConnectionState: "connected", lastTelemetryAt: null },
+            after: {
+              gatewayConnectionState: "disconnected",
+              lastTelemetryAt: null,
+              lastConnectedAt: null,
+              lastDisconnectedAt: null,
+            },
+          };
+        },
       },
       debug() {},
       sendToDesktop(message) {
@@ -180,24 +240,34 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     });
 
-    bridge.handleSidecarLog({
-      level: "info",
-      message: "Reconnect completed for Leg Press.",
-      details: {
+    bridge.handleNodeDiscovered({
+      id: "candidate-1",
+      peripheralId: "AA:BB",
+      localName: "GymMotion-aabb",
+    });
+
+    bridge.handleNodeConnectionState({
+      gatewayConnectionState: "connecting",
+      node: {
         peripheralId: "AA:BB",
-        reconnect: {
-          attempt: 1,
-          attempt_limit: 20,
-        },
-        usedTelemetryFallback: false,
+        localName: "GymMotion-aabb",
       },
     });
 
-    bridge.handleSidecarLog({
-      level: "warn",
-      message: "Adapter scan paused while reconnect is active.",
-      details: {
-        adapterId: "winrt:default",
+    bridge.handleNodeConnectionState({
+      gatewayConnectionState: "connected",
+      node: {
+        peripheralId: "AA:BB",
+        localName: "GymMotion-aabb",
+      },
+    });
+
+    bridge.handleNodeConnectionState({
+      gatewayConnectionState: "disconnected",
+      reason: "ble-disconnected",
+      node: {
+        peripheralId: "AA:BB",
+        localName: "GymMotion-aabb",
       },
     });
 
@@ -208,18 +278,48 @@ describe("windows winrt gateway runtime bridge", () => {
         payload: {
           deviceId: "esp32-known",
           level: "info",
-          code: "node.sidecar_log",
-          message: "Reconnect completed for Leg Press.",
-          bootId: null,
-          firmwareVersion: null,
-          hardwareId: null,
+          code: "node.connected",
+          message: "Gateway connected to GymMotion-aabb.",
+          bootId: undefined,
+          firmwareVersion: undefined,
+          hardwareId: undefined,
           metadata: {
             peripheralId: "AA:BB",
-            reconnect: JSON.stringify({
-              attempt: 1,
-              attempt_limit: 20,
-            }),
-            usedTelemetryFallback: false,
+            address: null,
+            reconnectAttempt: null,
+            reconnectAttemptLimit: null,
+            transportStateBefore: "connecting",
+            transportStateAfter: "connected",
+            lastTelemetryAt: null,
+            lastConnectedAt: null,
+            lastDisconnectedAt: null,
+          },
+        },
+      },
+      {
+        type: "persist-device-log",
+        deviceId: "esp32-known",
+        payload: {
+          deviceId: "esp32-known",
+          level: "warn",
+          code: "node.disconnected",
+          message: "Gateway lost GymMotion-aabb.",
+          bootId: undefined,
+          firmwareVersion: undefined,
+          hardwareId: undefined,
+          metadata: {
+            peripheralId: "AA:BB",
+            address: null,
+            reason: "ble-disconnected",
+            reconnectAttempt: null,
+            reconnectAttemptLimit: null,
+            reconnectRetryExhausted: null,
+            reconnectAwaitingDecision: null,
+            transportStateBefore: "connected",
+            transportStateAfter: "disconnected",
+            lastTelemetryAt: null,
+            lastConnectedAt: null,
+            lastDisconnectedAt: null,
           },
         },
       },
