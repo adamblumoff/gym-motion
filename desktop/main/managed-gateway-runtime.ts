@@ -48,6 +48,7 @@ import {
   liveStatusFor,
   normalizeGatewayHealth,
 } from "./managed-gateway-runtime/snapshot";
+import { windowsRescanMode } from "./managed-gateway-runtime/scan-mode";
 import { pruneForgottenDevicesFromSnapshot } from "./managed-gateway-runtime/approved-node-prune";
 import {
   dedupeApprovedNodes,
@@ -755,7 +756,8 @@ export function createManagedGatewayRuntime(
     },
     async rescanAdapters() {
       if (usesWindowsNativeGateway(process.platform)) {
-        windowsScanRequested = true;
+        windowsScanRequested =
+          windowsRescanMode(readApprovedNodes().length) === "manual";
         await restartRuntime();
         return setupState;
       }
