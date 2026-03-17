@@ -42,6 +42,7 @@ use super::{
         pending_history_sync_matches_ready, replace_active_lease_task,
         report_history_sync_ready_if_needed, spawn_active_lease_task, HistorySyncAttemptKind,
         MonitorSessionConfig, PendingHistorySyncStart, PendingHistorySyncTimeoutOutcome,
+        should_wait_for_history_sync_confirmation,
     },
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::emit_handshake_step,
@@ -468,7 +469,7 @@ pub(super) async fn monitor_active_session(
                         {
                             let error_message = format!("{:#}", error);
 
-                            if is_closed_handle_error_message(&error_message) {
+                            if should_wait_for_history_sync_confirmation(&error_message) {
                                 pending_history_sync_start = Some(PendingHistorySyncStart {
                                     request_id,
                                     after_sequence,
@@ -651,7 +652,7 @@ pub(super) async fn monitor_active_session(
                             {
                                 let error_message = format!("{:#}", error);
 
-                                if is_closed_handle_error_message(&error_message) {
+                                if should_wait_for_history_sync_confirmation(&error_message) {
                                     pending_history_sync_start = Some(PendingHistorySyncStart {
                                         request_id,
                                         after_sequence: next_after_sequence,

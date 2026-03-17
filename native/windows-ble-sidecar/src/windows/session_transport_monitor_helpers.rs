@@ -326,3 +326,34 @@ pub(super) async fn log_ignored_history_sync_request(
 
     Ok(())
 }
+
+pub(super) fn should_wait_for_history_sync_confirmation(error_message: &str) -> bool {
+    error_message.contains("chunked control write failed")
+        || error_message.contains("Windows UWP threw error on write")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_wait_for_history_sync_confirmation;
+
+    #[test]
+    fn waits_for_confirmation_on_closed_handle_start_errors() {
+        assert!(should_wait_for_history_sync_confirmation(
+            r#"history-sync-begin failed for GymMotion-f4e9d4: chunked control write failed without retry: Error { code: HRESULT(0x80000013), message: "The object has been closed." }"#
+        ));
+    }
+
+    #[test]
+    fn waits_for_confirmation_on_unreachable_start_errors() {
+        assert!(should_wait_for_history_sync_confirmation(
+            "history-sync-begin failed for GymMotion-f4e9d4: chunked control write failed without retry: Windows UWP threw error on write: status=Unreachable"
+        ));
+    }
+
+    #[test]
+    fn does_not_wait_for_unrelated_errors() {
+        assert!(!should_wait_for_history_sync_confirmation(
+            "history-sync-begin failed for GymMotion-f4e9d4: malformed payload"
+        ));
+    }
+}
