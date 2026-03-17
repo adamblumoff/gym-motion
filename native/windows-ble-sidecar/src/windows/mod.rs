@@ -14,6 +14,7 @@ mod session_transport;
 mod session_transport_monitor;
 mod session_transport_monitor_reporting;
 mod session_transport_prepare_io;
+mod session_transport_recovery;
 mod session_transport_setup;
 mod session_types;
 mod session_util;

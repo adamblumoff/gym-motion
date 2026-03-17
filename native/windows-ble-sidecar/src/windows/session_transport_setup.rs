@@ -1,13 +1,11 @@
-use std::{
-    pin::Pin,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use btleplug::{
-    api::{Characteristic, Peripheral as _, ValueNotification},
+    api::{Characteristic, Peripheral as _},
     platform::Peripheral,
 };
+use serde_json::json;
 
 use crate::protocol::{DiscoveredNode, Event, ReconnectStatus};
 
@@ -17,7 +15,7 @@ use super::{
         prepare_runtime_session_io, NotificationStream, PrepareSessionIoConfig,
     },
     session_transport_recovery::emit_handshake_step,
-    session_util::{emit_verbose_log, format_error_chain, is_retryable_pre_session_setup_error},
+    session_util::{format_error_chain, is_retryable_pre_session_setup_error},
     writer::EventWriter,
 };
 
