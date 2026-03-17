@@ -10,6 +10,7 @@ export {
 } from "./motion";
 
 export {
+  deleteDeviceMovementHistory,
   checkForFirmwareUpdate,
   createOrUpdateDeviceRegistration,
   getDeviceSyncState,
@@ -17,6 +18,7 @@ export {
   listDeviceLogs,
   listDevices,
   listRecentEvents,
+  getDeviceMovementAnalytics,
   purgeDeviceData,
   recordBackfillBatch,
   recordDeviceLog,

@@ -41,6 +41,15 @@ const desktopApi: DesktopApi = {
   async setAllowedNodes(nodes: ApprovedNodeRule[]) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);
   },
+  async getDeviceAnalytics(deviceId, range) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, deviceId, range);
+  },
+  async refreshDeviceAnalytics(deviceId, range) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics, deviceId, range);
+  },
+  async deleteDeviceAnalyticsHistory(deviceId) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory, deviceId);
+  },
   subscribeRuntime(listener) {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       listener(payload as Parameters<typeof listener>[0]);

@@ -2,10 +2,12 @@ import type {
   ApprovedNodeRule,
   DesktopSnapshot,
   DesktopSetupState,
+  DeviceMovementAnalyticsResult,
   DeviceActivitySummary,
   DeviceLogSummary,
   GatewayRuntimeDeviceSummary,
   GatewayStatusSummary,
+  MovementAnalyticsRange,
   MotionEventSummary,
   ResolvedTheme,
   ThemePreference,
@@ -23,6 +25,9 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   resumeReconnectForNode: "runtime:resume-reconnect-for-node",
   resumeApprovedNodeReconnect: "runtime:resume-approved-node-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
+  getDeviceAnalytics: "runtime:get-device-analytics",
+  refreshDeviceAnalytics: "runtime:refresh-device-analytics",
+  deleteDeviceAnalyticsHistory: "runtime:delete-device-analytics-history",
   updated: "runtime:updated",
 } as const;
 
@@ -82,6 +87,15 @@ export type DesktopApi = {
   resumeReconnectForNode: (nodeId: string) => Promise<void>;
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
+  getDeviceAnalytics: (
+    deviceId: string,
+    range: MovementAnalyticsRange,
+  ) => Promise<DeviceMovementAnalyticsResult>;
+  refreshDeviceAnalytics: (
+    deviceId: string,
+    range: MovementAnalyticsRange,
+  ) => Promise<DeviceMovementAnalyticsResult>;
+  deleteDeviceAnalyticsHistory: (deviceId: string) => Promise<{ ok: true }>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;
   setThemePreference: (preference: ThemePreference) => Promise<ThemeState>;

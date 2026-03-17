@@ -39,6 +39,7 @@ import { createOperatorIntents } from "./managed-gateway-runtime/operator-intent
 import { createRuntimeSync } from "./managed-gateway-runtime/runtime-sync";
 import { createDataEventHandler } from "./managed-gateway-runtime/data-events";
 import { createDataIngestController } from "./managed-gateway-runtime/data-ingest";
+import { createAnalyticsController } from "./managed-gateway-runtime/analytics-controller";
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
@@ -266,6 +267,8 @@ export function createManagedGatewayRuntime(
     await runtimeBridge.startChild();
   }
 
+  const analyticsController = createAnalyticsController(store);
+
   const runtimeSync = createRuntimeSync({
     getChild: () => child,
     getRuntimePort: () => runtimePort,
@@ -316,6 +319,14 @@ export function createManagedGatewayRuntime(
   }
 
   apiServer.onEvent((event) => {
+    if (event.type === "motion-update") {
+      analyticsController.invalidateDeviceAnalytics(event.payload.device.id);
+    }
+
+    if (event.type === "backfill-recorded") {
+      analyticsController.invalidateDeviceAnalytics(event.deviceId);
+    }
+
     applyDataEvent(event);
   });
 
@@ -464,6 +475,15 @@ export function createManagedGatewayRuntime(
     resumeApprovedNodeReconnect,
     async setAllowedNodes(nodes) {
       return runtimeIntents.setAllowedNodes(nodes);
+    },
+    getDeviceAnalytics(deviceId, range) {
+      return analyticsController.getDeviceAnalytics(deviceId, range);
+    },
+    refreshDeviceAnalytics(deviceId, range) {
+      return analyticsController.refreshDeviceAnalytics(deviceId, range);
+    },
+    deleteDeviceAnalyticsHistory(deviceId) {
+      return analyticsController.deleteDeviceAnalyticsHistory(deviceId);
     },
     onEvent(listener) {
       listeners.add(listener);

@@ -52,6 +52,15 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, (_event, nodes) =>
     runtime.setAllowedNodes(nodes),
   );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, (_event, deviceId, range) =>
+    runtime.getDeviceAnalytics(deviceId, range),
+  );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics, (_event, deviceId, range) =>
+    runtime.refreshDeviceAnalytics(deviceId, range),
+  );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory, (_event, deviceId) =>
+    runtime.deleteDeviceAnalyticsHistory(deviceId),
+  );
 
   void runtime.start().catch((error) => {
     console.error("[runtime] failed to start managed gateway runtime", error);
@@ -72,6 +81,9 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeReconnectForNode);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory);
     },
   };
 }

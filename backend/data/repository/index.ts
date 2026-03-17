@@ -22,3 +22,8 @@ export {
   checkForFirmwareUpdate,
   recordFirmwareReport,
 } from "./firmware";
+
+export {
+  deleteDeviceMovementHistory,
+  getDeviceMovementAnalytics,
+} from "./movement-analytics";

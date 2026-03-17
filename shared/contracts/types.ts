@@ -32,6 +32,7 @@ export type TelemetryFreshness = z.infer<typeof telemetryFreshnessSchema>;
 export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>;
+export type MovementAnalyticsRange = "24h" | "7d";
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
 export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
@@ -257,6 +258,34 @@ export type GatewayStatusStreamPayload = GatewayHealthResponse;
 
 export type DeviceActivityResponse = {
   activities: DeviceActivitySummary[];
+};
+
+export type MovementAnalyticsBucket = {
+  bucketStartAt: string;
+  bucketEndAt: string;
+  label: string;
+  movementCount: number;
+  movementDurationMs: number;
+};
+
+export type DeviceMovementAnalytics = {
+  deviceId: string;
+  range: MovementAnalyticsRange;
+  rangeStartAt: string;
+  rangeEndAt: string;
+  timezone: string;
+  bucketSizeMs: number;
+  buckets: MovementAnalyticsBucket[];
+  lastCanonicalEventAt: string | null;
+  lastComputedAt: string;
+  hasCanonicalHistory: boolean;
+  hasOlderHistory: boolean;
+  compactionNotice: string | null;
+};
+
+export type DeviceMovementAnalyticsResult = {
+  analytics: DeviceMovementAnalytics | null;
+  fromCache: boolean;
 };
 
 export type DeviceSyncStateSummary = {
