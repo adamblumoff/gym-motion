@@ -10,6 +10,7 @@ import type {
 } from "@core/contracts";
 
 import { resolveGatewayScriptPath, resolveWindowsSidecarPath } from "../gateway-runtime-target";
+import { buildGatewayChildEnv } from "./gateway-child-env";
 import { EMPTY_GATEWAY } from "./snapshot";
 import { fetchJson } from "./common";
 
@@ -29,7 +30,7 @@ type RuntimeBridgeDeps = {
     runtimeState: "starting" | "running" | "degraded" | "restarting",
     issue: string | null,
   ) => void;
-  apiBaseUrl: string;
+  getApiBaseUrl: () => string;
 };
 
 export type RuntimeBridge = {
@@ -96,13 +97,12 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
 
     const runtimePort = 4010 + Math.floor(Math.random() * 2000);
     deps.setRuntimePort(runtimePort);
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      API_URL: deps.apiBaseUrl,
-      GATEWAY_RUNTIME_HOST: "127.0.0.1",
-      GATEWAY_RUNTIME_PORT: String(runtimePort),
-      GATEWAY_APPROVED_NODE_RULES: JSON.stringify(deps.readApprovedNodes()),
-    };
+    const env: Record<string, string | undefined> = buildGatewayChildEnv({
+      processEnv: process.env,
+      getApiBaseUrl: deps.getApiBaseUrl,
+      runtimePort,
+      approvedNodes: deps.readApprovedNodes(),
+    });
 
     env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
     env.GATEWAY_START_SCAN_ON_BOOT = deps.getWindowsScanRequested() ? "1" : "0";

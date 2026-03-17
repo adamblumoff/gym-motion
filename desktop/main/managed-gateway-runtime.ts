@@ -343,7 +343,7 @@ export function createManagedGatewayRuntime(
       }
     },
     updateGatewayStatus,
-    apiBaseUrl: apiServer.apiBaseUrl,
+    getApiBaseUrl: () => apiServer.apiBaseUrl,
   });
 
   const runtimeLifecycle = createRuntimeLifecycle({
