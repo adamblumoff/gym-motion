@@ -11,6 +11,7 @@ import {
 export function createRuntimeBridge({ config, runtimeServer, debug }) {
   const deviceContexts = new Map();
   const pendingNodeLogs = new Map();
+  let telemetryForwardChain = Promise.resolve();
 
   async function postJson(targetPath, body) {
     const response = await fetch(`${config.apiBaseUrl}${targetPath}`, {
@@ -102,7 +103,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
     }
   }
 
-  async function forwardTelemetry(payload, node = {}) {
+  async function forwardTelemetryNow(payload, node = {}) {
     let context = deviceContexts.get(payload.deviceId);
 
     if (!context) {
@@ -187,6 +188,15 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
       hardwareId: payload.hardwareId,
     });
     context.lastHeartbeatForwardedAt = Date.now();
+  }
+
+  function forwardTelemetry(payload, node = {}) {
+    const nextForward = telemetryForwardChain.then(
+      () => forwardTelemetryNow(payload, node),
+      () => forwardTelemetryNow(payload, node),
+    );
+    telemetryForwardChain = nextForward.catch(() => {});
+    return nextForward;
   }
 
   function handleNodeDiscovered(node, scanReason = null) {
