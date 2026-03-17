@@ -111,12 +111,11 @@ void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
   }
 
   advertising->stop();
-  advertising->reset();
   advertising->setScanResponse(true);
 
   BLEAdvertisementData advertisementData;
   advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
-  advertisementData.setName(createBleDeviceName());
+  advertisementData.setName(createBleDeviceName().c_str());
   advertisementData.setCompleteServices(BLEUUID(PROVISIONING_SERVICE_UUID));
   advertising->setAdvertisementData(advertisementData);
 
@@ -691,8 +690,8 @@ class RuntimeTelemetryDescriptorCallbacks : public BLEDescriptorCallbacks {
 
 class RuntimeOtaDataCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
-    const String stringValue = characteristic->getValue();
-    const std::string value(stringValue.c_str(), stringValue.length());
+    const auto rawValue = characteristic->getValue();
+    const std::string value(rawValue.c_str(), rawValue.length());
     handleOtaDataWrite(value);
   }
 };
