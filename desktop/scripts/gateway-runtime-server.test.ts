@@ -660,4 +660,54 @@ describe("gateway runtime server", () => {
     const persisted = JSON.parse(await fs.readFile(knownNodesPath, "utf8"));
     expect(persisted.nodes).toEqual([]);
   });
+
+  it("does not let late transport events resurrect a forgotten device until it is approved again", async () => {
+    const runtimePort = 54110 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    runtimeServer.forgetDevice({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+    });
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+
+    let response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    let payload = await response.json();
+    expect(payload.devices).toEqual([]);
+
+    runtimeServer.restoreApprovedDevice({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+    });
+
+    response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
+
+    expect(device?.gatewayConnectionState).toBe("connected");
+  });
 });

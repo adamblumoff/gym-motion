@@ -454,6 +454,16 @@ function attachControlReader() {
         const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
         const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
 
+        for (const rule of nextApprovedNodeRules) {
+          runtimeServer.restoreApprovedDevice({
+            deviceId: rule.knownDeviceId ?? null,
+            knownDeviceId: rule.knownDeviceId ?? null,
+            peripheralId: rule.peripheralId ?? null,
+            address: rule.address ?? null,
+            localName: rule.localName ?? null,
+          });
+        }
+
         for (const rule of removedRules) {
           runtimeServer.forgetDevice({
             deviceId: rule.knownDeviceId ?? null,

@@ -466,8 +466,6 @@ export function createGatewayRuntimeServer({
       return;
     }
 
-    suppressedDeviceIds.delete(deviceId);
-
     const previous = runtimeByDeviceId.get(deviceId) ?? {
       gatewayConnectionState: "discovered",
       peripheralId: patch.peripheralId ?? null,
@@ -1204,6 +1202,31 @@ export function createGatewayRuntimeServer({
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
       return inspectNodeConnection({ deviceId: resolvedDeviceId });
+    },
+
+    restoreApprovedDevice({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      localName,
+      address,
+    }) {
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+
+      if (!resolvedDeviceId) {
+        return null;
+      }
+
+      suppressedDeviceIds.delete(resolvedDeviceId);
+      touchGatewayState();
+      broadcastGatewayStatus();
+      return resolvedDeviceId;
     },
 
     forgetDevice({
