@@ -443,7 +443,7 @@ function attachControlReader() {
       const command = JSON.parse(trimmed);
 
       if (command.type === "set_allowed_nodes" && Array.isArray(command.nodes)) {
-        approvedNodeRules = command.nodes.map((node) => ({
+        const nextApprovedNodeRules = command.nodes.map((node) => ({
           id: node.id,
           label: node.label,
           peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
@@ -451,8 +451,23 @@ function attachControlReader() {
           localName: node.localName ?? node.local_name ?? null,
           knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
         }));
+        const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
+        const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
+
+        for (const rule of removedRules) {
+          runtimeServer.forgetDevice({
+            deviceId: rule.knownDeviceId ?? null,
+            knownDeviceId: rule.knownDeviceId ?? null,
+            peripheralId: rule.peripheralId ?? null,
+            address: rule.address ?? null,
+            localName: rule.localName ?? null,
+          });
+        }
+
+        approvedNodeRules = nextApprovedNodeRules;
         log("Approved-node rules updated from desktop runtime.", {
           approvedCount: approvedNodeRules.length,
+          removedCount: removedRules.length,
         });
         syncAllowedNodes();
         return;

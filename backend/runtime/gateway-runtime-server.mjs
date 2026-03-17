@@ -114,6 +114,7 @@ export function createGatewayRuntimeServer({
   const metadataByDeviceId = new Map();
   const runtimeByDeviceId = new Map();
   const knownNodesByDeviceId = new Map();
+  const suppressedDeviceIds = new Set();
   const deviceIdByPeripheralId = new Map();
   const discoveriesById = new Map();
   const streamClients = new Set();
@@ -465,6 +466,8 @@ export function createGatewayRuntimeServer({
       return;
     }
 
+    suppressedDeviceIds.delete(deviceId);
+
     const previous = runtimeByDeviceId.get(deviceId) ?? {
       gatewayConnectionState: "discovered",
       peripheralId: patch.peripheralId ?? null,
@@ -615,6 +618,24 @@ export function createGatewayRuntimeServer({
     return next;
   }
 
+  function removeDiscoveryEntries({
+    knownDeviceId = null,
+    peripheralId = null,
+    address = null,
+    localName = null,
+  }) {
+    for (const [id, discovery] of discoveriesById.entries()) {
+      if (
+        (knownDeviceId && discovery.knownDeviceId === knownDeviceId) ||
+        (peripheralId && discovery.peripheralId === peripheralId) ||
+        (address && normalizeBleAddress(discovery.address) === normalizeBleAddress(address)) ||
+        (localName && discovery.localName === localName)
+      ) {
+        discoveriesById.delete(id);
+      }
+    }
+  }
+
   async function getDevicesPayload() {
     await refreshMetadata();
 
@@ -628,7 +649,11 @@ export function createGatewayRuntimeServer({
       ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
       gateway: gatewayState,
       error: runtimeIssue ?? undefined,
-      devices: sortDevices(Array.from(deviceIds, mergeDevice)),
+      devices: sortDevices(
+        Array.from(deviceIds)
+          .filter((deviceId) => !suppressedDeviceIds.has(deviceId))
+          .map((deviceId) => mergeDevice(deviceId)),
+      ),
     };
   }
 
@@ -1179,6 +1204,45 @@ export function createGatewayRuntimeServer({
       emitDevice(resolvedDeviceId);
       broadcastGatewayStatus();
       return inspectNodeConnection({ deviceId: resolvedDeviceId });
+    },
+
+    forgetDevice({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      localName,
+      address,
+    }) {
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+
+      if (resolvedDeviceId) {
+        suppressedDeviceIds.add(resolvedDeviceId);
+        runtimeByDeviceId.delete(resolvedDeviceId);
+        knownNodesByDeviceId.delete(resolvedDeviceId);
+      }
+
+      if (peripheralId) {
+        deviceIdByPeripheralId.delete(peripheralId);
+      }
+
+      removeDiscoveryEntries({
+        knownDeviceId: resolvedDeviceId ?? knownDeviceId,
+        peripheralId,
+        address,
+        localName,
+      });
+
+      scheduleKnownNodesPersist();
+      touchGatewayState();
+      broadcastGatewayStatus();
+
+      return resolvedDeviceId;
     },
 
     noteOtaStatus(deviceId, patch) {
