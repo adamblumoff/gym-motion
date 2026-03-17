@@ -26,18 +26,19 @@ use super::{
     config::Config,
     handshake::{
         new_control_write_lock, send_app_session_bootstrap_locked, send_app_session_lease_locked,
-        write_chunked_json_command_locked, ControlWriteLock,
+        write_chunked_json_command_locked,
     },
     session_lease::{is_closed_handle_error_message, spawn_lease_task},
+    session_transport_history::{
+        force_reconnect_after_recovery_failure, recover_control_path_with_retry, send_history_ack,
+        send_history_sync_begin,
+    },
     session_transport_monitor_reporting::report_reconnect_completed,
-    session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
+    session_transport_recovery::emit_handshake_step,
     session_transport_setup::PreparedSession,
     session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
 };
-
-const ACTIVE_SESSION_RECOVERY_ATTEMPTS: u32 = 2;
-const ACTIVE_SESSION_RECOVERY_RETRY_DELAY_MS: u64 = 250;
 
 #[derive(Clone, Copy)]
 pub(super) struct MonitorSessionConfig {
@@ -62,96 +63,6 @@ async fn enrich_node_with_device_id(
     let mut enriched = node.clone();
     enriched.known_device_id = Some(device_id.to_string());
     enriched
-}
-
-async fn send_history_sync_begin(
-    control_write_lock: &ControlWriteLock,
-    peripheral: &btleplug::platform::Peripheral,
-    control_characteristic: &btleplug::api::Characteristic,
-    node: &DiscoveredNode,
-    after_sequence: u64,
-    max_records: usize,
-) -> Result<()> {
-    let payload = json!({
-        "type": "history-sync-begin",
-        "afterSequence": after_sequence,
-        "maxRecords": max_records,
-    })
-    .to_string();
-
-    write_chunked_json_command_locked(
-        control_write_lock,
-        peripheral,
-        control_characteristic,
-        &payload,
-    )
-    .await
-    .with_context(|| format!("history-sync-begin failed for {}", node.label))
-}
-
-async fn send_history_ack(
-    control_write_lock: &ControlWriteLock,
-    peripheral: &btleplug::platform::Peripheral,
-    control_characteristic: &btleplug::api::Characteristic,
-    node: &DiscoveredNode,
-    sequence: u64,
-) -> Result<()> {
-    let payload = json!({
-        "type": "history-ack",
-        "sequence": sequence,
-    })
-    .to_string();
-
-    write_chunked_json_command_locked(
-        control_write_lock,
-        peripheral,
-        control_characteristic,
-        &payload,
-    )
-    .await
-    .with_context(|| format!("history-ack failed for {}", node.label))
-}
-
-async fn recover_control_path_with_retry(
-    control_write_lock: &ControlWriteLock,
-    peripheral: &btleplug::platform::Peripheral,
-    writer: &EventWriter,
-    node: &DiscoveredNode,
-    reconnect: &Option<ReconnectStatus>,
-    control_uuid: uuid::Uuid,
-    app_session_id: &str,
-    app_session_nonce: &str,
-) -> Result<btleplug::api::Characteristic> {
-    let mut last_error = None;
-
-    for attempt in 1..=ACTIVE_SESSION_RECOVERY_ATTEMPTS {
-        match recover_active_session_control_path(
-            control_write_lock,
-            peripheral,
-            writer,
-            node,
-            reconnect,
-            control_uuid,
-            app_session_id,
-            app_session_nonce,
-        )
-        .await
-        {
-            Ok(control_characteristic) => return Ok(control_characteristic),
-            Err(error) => {
-                last_error = Some(error);
-
-                if attempt < ACTIVE_SESSION_RECOVERY_ATTEMPTS {
-                    sleep(Duration::from_millis(
-                        ACTIVE_SESSION_RECOVERY_RETRY_DELAY_MS,
-                    ))
-                    .await;
-                }
-            }
-        }
-    }
-
-    Err(last_error.expect("active session recovery should retain the last error"))
 }
 
 pub(super) async fn monitor_active_session(
@@ -495,7 +406,7 @@ pub(super) async fn monitor_active_session(
                                     &writer,
                                     &node,
                                     &reconnect,
-                                    config.control_uuid,
+                                    &config,
                                     &app_session_id,
                                     &app_session_nonce,
                                 )
@@ -531,20 +442,10 @@ pub(super) async fn monitor_active_session(
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
-                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                            control_write_lock.clone(),
-                                            prepared.peripheral.clone(),
-                                            current_control_characteristic.clone(),
-                                            app_session_id.clone(),
-                                        );
-                                        lease_shutdown_tx = new_shutdown_tx;
-                                        lease_failure_rx = new_failure_rx;
-                                        lease_task = new_lease_task;
-
                                         writer
                                             .send(&Event::Log {
                                                 level: "warn".to_string(),
-                                                message: "History replay start failed and control-path recovery did not succeed; leaving the session online and deferring replay.".to_string(),
+                                                message: "History replay start failed and control-path recovery did not succeed; forcing a clean reconnect.".to_string(),
                                                 details: Some(json!({
                                                     "peripheralId": node.peripheral_id,
                                                     "knownDeviceId": known_device_id,
@@ -556,7 +457,19 @@ pub(super) async fn monitor_active_session(
                                                 })),
                                             })
                                             .await?;
-                                        handled = true;
+                                        return Ok(Some(
+                                            force_reconnect_after_recovery_failure(
+                                                &prepared.peripheral,
+                                                &writer,
+                                                &node,
+                                                &reconnect,
+                                                &format!(
+                                                    "History replay start failed during active-session recovery for {}; forcing reconnect.",
+                                                    node.label
+                                                ),
+                                            )
+                                            .await?,
+                                        ));
                                     }
                                 }
                             }
@@ -610,7 +523,7 @@ pub(super) async fn monitor_active_session(
                                     &writer,
                                     &node,
                                     &reconnect,
-                                    config.control_uuid,
+                                    &config,
                                     &app_session_id,
                                     &app_session_nonce,
                                 )
@@ -645,20 +558,10 @@ pub(super) async fn monitor_active_session(
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
-                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                            control_write_lock.clone(),
-                                            prepared.peripheral.clone(),
-                                            current_control_characteristic.clone(),
-                                            app_session_id.clone(),
-                                        );
-                                        lease_shutdown_tx = new_shutdown_tx;
-                                        lease_failure_rx = new_failure_rx;
-                                        lease_task = new_lease_task;
-
                                         writer
                                             .send(&Event::Log {
                                                 level: "warn".to_string(),
-                                                message: "History replay ack failed and control-path recovery did not succeed; leaving the session online and retrying on a later reconnect.".to_string(),
+                                                message: "History replay ack failed and control-path recovery did not succeed; forcing a clean reconnect.".to_string(),
                                                 details: Some(json!({
                                                     "peripheralId": node.peripheral_id,
                                                     "knownDeviceId": known_device_id,
@@ -669,7 +572,19 @@ pub(super) async fn monitor_active_session(
                                                 })),
                                             })
                                             .await?;
-                                        handled = true;
+                                        return Ok(Some(
+                                            force_reconnect_after_recovery_failure(
+                                                &prepared.peripheral,
+                                                &writer,
+                                                &node,
+                                                &reconnect,
+                                                &format!(
+                                                    "History replay ack failed during active-session recovery for {}; forcing reconnect.",
+                                                    node.label
+                                                ),
+                                            )
+                                            .await?,
+                                        ));
                                     }
                                 }
                             }
@@ -718,7 +633,7 @@ pub(super) async fn monitor_active_session(
                                         &writer,
                                         &node,
                                         &reconnect,
-                                        config.control_uuid,
+                                        &config,
                                         &app_session_id,
                                         &app_session_nonce,
                                     )
@@ -754,20 +669,10 @@ pub(super) async fn monitor_active_session(
                                             handled = true;
                                         }
                                         Err(recovery_error) => {
-                                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                                control_write_lock.clone(),
-                                                prepared.peripheral.clone(),
-                                                current_control_characteristic.clone(),
-                                                app_session_id.clone(),
-                                            );
-                                            lease_shutdown_tx = new_shutdown_tx;
-                                            lease_failure_rx = new_failure_rx;
-                                            lease_task = new_lease_task;
-
                                             writer
                                                 .send(&Event::Log {
                                                     level: "warn".to_string(),
-                                                    message: "History replay start failed after ack and control-path recovery did not succeed; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                                    message: "History replay start failed after ack and control-path recovery did not succeed; forcing a clean reconnect.".to_string(),
                                                     details: Some(json!({
                                                         "peripheralId": node.peripheral_id,
                                                         "knownDeviceId": known_device_id,
@@ -779,7 +684,19 @@ pub(super) async fn monitor_active_session(
                                                     })),
                                                 })
                                                 .await?;
-                                            handled = true;
+                                            return Ok(Some(
+                                                force_reconnect_after_recovery_failure(
+                                                    &prepared.peripheral,
+                                                    &writer,
+                                                    &node,
+                                                    &reconnect,
+                                                    &format!(
+                                                        "History replay continuation failed during active-session recovery for {}; forcing reconnect.",
+                                                        node.label
+                                                    ),
+                                                )
+                                                .await?,
+                                            ));
                                         }
                                     }
                                 }
@@ -952,7 +869,7 @@ pub(super) async fn monitor_active_session(
                         &writer,
                         &node,
                         &reconnect,
-                        config.control_uuid,
+                        &config,
                         &app_session_id,
                         &app_session_nonce,
                     )

@@ -78,7 +78,7 @@ async fn wait_for_cold_boot_ready_window(
     Ok(())
 }
 
-fn required_characteristic(
+pub(super) fn required_characteristic(
     peripheral: &Peripheral,
     uuid: uuid::Uuid,
     missing_message: &str,

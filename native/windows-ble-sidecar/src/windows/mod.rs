@@ -11,6 +11,7 @@ mod session_event;
 mod session_lease;
 mod session_scan;
 mod session_transport;
+mod session_transport_history;
 mod session_transport_monitor;
 mod session_transport_monitor_reporting;
 mod session_transport_prepare_io;

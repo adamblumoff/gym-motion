@@ -25,4 +25,5 @@ use uuid::Uuid;
 mod candidate_identity;
 mod control_frames;
 mod discovery;
+mod recovery;
 mod scan_policy;

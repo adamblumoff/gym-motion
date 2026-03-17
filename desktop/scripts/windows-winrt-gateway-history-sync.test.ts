@@ -214,7 +214,8 @@ describe("windows winrt gateway history sync", () => {
 
     coordinator.handleRuntimeLog({
       level: "warn",
-      message: "History replay start failed; leaving the session online and deferring replay.",
+      message:
+        "History replay start failed and control-path recovery did not succeed; forcing a clean reconnect.",
       details: {
         peripheralId: "peripheral:ghi",
         knownDeviceId: "stack-003",
@@ -240,7 +241,7 @@ describe("windows winrt gateway history sync", () => {
         localName: "GymMotion-003",
         state: "failed",
         error:
-          "History replay start failed; leaving the session online and deferring replay. The object has been closed.",
+          "History replay start failed and control-path recovery did not succeed; forcing a clean reconnect. The object has been closed.",
       },
     ]);
   });

@@ -189,8 +189,10 @@ protocol, or the vendored WinRT `btleplug` package.
 - If reconnect is fast but post-connect lease still drops, the bug is probably
   in the steady-state control path, not discovery.
 - If history replay is the first thing to hit `The object has been closed.`,
-  quarantine replay for that live session and keep the node online rather than
-  treating replay failure as transport loss.
+  quarantine replay for that live session first. Keep the node online only if
+  active-session recovery reacquires fresh runtime status, telemetry, and
+  control handles; if recovery cannot rebuild that full IO path, force a clean
+  reconnect instead of restarting leases on a stale control characteristic.
 
 ## Bug 7: Transient Disconnect During Handshake Invalidated Current Handles
 
