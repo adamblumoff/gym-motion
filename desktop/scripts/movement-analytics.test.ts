@@ -13,11 +13,11 @@ describe("buildMovementAnalyticsFromEvents", () => {
       events: [
         {
           state: "moving",
-          received_at: new Date("2026-03-17T10:05:00.000Z"),
+          receivedAt: new Date("2026-03-17T10:05:00.000Z"),
         },
         {
           state: "still",
-          received_at: new Date("2026-03-17T10:20:00.000Z"),
+          receivedAt: new Date("2026-03-17T10:20:00.000Z"),
         },
       ],
       hasOlderHistory: false,
@@ -43,12 +43,12 @@ describe("buildMovementAnalyticsFromEvents", () => {
       rangeEndAt: new Date("2026-03-17T11:00:00.000Z"),
       precedingEvent: {
         state: "moving",
-        received_at: new Date("2026-03-17T09:55:00.000Z"),
+        receivedAt: new Date("2026-03-17T09:55:00.000Z"),
       },
       events: [
         {
           state: "still",
-          received_at: new Date("2026-03-17T10:10:00.000Z"),
+          receivedAt: new Date("2026-03-17T10:10:00.000Z"),
         },
       ],
       hasOlderHistory: true,

@@ -1,123 +1,156 @@
-import type { MotionEventSummary } from "@core/contracts";
-
 import type {
-  BluetoothNodeData,
-  MovementDataPoint,
-  SignalHistoryData,
-  SignalHistoryPoint,
-  SignalHistorySeries,
-} from "./types";
+  DesktopSnapshot,
+  DeviceMovementAnalytics,
+  MovementAnalyticsRange,
+} from "@core/contracts";
+import {
+  buildMovementAnalyticsFromEvents,
+  MOVEMENT_ANALYTICS_RANGE_CONFIG,
+} from "@core/movement-analytics";
 
-const SIGNAL_SERIES_COLORS = [
-  "#3b82f6",
-  "#06b6d4",
-  "#8b5cf6",
-  "#22c55e",
-  "#f97316",
-];
+export type MovementChartPoint = {
+  bucketStartAt: string;
+  label: string;
+  movementCount: number;
+  movementDurationMinutes: number;
+  canonicalMovementCount: number;
+  canonicalMovementDurationMinutes: number;
+  provisionalMovementCount: number;
+  provisionalMovementDurationMinutes: number;
+};
 
-function signalSeriesId(deviceId: string) {
-  return `device:${deviceId}`;
-}
+export function buildLiveMovementAnalytics(args: {
+  snapshot: DesktopSnapshot | null;
+  deviceId: string | null;
+  range: MovementAnalyticsRange;
+  now?: Date;
+  provisionalStartAt?: Date | null;
+}) {
+  const { snapshot, deviceId, range } = args;
 
-function activeSignalSeries(nodes: BluetoothNodeData[]): SignalHistorySeries[] {
-  return [...nodes]
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .slice(0, 5)
-    .map((node, index) => ({
-      id: signalSeriesId(node.id),
-      deviceId: node.id,
-      name: node.name,
-      color: SIGNAL_SERIES_COLORS[index] ?? SIGNAL_SERIES_COLORS[0],
-    }));
-}
-
-export function buildSignalHistory(
-  events: MotionEventSummary[],
-  nodes: BluetoothNodeData[],
-): SignalHistoryData {
-  const series = activeSignalSeries(nodes);
-  const sortedEvents = [...events].sort(
-    (left, right) => left.eventTimestamp - right.eventTimestamp,
-  );
-  const eventsByDeviceId = new Map<string, MotionEventSummary[]>();
-
-  for (const event of sortedEvents) {
-    const existing = eventsByDeviceId.get(event.deviceId) ?? [];
-    existing.push(event);
-    eventsByDeviceId.set(event.deviceId, existing);
+  if (!snapshot || !deviceId) {
+    return null;
   }
 
-  const nodesById = new Map(nodes.map((node) => [node.id, node] as const));
-
-  const points = sortedEvents.map((event) => {
-    const bucket: SignalHistoryPoint = {
-      time: new Date(event.eventTimestamp).toLocaleTimeString("en-US", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-
-    series.forEach((signalSeries) => {
-      const node = nodesById.get(signalSeries.deviceId);
-      const fallbackSignal = node?.signalStrength ?? 0;
-      const activeEvents = eventsByDeviceId.get(signalSeries.deviceId) ?? [];
-      let eventForNode: MotionEventSummary | null = null;
-
-      for (const candidate of activeEvents) {
-        if (candidate.eventTimestamp > event.eventTimestamp) {
-          break;
+  const now = args.now ?? new Date();
+  const rangeEndAt = now;
+  const rangeStartAt = args.provisionalStartAt
+    ? new Date(args.provisionalStartAt)
+    : new Date(now.getTime() - MOVEMENT_ANALYTICS_RANGE_CONFIG[range].windowMs);
+  const events = snapshot.events
+    .filter((event) => event.deviceId === deviceId)
+    .map((event) => ({
+      state: event.state,
+      receivedAt: new Date(event.receivedAt),
+    }))
+    .filter((event) => event.receivedAt >= rangeStartAt && event.receivedAt <= rangeEndAt)
+    .toSorted((left, right) => left.receivedAt.getTime() - right.receivedAt.getTime());
+  const runtimeDevice = snapshot.devices.find((device) => device.id === deviceId) ?? null;
+  const currentState = runtimeDevice?.lastState ?? "still";
+  const lastEventReceivedAt = runtimeDevice?.lastEventReceivedAt
+    ? new Date(runtimeDevice.lastEventReceivedAt)
+    : null;
+  const precedingEvent =
+    currentState === "moving" &&
+    lastEventReceivedAt &&
+    lastEventReceivedAt < rangeStartAt
+      ? {
+          state: "moving" as const,
+          receivedAt: lastEventReceivedAt,
         }
+      : null;
 
-        eventForNode = candidate;
-      }
-
-      const level = eventForNode
-        ? Math.max(8, Math.min(100, (eventForNode.delta ?? fallbackSignal) + 25))
-        : fallbackSignal;
-      bucket[signalSeries.id] = level;
-    });
-
-    return bucket;
-  });
-
-  return {
-    series,
-    points,
-  };
-}
-
-export function buildMovementData(events: MotionEventSummary[]): MovementDataPoint[] {
-  const byHour = new Map<string, number>();
-
-  for (const event of events) {
-    const hour = new Date(event.eventTimestamp).toLocaleTimeString("en-US", {
-      hour12: false,
-      hour: "2-digit",
-    });
-    const key = `${hour}:00`;
-    byHour.set(key, (byHour.get(key) ?? 0) + 1);
+  if (events.length === 0 && !precedingEvent && currentState !== "moving") {
+    return null;
   }
 
-  return [...byHour.entries()]
-    .map(([hour, movements]) => ({ hour, movements }))
-    .sort((left, right) => left.hour.localeCompare(right.hour));
+  return buildMovementAnalyticsFromEvents({
+    deviceId,
+    range,
+    rangeStartAt,
+    rangeEndAt,
+    precedingEvent,
+    events,
+    hasOlderHistory: false,
+    lastCanonicalEventAt: null,
+    compactionNotice: null,
+  });
 }
 
-export function calculateAverageSignal(
-  latestSignal: SignalHistoryPoint | null,
-  series: SignalHistorySeries[],
+export function combineMovementAnalytics(
+  canonical: DeviceMovementAnalytics | null,
+  provisional: DeviceMovementAnalytics | null,
 ) {
-  const signalValues = latestSignal
-    ? series
-        .map((signalSeries) => latestSignal[signalSeries.id])
-        .filter((value): value is number => typeof value === "number" && value > 0)
-    : [];
+  const orderedBuckets = new Map<string, MovementChartPoint>();
 
-  return Math.round(
-    signalValues.length > 0
-      ? signalValues.reduce((sum, value) => sum + value, 0) / signalValues.length
-      : 0,
+  for (const bucket of canonical?.buckets ?? []) {
+    orderedBuckets.set(bucket.bucketStartAt, {
+      bucketStartAt: bucket.bucketStartAt,
+      label: bucket.label,
+      movementCount: bucket.movementCount,
+      movementDurationMinutes: Math.round(bucket.movementDurationMs / 60000),
+      canonicalMovementCount: bucket.movementCount,
+      canonicalMovementDurationMinutes: Math.round(bucket.movementDurationMs / 60000),
+      provisionalMovementCount: 0,
+      provisionalMovementDurationMinutes: 0,
+    });
+  }
+
+  for (const bucket of provisional?.buckets ?? []) {
+    const existing = orderedBuckets.get(bucket.bucketStartAt);
+    const provisionalDurationMinutes = Math.round(bucket.movementDurationMs / 60000);
+
+    if (existing) {
+      existing.provisionalMovementCount = bucket.movementCount;
+      existing.provisionalMovementDurationMinutes = provisionalDurationMinutes;
+      existing.movementCount += bucket.movementCount;
+      existing.movementDurationMinutes += provisionalDurationMinutes;
+      continue;
+    }
+
+    orderedBuckets.set(bucket.bucketStartAt, {
+      bucketStartAt: bucket.bucketStartAt,
+      label: bucket.label,
+      movementCount: bucket.movementCount,
+      movementDurationMinutes: provisionalDurationMinutes,
+      canonicalMovementCount: 0,
+      canonicalMovementDurationMinutes: 0,
+      provisionalMovementCount: bucket.movementCount,
+      provisionalMovementDurationMinutes: provisionalDurationMinutes,
+    });
+  }
+
+  return [...orderedBuckets.values()].toSorted(
+    (left, right) =>
+      new Date(left.bucketStartAt).getTime() - new Date(right.bucketStartAt).getTime(),
   );
+}
+
+export function summarizeMovementChart(points: MovementChartPoint[]) {
+  return points.reduce(
+    (summary, point) => ({
+      movementCount: summary.movementCount + point.movementCount,
+      movementDurationMinutes:
+        summary.movementDurationMinutes + point.movementDurationMinutes,
+    }),
+    {
+      movementCount: 0,
+      movementDurationMinutes: 0,
+    },
+  );
+}
+
+export function formatDurationLabel(totalMinutes: number) {
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${minutes}m`;
 }
