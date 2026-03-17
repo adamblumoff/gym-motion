@@ -114,14 +114,8 @@ describe("windows winrt gateway history sync", () => {
         payload: {
           connection_id: "peripheral:abc",
           sequence: 2,
-        },
-      },
-      {
-        type: "start_history_sync",
-        payload: {
-          connection_id: "peripheral:abc",
-          after_sequence: 2,
           max_records: 2,
+          continue_after_sequence: 2,
         },
       },
     ]);

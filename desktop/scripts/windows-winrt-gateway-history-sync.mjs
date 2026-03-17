@@ -366,6 +366,14 @@ export function createHistorySyncCoordinator({
       sendSidecarCommand("ack_history_sync", {
         connection_id: connectionId,
         sequence: completion.latestSequence,
+        continue_after_sequence:
+          completion.hasMore && completion.latestSequence < completion.highWaterSequence
+            ? completion.latestSequence
+            : undefined,
+        max_records:
+          completion.hasMore && completion.latestSequence < completion.highWaterSequence
+            ? pageSize
+            : undefined,
       });
     }
 
@@ -389,11 +397,6 @@ export function createHistorySyncCoordinator({
         records: [],
         inFlight: true,
         parseFailed: false,
-      });
-      sendSidecarCommand("start_history_sync", {
-        connection_id: connectionId,
-        after_sequence: completion.latestSequence,
-        max_records: pageSize,
       });
       publishState(session, "syncing");
       return;

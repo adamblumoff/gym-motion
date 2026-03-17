@@ -18,6 +18,8 @@ pub(super) enum ActiveSessionCommand {
     },
     AckHistorySync {
         sequence: u64,
+        continue_after_sequence: Option<u64>,
+        max_records: Option<usize>,
     },
 }
 
@@ -32,6 +34,8 @@ pub(super) enum SessionCommand {
     AckHistorySync {
         connection_id: String,
         sequence: u64,
+        continue_after_sequence: Option<u64>,
+        max_records: Option<usize>,
     },
     PairManualCandidate {
         candidate_id: String,

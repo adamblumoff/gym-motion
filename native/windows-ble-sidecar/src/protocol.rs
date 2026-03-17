@@ -168,6 +168,8 @@ pub enum Command {
     AckHistorySync {
         connection_id: String,
         sequence: u64,
+        continue_after_sequence: Option<u64>,
+        max_records: Option<usize>,
     },
     PairManualCandidate {
         candidate_id: String,
@@ -287,12 +289,16 @@ mod tests {
         let value = serde_json::to_value(Command::AckHistorySync {
             connection_id: "peripheral:abc".to_string(),
             sequence: 42,
+            continue_after_sequence: Some(42),
+            max_records: Some(250),
         })
         .expect("command should serialize");
 
         assert_eq!(value["type"], "ack_history_sync");
         assert_eq!(value["connection_id"], "peripheral:abc");
         assert_eq!(value["sequence"], 42);
+        assert_eq!(value["continue_after_sequence"], 42);
+        assert_eq!(value["max_records"], 250);
     }
 
     #[test]

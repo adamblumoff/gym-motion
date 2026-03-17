@@ -183,6 +183,8 @@ impl Sidecar {
             Command::AckHistorySync {
                 connection_id,
                 sequence,
+                continue_after_sequence,
+                max_records,
             } => {
                 if self.session.is_none() {
                     self.start_session().await?;
@@ -192,6 +194,8 @@ impl Sidecar {
                     let _ = session.commands.send(SessionCommand::AckHistorySync {
                         connection_id,
                         sequence,
+                        continue_after_sequence,
+                        max_records,
                     });
                 }
             }

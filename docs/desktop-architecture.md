@@ -24,6 +24,7 @@ The current product target is Windows only. The runtime BLE contract should be t
 - The renderer should not call localhost HTTP routes; it talks to the gateway runtime via the preload intent API and typed events.
 - The Windows gateway child now sends ingest, heartbeat, and a narrow set of persistence messages back to Electron main over dedicated child-process IPC, not localhost HTTP. Raw sidecar logs stay console-only, and canonical analytics is intentionally movement-only.
 - Firmware history replay follows the same rule: the gateway child requests replay from the sidecar, persists each page through child-process IPC, and acks firmware only after Electron main confirms persistence.
+- Replay page advancement is sidecar-owned after that ack. The gateway child must not fire a second `start_history_sync` in parallel with the ack for the page that just landed.
 - Canonical analytics is movement-only. Normal analytics should not depend on connection lifecycle logs; those belong in debug/runtime paths instead.
 - Native BLE access is owned by the Windows WinRT sidecar. The desktop product runtime no longer includes the older noble/HCI/USB BLE path.
 - The sidecar depends on the patched `btleplug` under [native/windows-ble-sidecar/vendor/btleplug-winrt-patched](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched) as part of the supported Windows transport contract.

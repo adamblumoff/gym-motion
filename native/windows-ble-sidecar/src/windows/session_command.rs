@@ -88,6 +88,8 @@ pub(super) async fn handle_session_command(
         SessionCommand::AckHistorySync {
             connection_id,
             sequence,
+            continue_after_sequence,
+            max_records,
         } => {
             let sender = {
                 let controls = context.active_session_controls.lock().await;
@@ -109,7 +111,11 @@ pub(super) async fn handle_session_command(
                 return Ok(());
             };
             if sender
-                .send(ActiveSessionCommand::AckHistorySync { sequence })
+                .send(ActiveSessionCommand::AckHistorySync {
+                    sequence,
+                    continue_after_sequence,
+                    max_records,
+                })
                 .is_err()
             {
                 context

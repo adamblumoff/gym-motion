@@ -579,7 +579,11 @@ pub(super) async fn monitor_active_session(
                             }
                         }
                     }
-                    ActiveSessionCommand::AckHistorySync { sequence } => {
+                    ActiveSessionCommand::AckHistorySync {
+                        sequence,
+                        continue_after_sequence,
+                        max_records,
+                    } => {
                         let known_device_id = ack_confirmed_node
                             .as_ref()
                             .and_then(|current| current.known_device_id.clone())
@@ -684,6 +688,118 @@ pub(super) async fn monitor_active_session(
                                         })),
                                     })
                                     .await?;
+                            }
+
+                            continue;
+                        }
+
+                        if let Some(next_after_sequence) = continue_after_sequence {
+                            let next_max_records = max_records.unwrap_or(250);
+
+                            if let Err(error) = send_history_sync_begin(
+                                &control_write_lock,
+                                &prepared.peripheral,
+                                &current_control_characteristic,
+                                &node,
+                                next_after_sequence,
+                                next_max_records,
+                            )
+                            .await
+                            {
+                                let error_message = format!("{:#}", error);
+                                let mut handled = false;
+
+                                if is_closed_handle_error_message(&error_message) {
+                                    let _ = lease_shutdown_tx.send(true);
+                                    let _ = lease_task.await;
+                                    match recover_control_path_with_retry(
+                                        &control_write_lock,
+                                        &prepared.peripheral,
+                                        &writer,
+                                        &node,
+                                        &reconnect,
+                                        config.control_uuid,
+                                        &app_session_id,
+                                        &app_session_nonce,
+                                    )
+                                    .await
+                                    {
+                                        Ok(recovered_control_characteristic) => {
+                                            current_control_characteristic =
+                                                recovered_control_characteristic;
+                                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                                control_write_lock.clone(),
+                                                prepared.peripheral.clone(),
+                                                current_control_characteristic.clone(),
+                                                app_session_id.clone(),
+                                            );
+                                            lease_shutdown_tx = new_shutdown_tx;
+                                            lease_failure_rx = new_failure_rx;
+                                            lease_task = new_lease_task;
+
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "History replay start failed after ack, but the runtime control path recovered; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": known_device_id,
+                                                        "address": node.address,
+                                                        "afterSequence": next_after_sequence,
+                                                        "maxRecords": next_max_records,
+                                                        "error": error_message,
+                                                    })),
+                                                })
+                                                .await?;
+                                            handled = true;
+                                        }
+                                        Err(recovery_error) => {
+                                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                                control_write_lock.clone(),
+                                                prepared.peripheral.clone(),
+                                                current_control_characteristic.clone(),
+                                                app_session_id.clone(),
+                                            );
+                                            lease_shutdown_tx = new_shutdown_tx;
+                                            lease_failure_rx = new_failure_rx;
+                                            lease_task = new_lease_task;
+
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "History replay start failed after ack and control-path recovery did not succeed; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": known_device_id,
+                                                        "address": node.address,
+                                                        "afterSequence": next_after_sequence,
+                                                        "maxRecords": next_max_records,
+                                                        "error": error_message,
+                                                        "recoveryError": format!("{:#}", recovery_error),
+                                                    })),
+                                                })
+                                                .await?;
+                                            handled = true;
+                                        }
+                                    }
+                                }
+
+                                if !handled {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "warn".to_string(),
+                                            message: "History replay start failed after ack; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": known_device_id,
+                                                "address": node.address,
+                                                "afterSequence": next_after_sequence,
+                                                "maxRecords": next_max_records,
+                                                "error": error_message,
+                                            })),
+                                        })
+                                        .await?;
+                                }
                             }
                         }
                     }

@@ -21,6 +21,7 @@ Related:
 - Postgres remains the source of truth for canonical movement history.
 - The desktop app keeps a persisted local analytics cache for fast reopen.
 - Live movement still comes from the runtime snapshot and is treated as provisional until canonical history catches up.
+- Backfilled history is for canonical analytics only; once a node has recent live contact, replay must not overwrite the current live movement summary fields on the device row.
 
 ## Current Implementation Boundary
 
@@ -32,6 +33,7 @@ Related:
   - only after that does the child request firmware history pages
   - auto replay is delayed by one lease interval so a freshly reconnected session can prove the steady-state control path is healthy before replay begins
 - Each history page is persisted through child-process IPC before firmware compaction is acked.
+- After a page is persisted, replay advancement is serialized behind that ack. The gateway child must not fire a second `start_history_sync` in parallel with the ack for the page that just landed; the sidecar owns the "ack then next page" sequence on the live session.
 - If replay hits a closed-handle WinRT control-path error, pause replay for that live session, keep the node connected, and require manual retry or a later reconnect before replay resumes.
 - Firmware archive replay still reuses raw motion history rows today; compact boot-session span archival is still a future firmware-format improvement rather than a desktop/runtime gap.
 
