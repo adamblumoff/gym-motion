@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use btleplug::api::{Central, CentralEvent, CentralState};
+use btleplug::api::{CentralEvent, Peripheral as _};
 use serde_json::json;
 use tokio::{sync::watch, time::sleep};
 

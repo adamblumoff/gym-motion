@@ -22,5 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 
+mod candidate_identity;
+mod control_frames;
 mod discovery;
 mod scan_policy;

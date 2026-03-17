@@ -28,7 +28,7 @@ use super::{
     session_connection::disconnect_nodes_for_shutdown,
     session_event::handle_central_event,
     session_scan::{
-        disconnected_node_from_rule, emit_gateway_state, emit_manual_scan_state,
+        disconnected_node_from_rule, emit_manual_scan_state,
         pause_approved_reconnect_for_operator_decision, restart_approved_reconnect_scan,
         sync_scan_state, APPROVED_RECONNECT_DIAGNOSTIC_MS,
     },

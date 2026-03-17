@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use btleplug::api::Peripheral as _;
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -9,7 +10,7 @@ use crate::protocol::{Event, ReconnectStatus};
 use super::{
     approval::{
         approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, mark_node_connected,
-        prune_reconnect_states, RECONNECT_ATTEMPT_LIMIT,
+        node_key, prune_reconnect_states, RECONNECT_ATTEMPT_LIMIT,
     },
     session::{sync_current_scan_state, SessionContext, SessionState, SCAN_WINDOW_SECS},
     session_connection::{
