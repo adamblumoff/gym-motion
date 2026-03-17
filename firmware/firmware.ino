@@ -10,7 +10,7 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
-const char* FIRMWARE_VERSION = "0.5.3";
+const char* FIRMWARE_VERSION = "0.5.4";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREF_DEVICE_ID = "device_id";
