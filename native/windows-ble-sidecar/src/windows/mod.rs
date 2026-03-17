@@ -826,6 +826,30 @@ async fn run_session(
                                 "manualRecovery": true,
                             })),
                         }).await?;
+                        if recover_visible_approved_node(
+                            &adapter,
+                            &writer,
+                            &config,
+                            &selected_adapter_id,
+                            &allowed_nodes,
+                            &connected_nodes,
+                            &active_connections,
+                            &known_device_ids,
+                            &mut reconnect_states,
+                            &mut scanning,
+                            &mut current_scan_reason,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                            &mut last_scan_progress_at,
+                            &mut startup_burst_deadline,
+                            &command_sender,
+                            &shutdown,
+                            &rule_id,
+                        )
+                        .await?
+                        {
+                            continue;
+                        }
                     }
                     SessionCommand::ResumeApprovedNodeReconnect { rule_id } => {
                         let allowed = allowed_nodes.read().await.clone();
@@ -1659,6 +1683,284 @@ async fn discovery_candidate_for_event(
             None
         }
     }
+}
+
+async fn spawn_reconnect_for_discovered_node(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    config: &Config,
+    selected_adapter_id: &str,
+    allowed_nodes: &Arc<RwLock<Vec<ApprovedNodeRule>>>,
+    active_connections: &Arc<Mutex<HashMap<String, DiscoveredNode>>>,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+    scanning: &mut bool,
+    current_scan_reason: &mut Option<String>,
+    last_advertisement_at: &Option<String>,
+    last_scan_progress_at: &mut Option<Instant>,
+    startup_burst_deadline: &mut Option<Instant>,
+    command_sender: &mpsc::UnboundedSender<SessionCommand>,
+    shutdown: &watch::Receiver<bool>,
+    peripheral: Peripheral,
+    node: DiscoveredNode,
+    rule_id: String,
+    next_attempt: u32,
+    reconnect_log_message: String,
+    reconnect_log_details: serde_json::Value,
+) -> Result<bool> {
+    let key = node
+        .peripheral_id
+        .clone()
+        .unwrap_or_else(|| node.id.clone());
+    let mut active = active_connections.lock().await;
+
+    if active.contains_key(&key) {
+        return Ok(false);
+    }
+
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: reconnect_log_message,
+            details: Some(reconnect_log_details),
+        })
+        .await?;
+
+    reconnect_states.insert(
+        rule_id,
+        ApprovedReconnectState {
+            attempt: next_attempt,
+            retry_exhausted: false,
+            awaiting_user_decision: false,
+        },
+    );
+
+    if *scanning {
+        let _ = adapter.stop_scan().await;
+        *scanning = false;
+        *current_scan_reason = None;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Pausing BLE scan while reconnect handshake is in flight.".to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "reconnectAttempt": next_attempt,
+                })),
+            })
+            .await?;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "stopped",
+            None,
+            last_advertisement_at,
+        )
+        .await?;
+        *last_scan_progress_at = None;
+        *startup_burst_deadline = None;
+    }
+
+    active.insert(key, node.clone());
+    drop(active);
+
+    let writer_clone = writer.clone();
+    let config_clone = config.clone();
+    let allowed_nodes_clone = allowed_nodes.clone();
+    let active_connections_clone = active_connections.clone();
+    let known_device_ids_clone = known_device_ids.clone();
+    let command_tx_clone = command_sender.clone();
+    let shutdown_clone = shutdown.clone();
+    let node_for_task = node.clone();
+
+    tokio::spawn(async move {
+        let result = connect_and_stream(
+            peripheral,
+            node_for_task.clone(),
+            writer_clone.clone(),
+            config_clone,
+            allowed_nodes_clone,
+            known_device_ids_clone,
+            Some(ReconnectStatus {
+                attempt: next_attempt,
+                attempt_limit: RECONNECT_ATTEMPT_LIMIT,
+                retry_exhausted: false,
+                awaiting_user_decision: false,
+            }),
+            shutdown_clone,
+            command_tx_clone.clone(),
+        )
+        .await;
+
+        match result {
+            Ok(Some(reason)) => {
+                let _ = writer_clone
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: reason.clone(),
+                        details: Some(json!({
+                            "peripheralId": node_for_task.peripheral_id,
+                            "knownDeviceId": node_for_task.known_device_id,
+                            "address": node_for_task.address,
+                        })),
+                    })
+                    .await;
+                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                    node: node_for_task,
+                    reason,
+                });
+            }
+            Ok(None) => {
+                let _ = command_tx_clone.send(SessionCommand::ConnectionHealthy {
+                    node: node_for_task,
+                });
+            }
+            Err(error) => {
+                let message = format!("BLE connect failed: {error}");
+                let _ = writer_clone
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: message.clone(),
+                        details: Some(json!({
+                            "peripheralId": node_for_task.peripheral_id,
+                            "knownDeviceId": node_for_task.known_device_id,
+                            "address": node_for_task.address,
+                        })),
+                    })
+                    .await;
+                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                    node: node_for_task,
+                    reason: error.to_string(),
+                });
+            }
+        }
+
+        active_connections_clone.lock().await.remove(
+            &node
+                .peripheral_id
+                .clone()
+                .unwrap_or_else(|| node.id.clone()),
+        );
+    });
+
+    Ok(true)
+}
+
+async fn recover_visible_approved_node(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    config: &Config,
+    selected_adapter_id: &str,
+    allowed_nodes: &Arc<RwLock<Vec<ApprovedNodeRule>>>,
+    connected_nodes: &HashMap<String, DiscoveredNode>,
+    active_connections: &Arc<Mutex<HashMap<String, DiscoveredNode>>>,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    reconnect_states: &mut HashMap<String, ApprovedReconnectState>,
+    scanning: &mut bool,
+    current_scan_reason: &mut Option<String>,
+    manual_scan_deadline: Option<Instant>,
+    last_advertisement_at: &Option<String>,
+    last_scan_progress_at: &mut Option<Instant>,
+    startup_burst_deadline: &mut Option<Instant>,
+    command_sender: &mpsc::UnboundedSender<SessionCommand>,
+    shutdown: &watch::Receiver<bool>,
+    rule_id: &str,
+) -> Result<bool> {
+    let allowed = allowed_nodes.read().await.clone();
+    let allow_identity_fallback = allow_approved_identity_fallback(
+        &allowed,
+        connected_nodes,
+        reconnect_states,
+        manual_scan_deadline,
+        Instant::now(),
+    );
+
+    let peripherals = adapter.peripherals().await.unwrap_or_default();
+
+    for peripheral in peripherals {
+        let Some(candidate) = discovery_candidate_for_event(
+            &peripheral,
+            writer,
+            "manual_recover",
+            config,
+            &allowed,
+            known_device_ids,
+            allow_identity_fallback,
+        )
+        .await
+        else {
+            continue;
+        };
+
+        if approved_rule_id_for_node(&candidate.node, &allowed).as_deref() != Some(rule_id) {
+            continue;
+        }
+
+        if !reconnect_candidate_ready(
+            &candidate.classification,
+            candidate.node.local_name.is_some(),
+            None,
+        ) {
+            continue;
+        }
+
+        let reconnect_state = reconnect_states.get(rule_id).cloned().unwrap_or_default();
+        let key = candidate
+            .node
+            .peripheral_id
+            .clone()
+            .unwrap_or_else(|| candidate.node.id.clone());
+        let active = active_connections.lock().await;
+        let Some(next_attempt) =
+            next_reconnect_attempt(&reconnect_state, active.contains_key(&key))
+        else {
+            continue;
+        };
+        drop(active);
+
+        return spawn_reconnect_for_discovered_node(
+            adapter,
+            writer,
+            config,
+            selected_adapter_id,
+            allowed_nodes,
+            active_connections,
+            known_device_ids,
+            reconnect_states,
+            scanning,
+            current_scan_reason,
+            last_advertisement_at,
+            last_scan_progress_at,
+            startup_burst_deadline,
+            command_sender,
+            shutdown,
+            peripheral,
+            candidate.node.clone(),
+            rule_id.to_string(),
+            next_attempt,
+            format!(
+                "Approved node is already visible; starting immediate recovery for {}.",
+                candidate.node.label
+            ),
+            json!({
+                "peripheralId": candidate.node.peripheral_id,
+                "knownDeviceId": candidate.node.known_device_id,
+                "address": candidate.node.address,
+                "reconnectAttempt": next_attempt,
+                "runtimeServiceMatched": candidate.classification.runtime_service_matched,
+                "approvedIdentityMatched": candidate.classification.approved_identity_matched,
+                "namePrefixMatched": candidate.classification.name_prefix_matched,
+                "manualRecovery": true,
+                "immediateVisibleMatch": true,
+            }),
+        )
+        .await;
+    }
+
+    Ok(false)
 }
 
 async fn wait_for_cold_boot_ready_window(

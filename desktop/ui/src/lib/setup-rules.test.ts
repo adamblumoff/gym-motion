@@ -186,6 +186,38 @@ describe("setup-rules", () => {
     ).toBe(true);
   });
 
+  it("resolves a newly paired rule id from visible node identity", () => {
+    const setup = createSetupState();
+    setup.nodes = [
+      {
+        id: "visible:001",
+        label: "Visible Stack 001",
+        peripheralId: "p-1",
+        address: "AA:BB",
+        localName: "Gym Motion 1",
+        knownDeviceId: "stack-001",
+        machineLabel: null,
+        siteId: null,
+        lastRssi: -62,
+        lastSeenAt: new Date().toISOString(),
+        gatewayConnectionState: "visible",
+        isApproved: false,
+      },
+    ];
+
+    const rules = buildApprovedNodeRules(setup, ["visible:001"]);
+
+    expect(
+      resolveApprovedNodeRuleId(rules, {
+        fallbackId: "visible:001",
+        peripheralId: "p-1",
+        address: "AA:BB",
+        localName: "Gym Motion 1",
+        knownDeviceId: "stack-001",
+      }),
+    ).toBe("visible:001");
+  });
+
   it("does not treat shared local names as proof a visible node is already paired", () => {
     const approvedNodes: DesktopSetupState["approvedNodes"] = [
       {
