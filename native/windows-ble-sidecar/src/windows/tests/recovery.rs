@@ -30,7 +30,7 @@ fn recovery_snapshot_marks_missing_runtime_control_characteristic() {
         runtime_characteristic(config.service_uuid, config.status_uuid),
     ];
 
-    let snapshot = recovery_gatt_snapshot([config.service_uuid], &characteristics, &config);
+    let snapshot = recovery_gatt_snapshot([config.service_uuid], characteristics.iter(), &config);
 
     assert!(snapshot.runtime_service_present);
     assert!(snapshot.telemetry_present);
@@ -49,7 +49,7 @@ fn recovery_snapshot_marks_complete_runtime_gatt_state() {
         runtime_characteristic(config.service_uuid, config.status_uuid),
     ];
 
-    let snapshot = recovery_gatt_snapshot([config.service_uuid], &characteristics, &config);
+    let snapshot = recovery_gatt_snapshot([config.service_uuid], characteristics.iter(), &config);
 
     assert!(snapshot.runtime_service_present);
     assert!(snapshot.telemetry_present);

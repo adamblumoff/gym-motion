@@ -52,22 +52,27 @@ pub(super) async fn emit_handshake_step(
     .await
 }
 
-pub(super) fn recovery_gatt_snapshot(
+pub(super) fn recovery_gatt_snapshot<'a>(
     service_uuids: impl IntoIterator<Item = uuid::Uuid>,
-    characteristics: &[Characteristic],
+    characteristics: impl IntoIterator<Item = &'a Characteristic>,
     config: &Config,
 ) -> RecoveryGattSnapshot {
     let service_uuids = service_uuids
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let characteristic_uuids = characteristics
-        .iter()
+        .into_iter()
         .map(|candidate| candidate.uuid)
+        .collect::<Vec<_>>();
+    let characteristic_count = characteristic_uuids.len();
+    let characteristic_uuids = characteristic_uuids
+        .iter()
+        .copied()
         .collect::<std::collections::BTreeSet<_>>();
 
     RecoveryGattSnapshot {
         service_count: service_uuids.len(),
-        characteristic_count: characteristics.len(),
+        characteristic_count,
         runtime_service_present: service_uuids.contains(&config.service_uuid),
         telemetry_present: characteristic_uuids.contains(&config.telemetry_uuid),
         control_present: characteristic_uuids.contains(&config.control_uuid),
@@ -111,7 +116,7 @@ pub(super) async fn recover_active_session_io(
             .services()
             .into_iter()
             .map(|service| service.uuid),
-        &characteristics,
+        characteristics.iter(),
         config,
     );
 
