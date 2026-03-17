@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Activity, BarChart3, Bluetooth, LayoutDashboard, Settings, Zap } from 'lucide-react';
 
-import type { BluetoothNodeData } from '../data';
+import type { BluetoothNodeData } from '../selectors/types';
 import {
   CommandDialog,
   CommandEmpty,

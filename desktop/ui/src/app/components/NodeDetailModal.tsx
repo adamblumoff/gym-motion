@@ -1,7 +1,7 @@
-import { Activity, Battery, Bluetooth, Wifi } from 'lucide-react';
+import { Activity, Bluetooth, Wifi } from 'lucide-react';
 
-import type { BluetoothNodeData } from '../data';
-import { Badge } from './ui/badge';
+import type { BluetoothNodeData } from '../selectors/types';
+import { DeviceConnectionBadge } from './DeviceConnectionBadge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { ScrollArea } from './ui/scroll-area';
 
@@ -11,39 +11,8 @@ interface NodeDetailModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function connectionStatus(node: BluetoothNodeData) {
-  switch (node.connectionState) {
-    case 'connected':
-      return {
-        label: 'Connected',
-        className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-      };
-    case 'connecting':
-    case 'reconnecting':
-      return {
-        label: 'Reconnecting',
-        className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-      };
-    default:
-      return {
-        label: 'Disconnected',
-        className: 'bg-red-500/10 text-red-400 border-red-500/20',
-      };
-  }
-}
-
 export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalProps) {
   if (!node) return null;
-  const status = connectionStatus(node);
-
-  const batteryColor =
-    node.batteryLevel === null
-      ? 'text-zinc-600'
-      : node.batteryLevel > 60
-        ? 'text-blue-400'
-        : node.batteryLevel > 25
-          ? 'text-amber-400'
-          : 'text-red-400';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,7 +31,7 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-4 gap-3 mt-2">
+        <div className="grid grid-cols-3 gap-3 mt-2">
           <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
             <Wifi className={`size-4 mx-auto mb-1.5 ${node.isConnected ? 'text-blue-400' : 'text-zinc-600'}`} />
             <div className="text-xs text-zinc-400">Signal</div>
@@ -76,18 +45,7 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
             <div className="text-sm text-zinc-100">{node.isMoving ? 'Active' : 'Still'}</div>
           </div>
           <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
-            <Battery className={`size-4 mx-auto mb-1.5 ${batteryColor}`} />
-            <div className="text-xs text-zinc-400">Battery</div>
-            <div className="text-sm text-zinc-100 font-mono">
-              {node.batteryLevel === null ? '--' : `${node.batteryLevel}%`}
-            </div>
-          </div>
-          <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
-            <Badge
-              className={`text-xs mx-auto ${status.className}`}
-            >
-              {status.label}
-            </Badge>
+            <DeviceConnectionBadge state={node.connectionState} className="text-xs mx-auto" />
             <div className="text-xs text-zinc-400 mt-1.5">Status</div>
           </div>
         </div>

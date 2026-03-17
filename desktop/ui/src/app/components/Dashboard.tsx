@@ -1,17 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast, Toaster } from 'sonner';
 
-import { buildBluetoothNodes, buildDashboardRuntimeStatus } from '../data';
+import { buildBluetoothNodes, buildDashboardRuntimeStatus } from '../selectors/dashboard';
 import { useDesktopRuntime } from '../runtime-context';
-import {
-  forgetApprovedNodeRules,
-  resolveApprovedNodeRuleId,
-} from '../../lib/setup-rules';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmationDialog } from './ConfirmationDialog';
 import { DashboardHeader } from './DashboardHeader';
-import { BluetoothNode } from './BluetoothNode';
 import { NodeDetailModal } from './NodeDetailModal';
+import { NodeGrid } from './dashboard/NodeGrid';
+import { RuntimeBanner } from './dashboard/RuntimeBanner';
 
 type ForgetTarget = {
   id: string;
@@ -35,8 +32,8 @@ export function Dashboard() {
     snapshot,
     setup,
     startManualScan,
-    resumeApprovedNodeReconnect,
-    setAllowedNodes,
+    forgetNode,
+    resumeReconnectForNode,
   } = useDesktopRuntime();
   const [pendingResumeNodeIds, setPendingResumeNodeIds] = useState<Set<string>>(new Set());
   const [pendingForgetNodeIds, setPendingForgetNodeIds] = useState<Set<string>>(new Set());
@@ -80,16 +77,15 @@ export function Dashboard() {
     });
   }, [nodes]);
 
-  const handleSelectNode = useCallback(
-    (nodeId: string) => {
-      const node = nodes.find((item) => item.id === nodeId);
-      if (node) {
-        setSelectedNodeId(node.id);
-        setModalOpen(true);
-      }
-    },
-    [nodes],
-  );
+  function handleSelectNode(nodeId: string) {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (!node) {
+      return;
+    }
+
+    setSelectedNodeId(node.id);
+    setModalOpen(true);
+  }
 
   function requestForgetNode(nodeId: string) {
     const node = nodes.find((item) => item.id === nodeId);
@@ -104,24 +100,15 @@ export function Dashboard() {
   }
 
   async function confirmForgetNode() {
-    if (!forgetTarget || !setup) {
+    if (!forgetTarget) {
       return;
     }
 
     const nodeId = forgetTarget.id;
     setPendingForgetNodeIds((current) => addToSet(current, nodeId));
 
-    const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId);
-    const nextRules = forgetApprovedNodeRules(setup.approvedNodes, {
-      id: nodeId,
-      knownDeviceId: runtimeDevice?.id ?? nodeId,
-      peripheralId: runtimeDevice?.peripheralId ?? null,
-      address: runtimeDevice?.address ?? null,
-      localName: runtimeDevice?.advertisedName ?? null,
-    });
-
     try {
-      await setAllowedNodes(nextRules);
+      await forgetNode(nodeId);
       setForgetTarget(null);
       toast.success('Device forgotten.');
 
@@ -136,23 +123,10 @@ export function Dashboard() {
   }
 
   async function handleKeepNode(nodeId: string) {
-    if (!setup) {
-      return;
-    }
-
-    const runtimeDevice = snapshot?.devices.find((device) => device.id === nodeId) ?? null;
     setPendingResumeNodeIds((current) => addToSet(current, nodeId));
 
     try {
-      await resumeApprovedNodeReconnect(
-        resolveApprovedNodeRuleId(setup.approvedNodes, {
-          fallbackId: nodeId,
-          knownDeviceId: runtimeDevice?.id ?? nodeId,
-          peripheralId: runtimeDevice?.peripheralId ?? null,
-          address: runtimeDevice?.address ?? null,
-          localName: runtimeDevice?.advertisedName ?? null,
-        }),
-      );
+      await resumeReconnectForNode(nodeId);
       toast.success('Resuming reconnect scan.');
     } catch (error) {
       setPendingResumeNodeIds((current) => removeFromSet(current, nodeId));
@@ -201,7 +175,7 @@ export function Dashboard() {
         totalNodes={nodes.length}
         activeNodes={activeNodes}
         movingNodes={movingNodes}
-        runtimeStatus={buildDashboardRuntimeStatus(nodes.length)}
+        runtimeStatus={buildDashboardRuntimeStatus(setup?.approvedNodes.length ?? 0)}
       />
 
       <div className="flex-1 overflow-auto p-6">
@@ -219,30 +193,15 @@ export function Dashboard() {
           </div>
         </div>
 
-        {snapshot?.runtimeState === 'restarting' && (
-          <div className="max-w-[1800px] mx-auto mb-4 rounded-xl border border-blue-500/20 bg-blue-500/8 px-4 py-3 text-sm text-blue-300">
-            Restarting gateway runtime. Keeping the last known device state on screen until the bridge reconnects.
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 max-w-[1800px] mx-auto">
-          {nodes.map((node) => (
-            <BluetoothNode
-              key={node.id}
-              node={node}
-              onClick={() => handleSelectNode(node.id)}
-              onRequestForget={requestForgetNode}
-              onKeepDevice={handleKeepNode}
-              forgetPending={pendingForgetNodeIds.has(node.id)}
-              keepPending={pendingResumeNodeIds.has(node.id)}
-            />
-          ))}
-        </div>
-        {nodes.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-24 text-zinc-600">
-            <p className="text-sm">No sensors configured. Go to Setup to add devices.</p>
-          </div>
-        )}
+        <RuntimeBanner runtimeState={snapshot?.runtimeState} />
+        <NodeGrid
+          nodes={nodes}
+          pendingForgetNodeIds={pendingForgetNodeIds}
+          pendingResumeNodeIds={pendingResumeNodeIds}
+          onSelectNode={handleSelectNode}
+          onRequestForgetNode={requestForgetNode}
+          onKeepNode={(nodeId) => void handleKeepNode(nodeId)}
+        />
       </div>
     </div>
   );

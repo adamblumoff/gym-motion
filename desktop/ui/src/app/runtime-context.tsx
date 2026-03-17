@@ -1,7 +1,8 @@
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
 
-import { useDesktopApp } from "../lib/use-desktop-app";
+import { useDesktopApp } from "./runtime/use-desktop-app";
+import { isDesktopRuntimeLoaded } from "./runtime/state";
 
 type DesktopRuntimeValue = ReturnType<typeof useDesktopApp> & {
   isLoaded: boolean;
@@ -20,7 +21,7 @@ export function DesktopRuntimeProvider({
     <DesktopRuntimeContext.Provider
       value={{
         ...desktopApp,
-        isLoaded: desktopApp.snapshot !== null && desktopApp.setup !== null,
+        isLoaded: isDesktopRuntimeLoaded(desktopApp),
       }}
     >
       {children}

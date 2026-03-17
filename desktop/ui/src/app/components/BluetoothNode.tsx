@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Activity, Battery, BatteryLow, BatteryWarning, Bluetooth, Trash2 } from 'lucide-react';
+import { Activity, Bluetooth, Trash2 } from 'lucide-react';
 
-import type { BluetoothNodeData } from '../data';
-import { Badge } from './ui/badge';
+import type { BluetoothNodeData } from '../selectors/types';
+import { DeviceConnectionBadge } from './DeviceConnectionBadge';
+import { SignalStrengthMeter } from './SignalStrengthMeter';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { ScrollArea } from './ui/scroll-area';
@@ -16,27 +17,6 @@ interface BluetoothNodeProps {
   keepPending?: boolean;
 }
 
-function connectionBadge(node: BluetoothNodeData) {
-  switch (node.connectionState) {
-    case 'connected':
-      return {
-        label: 'Connected',
-        className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-      };
-    case 'connecting':
-    case 'reconnecting':
-      return {
-        label: 'Reconnecting',
-        className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-      };
-    default:
-      return {
-        label: 'Disconnected',
-        className: 'bg-red-500/10 text-red-400 border-red-500/20',
-      };
-  }
-}
-
 export function BluetoothNode({
   node,
   onClick,
@@ -46,7 +26,6 @@ export function BluetoothNode({
   keepPending = false,
 }: BluetoothNodeProps) {
   const [pulseKey, setPulseKey] = useState(0);
-  const statusBadge = connectionBadge(node);
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
     node.reconnectAwaitingDecision;
@@ -56,23 +35,6 @@ export function BluetoothNode({
       setPulseKey((prev) => prev + 1);
     }
   }, [node.isMoving]);
-
-  const BatteryIcon =
-    node.batteryLevel === null
-      ? Battery
-      : node.batteryLevel > 50
-        ? Battery
-        : node.batteryLevel > 20
-          ? BatteryWarning
-          : BatteryLow;
-  const batteryColor =
-    node.batteryLevel === null
-      ? 'text-zinc-600'
-      : node.batteryLevel > 50
-        ? 'text-blue-400'
-        : node.batteryLevel > 20
-          ? 'text-amber-400'
-          : 'text-red-400';
 
   return (
     <Card
@@ -101,38 +63,10 @@ export function BluetoothNode({
               <div className="text-xs text-zinc-500 font-mono">{node.macAddress ?? 'Unknown address'}</div>
             </div>
           </div>
-            <div className="flex flex-col items-end gap-2">
-            <Badge
-              variant={node.isConnected ? 'default' : 'secondary'}
-              className={`text-xs ${statusBadge.className}`}
-            >
-              {statusBadge.label}
-            </Badge>
+          <div className="flex flex-col items-end gap-2">
+            <DeviceConnectionBadge state={node.connectionState} className="text-xs" />
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <div className="flex gap-0.5">
-                  {[1, 2, 3, 4].map((bar) => (
-                    <div
-                      key={bar}
-                      className={`w-0.5 rounded-full transition-colors ${
-                        node.signalStrength !== null && bar <= Math.ceil(node.signalStrength / 25)
-                          ? 'bg-blue-400'
-                          : 'bg-zinc-700'
-                      }`}
-                      style={{ height: `${bar * 3 + 4}px` }}
-                    />
-                  ))}
-                </div>
-                <span className="text-xs text-zinc-500 font-mono">
-                  {node.signalStrength === null ? '--' : `${node.signalStrength}%`}
-                </span>
-              </div>
-              <div className="flex items-center gap-1">
-                <BatteryIcon className={`size-3.5 ${node.isConnected ? batteryColor : 'text-zinc-600'}`} />
-                <span className="text-xs text-zinc-500 font-mono">
-                  {node.isConnected && node.batteryLevel !== null ? `${node.batteryLevel}%` : '--'}
-                </span>
-              </div>
+              <SignalStrengthMeter value={node.signalStrength} />
             </div>
           </div>
         </div>
