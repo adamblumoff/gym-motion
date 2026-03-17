@@ -108,6 +108,7 @@ export function createGatewayRuntimeServer({
   runtimeHost,
   runtimePort,
   knownNodesPath = path.join(DEFAULT_KNOWN_NODE_DIR, "gateway-known-nodes.json"),
+  onControlCommand = null,
   verbose = false,
 }) {
   const sessionId = crypto.randomUUID();
@@ -202,6 +203,20 @@ export function createGatewayRuntimeServer({
       error: manualScanError,
       candidates: sortManualScanCandidates(),
     };
+  }
+
+  async function readJsonRequest(request) {
+    const chunks = [];
+
+    for await (const chunk of request) {
+      chunks.push(Buffer.from(chunk));
+    }
+
+    if (chunks.length === 0) {
+      return {};
+    }
+
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   }
 
   async function persistKnownNodes() {
@@ -715,6 +730,41 @@ export function createGatewayRuntimeServer({
         adapters: availableAdapters,
         error: runtimeIssue ?? undefined,
       });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/control") {
+      if (typeof onControlCommand !== "function") {
+        jsonResponse(response, 404, {
+          ok: false,
+          error: "Control endpoint unavailable.",
+        });
+        return;
+      }
+
+      let command;
+      try {
+        command = await readJsonRequest(request);
+      } catch (error) {
+        jsonResponse(response, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Invalid control payload.",
+        });
+        return;
+      }
+
+      try {
+        const result = await onControlCommand(command);
+        jsonResponse(response, 200, {
+          ok: true,
+          ...(result && typeof result === "object" ? result : {}),
+        });
+      } catch (error) {
+        jsonResponse(response, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Control command failed.",
+        });
+      }
       return;
     }
 

@@ -15,10 +15,12 @@ async function createIsolatedRuntimeServer({
   apiBaseUrl,
   runtimeHost,
   runtimePort,
+  onControlCommand,
 }: {
   apiBaseUrl: string;
   runtimeHost: string;
   runtimePort: number;
+  onControlCommand?: ((command: unknown) => unknown | Promise<unknown>) | null;
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-"));
   runtimeTempDirs.push(tempDir);
@@ -27,6 +29,7 @@ async function createIsolatedRuntimeServer({
     runtimeHost,
     runtimePort,
     knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
+    onControlCommand: onControlCommand ?? null,
   });
   runtimeServers.push(runtimeServer);
   return runtimeServer;
@@ -482,6 +485,36 @@ describe("gateway runtime server", () => {
     expect(payload.pairingCandidateId).toBe("peripheral:pair-me");
     expect(payload.candidates).toHaveLength(1);
     expect(payload.candidates[0]?.id).toBe("peripheral:pair-me");
+  });
+
+  it("accepts control commands over HTTP", async () => {
+    const runtimePort = 50435 + Math.floor(Math.random() * 1000);
+    const receivedCommands: unknown[] = [];
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+      onControlCommand: async (command) => {
+        receivedCommands.push(command);
+        return { echoedType: (command as { type?: string })?.type ?? null };
+      },
+    });
+
+    await runtimeServer.start();
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/control`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ type: "start_manual_scan" }),
+    });
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.echoedType).toBe("start_manual_scan");
+    expect(receivedCommands).toEqual([{ type: "start_manual_scan" }]);
   });
 
   it("defaults reconnectAttempt when connecting metadata omits it", async () => {

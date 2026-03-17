@@ -30,6 +30,7 @@ const runtimeServer = createGatewayRuntimeServer({
   apiBaseUrl: config.apiBaseUrl,
   runtimeHost: config.runtimeHost,
   runtimePort: config.runtimePort,
+  onControlCommand: handleDesktopControlCommand,
   verbose: config.verbose,
 });
 
@@ -462,6 +463,128 @@ function syncAllowedNodes() {
   });
 }
 
+function requireSidecar(action) {
+  if (!sidecar || sidecar.killed || !sidecar.stdin) {
+    throw new Error(`Cannot ${action} because the Windows BLE sidecar is not running.`);
+  }
+}
+
+async function handleDesktopControlCommand(command) {
+  if (!command || typeof command !== "object") {
+    throw new Error("Invalid control command.");
+  }
+
+  if (command.type === "set_allowed_nodes" && Array.isArray(command.nodes)) {
+    const nextApprovedNodeRules = command.nodes.map((node) => ({
+      id: node.id,
+      label: node.label,
+      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+      address: node.address ?? null,
+      localName: node.localName ?? node.local_name ?? null,
+      knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+    }));
+    const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
+    const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
+
+    for (const rule of nextApprovedNodeRules) {
+      runtimeServer.restoreApprovedDevice({
+        deviceId: rule.knownDeviceId ?? null,
+        knownDeviceId: rule.knownDeviceId ?? null,
+        peripheralId: rule.peripheralId ?? null,
+        address: rule.address ?? null,
+        localName: rule.localName ?? null,
+      });
+    }
+
+    for (const rule of removedRules) {
+      runtimeServer.forgetDevice({
+        deviceId: rule.knownDeviceId ?? null,
+        knownDeviceId: rule.knownDeviceId ?? null,
+        peripheralId: rule.peripheralId ?? null,
+        address: rule.address ?? null,
+        localName: rule.localName ?? null,
+      });
+    }
+
+    approvedNodeRules = nextApprovedNodeRules;
+    log("Approved-node rules updated from desktop runtime.", {
+      approvedCount: approvedNodeRules.length,
+      removedCount: removedRules.length,
+    });
+    syncAllowedNodes();
+    return {
+      approvedCount: approvedNodeRules.length,
+      removedCount: removedRules.length,
+    };
+  }
+
+  if (command.type === "start_manual_scan") {
+    requireSidecar("start a manual scan");
+    setManualScanState({
+      state: "scanning",
+      pairingCandidateId: null,
+      error: null,
+      clearCandidates: true,
+    });
+    log("Manual scan requested from desktop runtime.");
+    sendCommand("rescan");
+    return { state: "scanning" };
+  }
+
+  if (
+    command.type === "pair_manual_candidate" &&
+    typeof command.candidateId === "string"
+  ) {
+    requireSidecar("pair a manual scan candidate");
+    setManualScanState({
+      state: "pairing",
+      pairingCandidateId: command.candidateId,
+      error: null,
+    });
+    sendCommand("pair_manual_candidate", {
+      candidate_id: command.candidateId,
+    });
+    return {
+      state: "pairing",
+      pairingCandidateId: command.candidateId,
+    };
+  }
+
+  if (command.type === "recover_approved_node" && typeof command.ruleId === "string") {
+    requireSidecar("recover an approved node");
+    sendCommand("recover_approved_node", {
+      rule_id: command.ruleId,
+    });
+    return { ruleId: command.ruleId };
+  }
+
+  if (
+    command.type === "resume_approved_node_reconnect" &&
+    typeof command.ruleId === "string"
+  ) {
+    requireSidecar("resume approved-node reconnect");
+    const rule = approvedNodeRules.find((node) => node.id === command.ruleId);
+    log("Resuming paused approved-node reconnect scan.", {
+      ruleId: command.ruleId,
+      knownDeviceId: rule?.knownDeviceId ?? null,
+      peripheralId: rule?.peripheralId ?? null,
+      address: rule?.address ?? null,
+    });
+    runtimeServer.clearReconnectDecision({
+      knownDeviceId: rule?.knownDeviceId ?? null,
+      peripheralId: rule?.peripheralId ?? null,
+      address: rule?.address ?? null,
+      localName: rule?.localName ?? null,
+    });
+    sendCommand("resume_approved_node_reconnect", {
+      rule_id: command.ruleId,
+    });
+    return { ruleId: command.ruleId };
+  }
+
+  throw new Error(`Unsupported control command: ${String(command.type ?? "unknown")}`);
+}
+
 function attachControlReader() {
   const controlReader = readline.createInterface({
     input: process.stdin,
@@ -475,108 +598,17 @@ function attachControlReader() {
       return;
     }
 
+    let command;
     try {
-      const command = JSON.parse(trimmed);
-
-      if (command.type === "set_allowed_nodes" && Array.isArray(command.nodes)) {
-        const nextApprovedNodeRules = command.nodes.map((node) => ({
-          id: node.id,
-          label: node.label,
-          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-          address: node.address ?? null,
-          localName: node.localName ?? node.local_name ?? null,
-          knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-        }));
-        const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
-        const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
-
-        for (const rule of nextApprovedNodeRules) {
-          runtimeServer.restoreApprovedDevice({
-            deviceId: rule.knownDeviceId ?? null,
-            knownDeviceId: rule.knownDeviceId ?? null,
-            peripheralId: rule.peripheralId ?? null,
-            address: rule.address ?? null,
-            localName: rule.localName ?? null,
-          });
-        }
-
-        for (const rule of removedRules) {
-          runtimeServer.forgetDevice({
-            deviceId: rule.knownDeviceId ?? null,
-            knownDeviceId: rule.knownDeviceId ?? null,
-            peripheralId: rule.peripheralId ?? null,
-            address: rule.address ?? null,
-            localName: rule.localName ?? null,
-          });
-        }
-
-        approvedNodeRules = nextApprovedNodeRules;
-        log("Approved-node rules updated from desktop runtime.", {
-          approvedCount: approvedNodeRules.length,
-          removedCount: removedRules.length,
-        });
-        syncAllowedNodes();
-        return;
-      }
-
-      if (command.type === "start_manual_scan") {
-        setManualScanState({
-          state: "scanning",
-          pairingCandidateId: null,
-          error: null,
-          clearCandidates: true,
-        });
-        log("Manual scan requested from desktop runtime.");
-        sendCommand("rescan");
-        return;
-      }
-
-      if (
-        command.type === "pair_manual_candidate" &&
-        typeof command.candidateId === "string"
-      ) {
-        setManualScanState({
-          state: "pairing",
-          pairingCandidateId: command.candidateId,
-          error: null,
-        });
-        sendCommand("pair_manual_candidate", {
-          candidate_id: command.candidateId,
-        });
-        return;
-      }
-
-      if (command.type === "recover_approved_node" && typeof command.ruleId === "string") {
-        sendCommand("recover_approved_node", {
-          rule_id: command.ruleId,
-        });
-        return;
-      }
-
-      if (
-        command.type === "resume_approved_node_reconnect" &&
-        typeof command.ruleId === "string"
-      ) {
-        const rule = approvedNodeRules.find((node) => node.id === command.ruleId);
-        log("Resuming paused approved-node reconnect scan.", {
-          ruleId: command.ruleId,
-          knownDeviceId: rule?.knownDeviceId ?? null,
-          peripheralId: rule?.peripheralId ?? null,
-          address: rule?.address ?? null,
-        });
-        runtimeServer.clearReconnectDecision({
-          knownDeviceId: rule?.knownDeviceId ?? null,
-          peripheralId: rule?.peripheralId ?? null,
-          address: rule?.address ?? null,
-          localName: rule?.localName ?? null,
-        });
-        sendCommand("resume_approved_node_reconnect", {
-          rule_id: command.ruleId,
-        });
-      }
+      command = JSON.parse(trimmed);
     } catch (error) {
       console.error("[gateway-winrt] failed to parse control command", error);
+      return;
     }
+
+    void handleDesktopControlCommand(command).catch((error) => {
+      console.error("[gateway-winrt] failed to handle control command", error);
+    });
   });
 }
 

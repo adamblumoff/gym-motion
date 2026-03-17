@@ -112,12 +112,55 @@ export function createManagedGatewayRuntime(
   let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
 
-  function sendGatewayCommand(command: Record<string, unknown>) {
-    if (!child?.stdin || child.killed) {
+  async function sendGatewayCommand(command: Record<string, unknown>) {
+    if (!child || child.killed) {
+      throw new Error("Gateway runtime is not running.");
+    }
+
+    if (usesWindowsNativeGateway(process.platform)) {
+      const response = await fetch(`http://127.0.0.1:${runtimePort}/control`, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(command),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`gateway control -> ${response.status}: ${text}`);
+      }
+
       return;
     }
 
-    child.stdin.write(`${JSON.stringify(command)}\n`);
+    const currentChild = child;
+
+    if (!currentChild.stdin) {
+      throw new Error("Gateway runtime control pipe is unavailable.");
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      currentChild.stdin?.write(`${JSON.stringify(command)}\n`, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  function sendGatewayCommandInBackground(
+    command: Record<string, unknown>,
+    context: string,
+  ) {
+    void sendGatewayCommand(command).catch((error) => {
+      console.error(`[runtime] failed to ${context}`, error);
+    });
   }
 
   function emit(event: DesktopRuntimeEvent) {
@@ -179,10 +222,10 @@ export function createManagedGatewayRuntime(
     store.setJson(APPROVED_NODES_KEY, nextApprovedNodes);
 
     if (child) {
-      sendGatewayCommand({
+      sendGatewayCommandInBackground({
         type: "set_allowed_nodes",
         nodes: nextApprovedNodes,
-      });
+      }, "sync approved nodes with gateway runtime");
     }
 
     return nextApprovedNodes;
@@ -752,7 +795,7 @@ export function createManagedGatewayRuntime(
         });
 
         if (child) {
-          sendGatewayCommand({ type: "start_manual_scan" });
+          await sendGatewayCommand({ type: "start_manual_scan" });
           return setupState;
         }
 
@@ -806,11 +849,11 @@ export function createManagedGatewayRuntime(
           throw new Error("Windows BLE runtime is not running.");
         }
 
-        sendGatewayCommand({
+        await sendGatewayCommand({
           type: "set_allowed_nodes",
           nodes: nextApprovedNodes,
         });
-        sendGatewayCommand({
+        await sendGatewayCommand({
           type: "pair_manual_candidate",
           candidateId,
         });
@@ -827,7 +870,7 @@ export function createManagedGatewayRuntime(
 
       if (usesWindowsNativeGateway(process.platform)) {
         if (child) {
-          sendGatewayCommand({ type: "recover_approved_node", ruleId });
+          await sendGatewayCommand({ type: "recover_approved_node", ruleId });
           return;
         }
 
@@ -844,7 +887,7 @@ export function createManagedGatewayRuntime(
 
       if (usesWindowsNativeGateway(process.platform)) {
         if (child) {
-          sendGatewayCommand({ type: "resume_approved_node_reconnect", ruleId });
+          await sendGatewayCommand({ type: "resume_approved_node_reconnect", ruleId });
           return;
         }
 
@@ -868,7 +911,7 @@ export function createManagedGatewayRuntime(
       await refreshAdapters();
 
       if (usesWindowsNativeGateway(process.platform)) {
-        sendGatewayCommand({
+        await sendGatewayCommand({
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });
