@@ -30,7 +30,9 @@ Related:
 - The Windows runtime now treats reconnect and history replay as separate phases:
   - first the session must reach normal runtime `connected`
   - only after that does the child request firmware history pages
+  - auto replay is delayed by one lease interval so a freshly reconnected session can prove the steady-state control path is healthy before replay begins
 - Each history page is persisted through child-process IPC before firmware compaction is acked.
+- If replay hits a closed-handle WinRT control-path error, pause replay for that live session, keep the node connected, and require manual retry or a later reconnect before replay resumes.
 - Firmware archive replay still reuses raw motion history rows today; compact boot-session span archival is still a future firmware-format improvement rather than a desktop/runtime gap.
 
 ## Desktop Cache

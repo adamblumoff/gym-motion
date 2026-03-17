@@ -178,11 +178,19 @@ protocol, or the vendored WinRT `btleplug` package.
   - replay bootstrap + lease
   - restart heartbeat
 - Only fall back to reconnect scan bursts if in-session recovery fails.
+- Serialize active-session control writes so lease heartbeats, `sync-now`, and
+  history replay commands cannot interleave framed writes on the same control
+  characteristic.
+- Delay automatic history replay briefly after reconnect so the live session can
+  prove the steady-state control path is healthy before replay starts.
 
 ### Watch Out For
 
 - If reconnect is fast but post-connect lease still drops, the bug is probably
   in the steady-state control path, not discovery.
+- If history replay is the first thing to hit `The object has been closed.`,
+  quarantine replay for that live session and keep the node online rather than
+  treating replay failure as transport loss.
 
 ## Bug 7: Transient Disconnect During Handshake Invalidated Current Handles
 

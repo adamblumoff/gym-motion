@@ -4,12 +4,20 @@ use btleplug::{
     platform::Peripheral,
 };
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 const CONTROL_CHUNK_SIZE: usize = 120;
 const COMMAND_WRITE_ATTEMPTS: u32 = 3;
 const COMMAND_WRITE_RETRY_DELAY_MS: u64 = 200;
+
+pub(crate) type ControlWriteLock = Arc<Mutex<()>>;
+
+pub(crate) fn new_control_write_lock() -> ControlWriteLock {
+    Arc::new(Mutex::new(()))
+}
 
 pub(crate) async fn send_app_session_lease(
     peripheral: &Peripheral,
@@ -36,6 +44,37 @@ pub(crate) async fn send_app_session_bootstrap(
     })
     .to_string();
     write_chunked_json_command(peripheral, characteristic, &payload).await
+}
+
+pub(crate) async fn send_app_session_lease_locked(
+    control_write_lock: &ControlWriteLock,
+    peripheral: &Peripheral,
+    characteristic: &Characteristic,
+    session_id: &str,
+) -> Result<()> {
+    let payload = json!({
+        "type": "app-session-lease",
+        "sessionId": session_id,
+        "expiresInMs": APP_SESSION_LEASE_TIMEOUT_MS,
+    })
+    .to_string();
+    write_chunked_json_command_locked(control_write_lock, peripheral, characteristic, &payload)
+        .await
+}
+
+pub(crate) async fn send_app_session_bootstrap_locked(
+    control_write_lock: &ControlWriteLock,
+    peripheral: &Peripheral,
+    characteristic: &Characteristic,
+    session_nonce: &str,
+) -> Result<()> {
+    let payload = json!({
+        "type": "app-session-bootstrap",
+        "sessionNonce": session_nonce,
+    })
+    .to_string();
+    write_chunked_json_command_locked(control_write_lock, peripheral, characteristic, &payload)
+        .await
 }
 
 pub(crate) async fn write_chunked_json_command(
@@ -70,6 +109,16 @@ pub(crate) async fn write_chunked_json_command(
     }
 
     unreachable!("command write loop should return before exhausting attempts");
+}
+
+pub(crate) async fn write_chunked_json_command_locked(
+    control_write_lock: &ControlWriteLock,
+    peripheral: &Peripheral,
+    characteristic: &Characteristic,
+    payload: &str,
+) -> Result<()> {
+    let _write_guard = control_write_lock.lock().await;
+    write_chunked_json_command(peripheral, characteristic, payload).await
 }
 
 pub(crate) fn control_command_frames(payload: &str) -> Vec<Vec<u8>> {

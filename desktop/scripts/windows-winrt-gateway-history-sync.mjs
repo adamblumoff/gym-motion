@@ -150,8 +150,8 @@ export function createHistorySyncCoordinator({
   onHistorySyncStateChanged = () => {},
   pageSize = DEFAULT_HISTORY_PAGE_SIZE,
   autoStartDelayMs = DEFAULT_AUTO_START_DELAY_MS,
-  scheduleAutoStart = setTimeout,
-  clearScheduledAutoStart = clearTimeout,
+  scheduleAutoStart = globalThis.setTimeout,
+  clearScheduledAutoStart = globalThis.clearTimeout,
 }) {
   const sessions = new Map();
   const autoStartTimers = new Map();

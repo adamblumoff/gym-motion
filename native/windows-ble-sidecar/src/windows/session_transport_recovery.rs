@@ -8,7 +8,9 @@ use serde_json::json;
 use crate::protocol::{DiscoveredNode, Event, ReconnectStatus};
 
 use super::{
-    handshake::{send_app_session_bootstrap, send_app_session_lease},
+    handshake::{
+        send_app_session_bootstrap_locked, send_app_session_lease_locked, ControlWriteLock,
+    },
     session_util::emit_verbose_log,
     writer::EventWriter,
 };
@@ -35,6 +37,7 @@ pub(super) async fn emit_handshake_step(
 }
 
 pub(super) async fn recover_active_session_control_path(
+    control_write_lock: &ControlWriteLock,
     peripheral: &Peripheral,
     writer: &EventWriter,
     node: &DiscoveredNode,
@@ -71,22 +74,32 @@ pub(super) async fn recover_active_session_control_path(
             anyhow!("runtime control characteristic not found during active session recovery")
         })?;
 
-    send_app_session_bootstrap(peripheral, &control_characteristic, app_session_nonce)
-        .await
-        .with_context(|| {
-            format!(
-                "app-session-bootstrap replay failed during active session recovery for {}",
-                node.label
-            )
-        })?;
-    send_app_session_lease(peripheral, &control_characteristic, app_session_id)
-        .await
-        .with_context(|| {
-            format!(
-                "app-session-lease replay failed during active session recovery for {}",
-                node.label
-            )
-        })?;
+    send_app_session_bootstrap_locked(
+        control_write_lock,
+        peripheral,
+        &control_characteristic,
+        app_session_nonce,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "app-session-bootstrap replay failed during active session recovery for {}",
+            node.label
+        )
+    })?;
+    send_app_session_lease_locked(
+        control_write_lock,
+        peripheral,
+        &control_characteristic,
+        app_session_id,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "app-session-lease replay failed during active session recovery for {}",
+            node.label
+        )
+    })?;
 
     writer
         .send(&Event::Log {

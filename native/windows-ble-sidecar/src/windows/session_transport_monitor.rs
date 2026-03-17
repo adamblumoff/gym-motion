@@ -24,7 +24,10 @@ use crate::{
 use super::{
     approval::is_approved,
     config::Config,
-    handshake::{send_app_session_bootstrap, send_app_session_lease, write_chunked_json_command},
+    handshake::{
+        new_control_write_lock, send_app_session_bootstrap_locked, send_app_session_lease_locked,
+        write_chunked_json_command_locked, ControlWriteLock,
+    },
     session_lease::{is_closed_handle_error_message, spawn_lease_task},
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
@@ -62,6 +65,7 @@ async fn enrich_node_with_device_id(
 }
 
 async fn send_history_sync_begin(
+    control_write_lock: &ControlWriteLock,
     peripheral: &btleplug::platform::Peripheral,
     control_characteristic: &btleplug::api::Characteristic,
     node: &DiscoveredNode,
@@ -75,12 +79,18 @@ async fn send_history_sync_begin(
     })
     .to_string();
 
-    write_chunked_json_command(peripheral, control_characteristic, &payload)
-        .await
-        .with_context(|| format!("history-sync-begin failed for {}", node.label))
+    write_chunked_json_command_locked(
+        control_write_lock,
+        peripheral,
+        control_characteristic,
+        &payload,
+    )
+    .await
+    .with_context(|| format!("history-sync-begin failed for {}", node.label))
 }
 
 async fn send_history_ack(
+    control_write_lock: &ControlWriteLock,
     peripheral: &btleplug::platform::Peripheral,
     control_characteristic: &btleplug::api::Characteristic,
     node: &DiscoveredNode,
@@ -92,12 +102,18 @@ async fn send_history_ack(
     })
     .to_string();
 
-    write_chunked_json_command(peripheral, control_characteristic, &payload)
-        .await
-        .with_context(|| format!("history-ack failed for {}", node.label))
+    write_chunked_json_command_locked(
+        control_write_lock,
+        peripheral,
+        control_characteristic,
+        &payload,
+    )
+    .await
+    .with_context(|| format!("history-ack failed for {}", node.label))
 }
 
 async fn recover_control_path_with_retry(
+    control_write_lock: &ControlWriteLock,
     peripheral: &btleplug::platform::Peripheral,
     writer: &EventWriter,
     node: &DiscoveredNode,
@@ -110,6 +126,7 @@ async fn recover_control_path_with_retry(
 
     for attempt in 1..=ACTIVE_SESSION_RECOVERY_ATTEMPTS {
         match recover_active_session_control_path(
+            control_write_lock,
             peripheral,
             writer,
             node,
@@ -175,7 +192,9 @@ pub(super) async fn monitor_active_session(
     let mut session_telemetry_confirm_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
     let mut current_control_characteristic = prepared.control_characteristic;
+    let control_write_lock = new_control_write_lock();
     let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) = spawn_lease_task(
+        control_write_lock.clone(),
         prepared.peripheral.clone(),
         current_control_characteristic.clone(),
         app_session_id.clone(),
@@ -273,7 +292,8 @@ pub(super) async fn monitor_active_session(
                                             "sending sync-now",
                                         )
                                         .await?;
-                                        if let Err(error) = write_chunked_json_command(
+                                        if let Err(error) = write_chunked_json_command_locked(
+                                            &control_write_lock,
                                             &prepared.peripheral,
                                             &current_control_characteristic,
                                             r#"{"type":"sync-now"}"#,
@@ -454,6 +474,7 @@ pub(super) async fn monitor_active_session(
                             .or_else(|| node.known_device_id.clone());
 
                         if let Err(error) = send_history_sync_begin(
+                            &control_write_lock,
                             &prepared.peripheral,
                             &current_control_characteristic,
                             &node,
@@ -466,7 +487,10 @@ pub(super) async fn monitor_active_session(
                             let mut handled = false;
 
                             if is_closed_handle_error_message(&error_message) {
+                                let _ = lease_shutdown_tx.send(true);
+                                let _ = lease_task.await;
                                 match recover_control_path_with_retry(
+                                    &control_write_lock,
                                     &prepared.peripheral,
                                     &writer,
                                     &node,
@@ -478,11 +502,10 @@ pub(super) async fn monitor_active_session(
                                 .await
                                 {
                                     Ok(recovered_control_characteristic) => {
-                                        let _ = lease_shutdown_tx.send(true);
-                                        let _ = lease_task.await;
                                         current_control_characteristic =
                                             recovered_control_characteristic;
                                         let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            control_write_lock.clone(),
                                             prepared.peripheral.clone(),
                                             current_control_characteristic.clone(),
                                             app_session_id.clone(),
@@ -508,6 +531,16 @@ pub(super) async fn monitor_active_session(
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
+                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            control_write_lock.clone(),
+                                            prepared.peripheral.clone(),
+                                            current_control_characteristic.clone(),
+                                            app_session_id.clone(),
+                                        );
+                                        lease_shutdown_tx = new_shutdown_tx;
+                                        lease_failure_rx = new_failure_rx;
+                                        lease_task = new_lease_task;
+
                                         writer
                                             .send(&Event::Log {
                                                 level: "warn".to_string(),
@@ -553,6 +586,7 @@ pub(super) async fn monitor_active_session(
                             .or_else(|| node.known_device_id.clone());
 
                         if let Err(error) = send_history_ack(
+                            &control_write_lock,
                             &prepared.peripheral,
                             &current_control_characteristic,
                             &node,
@@ -564,7 +598,10 @@ pub(super) async fn monitor_active_session(
                             let mut handled = false;
 
                             if is_closed_handle_error_message(&error_message) {
+                                let _ = lease_shutdown_tx.send(true);
+                                let _ = lease_task.await;
                                 match recover_control_path_with_retry(
+                                    &control_write_lock,
                                     &prepared.peripheral,
                                     &writer,
                                     &node,
@@ -576,11 +613,10 @@ pub(super) async fn monitor_active_session(
                                 .await
                                 {
                                     Ok(recovered_control_characteristic) => {
-                                        let _ = lease_shutdown_tx.send(true);
-                                        let _ = lease_task.await;
                                         current_control_characteristic =
                                             recovered_control_characteristic;
                                         let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            control_write_lock.clone(),
                                             prepared.peripheral.clone(),
                                             current_control_characteristic.clone(),
                                             app_session_id.clone(),
@@ -605,6 +641,16 @@ pub(super) async fn monitor_active_session(
                                         handled = true;
                                     }
                                     Err(recovery_error) => {
+                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            control_write_lock.clone(),
+                                            prepared.peripheral.clone(),
+                                            current_control_characteristic.clone(),
+                                            app_session_id.clone(),
+                                        );
+                                        lease_shutdown_tx = new_shutdown_tx;
+                                        lease_failure_rx = new_failure_rx;
+                                        lease_task = new_lease_task;
+
                                         writer
                                             .send(&Event::Log {
                                                 level: "warn".to_string(),
@@ -666,7 +712,8 @@ pub(super) async fn monitor_active_session(
                                 })),
                             })
                             .await?;
-                        write_chunked_json_command(
+                        write_chunked_json_command_locked(
+                            &control_write_lock,
                             &prepared.peripheral,
                             &current_control_characteristic,
                             r#"{"type":"sync-now"}"#,
@@ -707,7 +754,8 @@ pub(super) async fn monitor_active_session(
                             })),
                         })
                         .await?;
-                    send_app_session_bootstrap(
+                    send_app_session_bootstrap_locked(
+                        &control_write_lock,
                         &prepared.peripheral,
                         &current_control_characteristic,
                         &app_session_nonce,
@@ -716,7 +764,8 @@ pub(super) async fn monitor_active_session(
                     .with_context(|| {
                         format!("app-session-bootstrap retry failed for {}", node.label)
                     })?;
-                    send_app_session_lease(
+                    send_app_session_lease_locked(
+                        &control_write_lock,
                         &prepared.peripheral,
                         &current_control_characteristic,
                         &app_session_id,
@@ -782,6 +831,7 @@ pub(super) async fn monitor_active_session(
                 let _ = lease_task.await;
                 if is_closed_handle_error_message(&reason) {
                     match recover_control_path_with_retry(
+                        &control_write_lock,
                         &prepared.peripheral,
                         &writer,
                         &node,
@@ -795,6 +845,7 @@ pub(super) async fn monitor_active_session(
                         Ok(recovered_control_characteristic) => {
                             current_control_characteristic = recovered_control_characteristic;
                             let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                control_write_lock.clone(),
                                 prepared.peripheral.clone(),
                                 current_control_characteristic.clone(),
                                 app_session_id.clone(),

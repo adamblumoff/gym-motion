@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use super::handshake::ControlWriteLock;
 use btleplug::platform::Peripheral;
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    handshake::send_app_session_lease, session_transport::APP_SESSION_HEARTBEAT_MS,
+    handshake::send_app_session_lease_locked, session_transport::APP_SESSION_HEARTBEAT_MS,
     session_util::format_error_chain,
 };
 
@@ -13,6 +14,7 @@ pub(super) fn is_closed_handle_error_message(message: &str) -> bool {
 }
 
 pub(super) fn spawn_lease_task(
+    control_write_lock: ControlWriteLock,
     peripheral: Peripheral,
     characteristic: btleplug::api::Characteristic,
     session_id: String,
@@ -37,7 +39,8 @@ pub(super) fn spawn_lease_task(
                     }
                 }
                 _ = lease_heartbeat.tick() => {
-                    if let Err(error) = send_app_session_lease(
+                    if let Err(error) = send_app_session_lease_locked(
+                        &control_write_lock,
                         &peripheral,
                         &characteristic,
                         &session_id,
