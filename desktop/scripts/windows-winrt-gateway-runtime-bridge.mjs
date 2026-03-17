@@ -1,36 +1,70 @@
-/* global fetch */
+import { shouldWriteDiscoveryLog } from "./windows-winrt-gateway-logging.mjs";
+import { sendToDesktop as defaultSendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
+import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.mjs";
 
-import {
-  shouldWriteDiscoveryLog,
-} from "./windows-winrt-gateway-logging.mjs";
-import {
-  createDeviceContext,
-  describeNode,
-} from "./windows-winrt-gateway-node.mjs";
-
-export function createRuntimeBridge({ config, runtimeServer, debug }) {
-  const deviceContexts = new Map();
-  const pendingNodeLogs = new Map();
-  let telemetryForwardChain = Promise.resolve();
-
-  async function postJson(targetPath, body) {
-    const response = await fetch(`${config.apiBaseUrl}${targetPath}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`${targetPath} -> ${response.status}: ${text}`);
-    }
-
-    return await response.json();
+function toMetadataRecord(input) {
+  if (!input || typeof input !== "object") {
+    return undefined;
   }
 
-  async function writeDeviceLog({
+  const metadata = {};
+
+  for (const [key, value] of Object.entries(input)) {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      value === null
+    ) {
+      metadata[key] = value;
+      continue;
+    }
+
+    try {
+      metadata[key] = JSON.stringify(value);
+    } catch {
+      metadata[key] = String(value);
+    }
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function trimMessage(message) {
+  const normalized = typeof message === "string" ? message.trim() : "";
+
+  if (normalized.length <= 280) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 277)}...`;
+}
+
+function telemetryQueueKey(payload) {
+  return payload.deviceId;
+}
+
+function pendingLogKey(peripheralInfo) {
+  return peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
+}
+
+export function createRuntimeBridge({
+  config,
+  runtimeServer,
+  debug,
+  sendToDesktop = defaultSendToDesktop,
+}) {
+  const deviceContexts = new Map();
+  const pendingNodeLogs = new Map();
+  const telemetryForwardChains = new Map();
+
+  function emitPersistMessage(type, deviceId, payload) {
+    if (!sendToDesktop({ type, deviceId, payload }, debug)) {
+      debug(`skipped ${type} for ${deviceId} because desktop IPC is unavailable`);
+    }
+  }
+
+  function writeDeviceLog({
     deviceId,
     level = "info",
     code,
@@ -40,31 +74,24 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
     hardwareId,
     metadata,
   }) {
-    try {
-      await postJson("/api/device-logs", {
-        deviceId,
-        level,
-        code,
-        message,
-        bootId,
-        firmwareVersion,
-        hardwareId,
-        metadata,
-      });
-    } catch (error) {
-      debug(
-        `failed to write gateway log ${code}`,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
+    emitPersistMessage("persist-device-log", deviceId, {
+      deviceId,
+      level,
+      code,
+      message: trimMessage(message),
+      bootId,
+      firmwareVersion,
+      hardwareId,
+      metadata,
+    });
   }
 
   function queueNodeLog(peripheralInfo, entry) {
-    const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
+    const key = pendingLogKey(peripheralInfo);
     const knownDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
 
     if (knownDeviceId) {
-      void writeDeviceLog({
+      writeDeviceLog({
         deviceId: knownDeviceId,
         ...entry,
       });
@@ -80,7 +107,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
   }
 
   function flushNodeLogs(deviceId, peripheralInfo, devicePayload) {
-    const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
+    const key = pendingLogKey(peripheralInfo);
     const pendingEntries = pendingNodeLogs.get(key);
 
     if (!pendingEntries?.length) {
@@ -90,7 +117,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
     pendingNodeLogs.delete(key);
 
     for (const entry of pendingEntries) {
-      void writeDeviceLog({
+      writeDeviceLog({
         deviceId,
         level: entry.level,
         code: entry.code,
@@ -136,7 +163,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
       connectionStateBeforeTelemetry !== "connected" &&
       context.lastTelemetryConnectionState !== connectionStateBeforeTelemetry
     ) {
-      void writeDeviceLog({
+      writeDeviceLog({
         deviceId: payload.deviceId,
         level: "warn",
         code: "node.telemetry_without_transport",
@@ -161,7 +188,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
     const stateChanged = context.lastState !== payload.state;
 
     if (stateChanged) {
-      await postJson("/api/ingest", {
+      emitPersistMessage("persist-motion", payload.deviceId, {
         deviceId: payload.deviceId,
         state: payload.state,
         timestamp: payload.timestamp,
@@ -180,7 +207,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
       return;
     }
 
-    await postJson("/api/heartbeat", {
+    emitPersistMessage("persist-heartbeat", payload.deviceId, {
       deviceId: payload.deviceId,
       timestamp: payload.timestamp,
       bootId: payload.bootId,
@@ -191,12 +218,50 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
   }
 
   function forwardTelemetry(payload, node = {}) {
-    const nextForward = telemetryForwardChain.then(
+    const key = telemetryQueueKey(payload);
+    const current = telemetryForwardChains.get(key) ?? Promise.resolve();
+    const next = current.then(
       () => forwardTelemetryNow(payload, node),
       () => forwardTelemetryNow(payload, node),
     );
-    telemetryForwardChain = nextForward.catch(() => {});
-    return nextForward;
+    const tracked = next.catch(() => {});
+    telemetryForwardChains.set(key, tracked);
+
+    return next.finally(() => {
+      if (telemetryForwardChains.get(key) === tracked) {
+        telemetryForwardChains.delete(key);
+      }
+    });
+  }
+
+  function handleSidecarLog(event) {
+    const details =
+      event?.details && typeof event.details === "object" && !Array.isArray(event.details)
+        ? event.details
+        : {};
+    const knownDeviceId = runtimeServer.resolveKnownDeviceId({
+      deviceId: details.deviceId ?? details.device_id ?? null,
+      knownDeviceId: details.knownDeviceId ?? details.known_device_id ?? null,
+      peripheralId: details.peripheralId ?? details.peripheral_id ?? null,
+      address: details.address ?? null,
+      localName: details.localName ?? details.local_name ?? null,
+    });
+
+    if (!knownDeviceId) {
+      return;
+    }
+
+    writeDeviceLog({
+      deviceId: knownDeviceId,
+      level: event?.level ?? "info",
+      code: "node.sidecar_log",
+      message: event?.message ?? "Windows BLE sidecar log",
+      bootId: typeof details.bootId === "string" ? details.bootId : null,
+      firmwareVersion:
+        typeof details.firmwareVersion === "string" ? details.firmwareVersion : null,
+      hardwareId: typeof details.hardwareId === "string" ? details.hardwareId : null,
+      metadata: toMetadataRecord(details),
+    });
   }
 
   function handleNodeDiscovered(node, scanReason = null) {
@@ -369,6 +434,7 @@ export function createRuntimeBridge({ config, runtimeServer, debug }) {
 
   return {
     forwardTelemetry,
+    handleSidecarLog,
     handleNodeDiscovered,
     handleNodeConnectionState,
   };

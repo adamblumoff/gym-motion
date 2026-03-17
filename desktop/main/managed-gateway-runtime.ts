@@ -38,6 +38,7 @@ import { createRuntimeLifecycle } from "./managed-gateway-runtime/lifecycle";
 import { createOperatorIntents } from "./managed-gateway-runtime/operator-intents";
 import { createRuntimeSync } from "./managed-gateway-runtime/runtime-sync";
 import { createDataEventHandler } from "./managed-gateway-runtime/data-events";
+import { createDataIngestController } from "./managed-gateway-runtime/data-ingest";
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
@@ -294,6 +295,10 @@ export function createManagedGatewayRuntime(
     refreshHistory: () => runtimeSync.refreshHistory(),
   });
 
+  const dataIngest = createDataIngestController({
+    applyDataEvent,
+  });
+
   async function refreshManualScanState() {
     await runtimeSync.refreshManualScanState();
   }
@@ -344,6 +349,7 @@ export function createManagedGatewayRuntime(
     },
     updateGatewayStatus,
     getApiBaseUrl: () => apiServer.apiBaseUrl,
+    onChildPersistMessage: (message) => dataIngest.handleMessage(message),
   });
 
   const runtimeLifecycle = createRuntimeLifecycle({

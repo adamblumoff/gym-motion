@@ -11,6 +11,10 @@ import type {
 
 import { resolveGatewayScriptPath, resolveWindowsSidecarPath } from "../gateway-runtime-target";
 import { buildGatewayChildEnv } from "./gateway-child-env";
+import {
+  parseGatewayChildPersistMessage,
+  type GatewayChildPersistMessage,
+} from "./gateway-child-ipc";
 import { EMPTY_GATEWAY } from "./snapshot";
 import { fetchJson } from "./common";
 
@@ -31,6 +35,7 @@ type RuntimeBridgeDeps = {
     issue: string | null,
   ) => void;
   getApiBaseUrl: () => string;
+  onChildPersistMessage: (message: GatewayChildPersistMessage) => Promise<void>;
 };
 
 export type RuntimeBridge = {
@@ -125,7 +130,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       {
         cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
         env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
       },
     );
     deps.setChild(spawnedChild);
@@ -135,6 +140,21 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     });
     spawnedChild.stderr?.on("data", (chunk) => {
       process.stderr.write(`[gateway] ${chunk}`);
+    });
+    spawnedChild.on("message", (message) => {
+      const parsedMessage = parseGatewayChildPersistMessage(message);
+
+      if (!parsedMessage) {
+        console.error("[runtime] ignored invalid gateway child IPC message", message);
+        return;
+      }
+
+      void deps.onChildPersistMessage(parsedMessage).catch((error) => {
+        console.error(
+          `[runtime] failed to persist gateway child message ${parsedMessage.type} for ${parsedMessage.deviceId}`,
+          error,
+        );
+      });
     });
     spawnedChild.once("exit", (code, signal) => {
       const wasIntentional = deps.intentionalChildExits.has(spawnedChild);

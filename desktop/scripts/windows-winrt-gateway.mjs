@@ -377,6 +377,7 @@ function handleSidecarEvent(event) {
         shouldWriteSidecarLog(event.level ?? "info", event.message ?? "sidecar log", config.verbose)
       ) {
         log(event.message ?? "sidecar log", event.details);
+        runtimeBridge.handleSidecarLog(event);
       }
       break;
     case "error":
