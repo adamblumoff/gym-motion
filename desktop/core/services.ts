@@ -17,6 +17,7 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   restartGatewayRuntime: "runtime:restart-gateway-runtime",
   rescanAdapters: "runtime:rescan-adapters",
   requestSilentReconnect: "runtime:request-silent-reconnect",
+  connectApprovedNode: "runtime:connect-approved-node",
   recoverApprovedNode: "runtime:recover-approved-node",
   resumeApprovedNodeReconnect: "runtime:resume-approved-node-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
@@ -73,6 +74,7 @@ export type DesktopApi = {
   restartGatewayRuntime: () => Promise<DesktopSnapshot>;
   rescanAdapters: () => Promise<DesktopSetupState>;
   requestSilentReconnect: () => Promise<void>;
+  connectApprovedNode: (ruleId: string) => Promise<void>;
   recoverApprovedNode: (ruleId: string) => Promise<void>;
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;

@@ -32,6 +32,9 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect, () =>
     runtime.requestSilentReconnect(),
   );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode, (_event, ruleId) =>
+    runtime.connectApprovedNode(ruleId),
+  );
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, (_event, ruleId) =>
     runtime.recoverApprovedNode(ruleId),
   );
@@ -55,6 +58,7 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);

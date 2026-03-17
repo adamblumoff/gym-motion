@@ -83,6 +83,9 @@ struct SessionHandle {
 enum SessionCommand {
     StartScan,
     RefreshScanPolicy,
+    ConnectApprovedNode {
+        rule_id: String,
+    },
     RecoverApprovedNode {
         rule_id: String,
     },
@@ -548,6 +551,17 @@ impl Sidecar {
                         .send(SessionCommand::RecoverApprovedNode { rule_id });
                 }
             }
+            Command::ConnectApprovedNode { rule_id } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::ConnectApprovedNode { rule_id });
+                }
+            }
             Command::ResumeApprovedNodeReconnect { rule_id } => {
                 if self.session.is_none() {
                     self.start_session().await?;
@@ -819,6 +833,36 @@ async fn run_session(
                     SessionCommand::RefreshScanPolicy => {
                         let allowed = allowed_nodes.read().await.clone();
                         prune_reconnect_states(&mut reconnect_states, &allowed);
+                    }
+                    SessionCommand::ConnectApprovedNode { rule_id } => {
+                        let allowed = allowed_nodes.read().await.clone();
+                        reconnect_states.insert(rule_id.clone(), ApprovedReconnectState::default());
+                        if recover_visible_approved_node(
+                            &adapter,
+                            &writer,
+                            &config,
+                            &selected_adapter_id,
+                            &allowed_nodes,
+                            &connected_nodes,
+                            &active_connections,
+                            &known_device_ids,
+                            &mut reconnect_states,
+                            &mut scanning,
+                            &mut current_scan_reason,
+                            manual_scan_deadline,
+                            &last_advertisement_at,
+                            &mut last_scan_progress_at,
+                            &mut startup_burst_deadline,
+                            &command_sender,
+                            &shutdown,
+                            &rule_id,
+                            false,
+                        )
+                        .await?
+                        {
+                            continue;
+                        }
+                        reconnect_scan_burst = 0;
                     }
                     SessionCommand::RecoverApprovedNode { rule_id } => {
                         let allowed = allowed_nodes.read().await.clone();

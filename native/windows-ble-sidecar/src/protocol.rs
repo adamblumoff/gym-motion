@@ -100,6 +100,7 @@ pub enum Command {
     Stop,
     Rescan,
     RefreshScanPolicy,
+    ConnectApprovedNode { rule_id: String },
     RecoverApprovedNode { rule_id: String },
     ResumeApprovedNodeReconnect { rule_id: String },
     Shutdown,
@@ -174,6 +175,17 @@ mod tests {
         .expect("command should serialize");
 
         assert_eq!(value["type"], "recover_approved_node");
+        assert_eq!(value["rule_id"], "known:stack-001");
+    }
+
+    #[test]
+    fn serializes_connect_approved_node_command() {
+        let value = serde_json::to_value(Command::ConnectApprovedNode {
+            rule_id: "known:stack-001".to_string(),
+        })
+        .expect("command should serialize");
+
+        assert_eq!(value["type"], "connect_approved_node");
         assert_eq!(value["rule_id"], "known:stack-001");
     }
 

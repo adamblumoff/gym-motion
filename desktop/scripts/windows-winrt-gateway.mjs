@@ -494,6 +494,13 @@ function attachControlReader() {
         return;
       }
 
+      if (command.type === "connect_approved_node" && typeof command.ruleId === "string") {
+        sendCommand("connect_approved_node", {
+          rule_id: command.ruleId,
+        });
+        return;
+      }
+
       if (command.type === "recover_approved_node" && typeof command.ruleId === "string") {
         sendCommand("recover_approved_node", {
           rule_id: command.ruleId,

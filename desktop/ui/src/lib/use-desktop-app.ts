@@ -5,6 +5,7 @@ import type {
   DesktopSetupState,
   DesktopSnapshot,
 } from "@core/contracts";
+import { matchesApprovedNodeIdentity } from "@core/approved-node-runtime-match";
 import {
   mergeActivityUpdate,
   mergeEventUpdate,
@@ -20,6 +21,46 @@ type DesktopAppState = {
   setup: DesktopSetupState | null;
   theme: ThemeState;
 };
+
+function filterSnapshotToApprovedNodes(
+  snapshot: DesktopSnapshot | null,
+  approvedNodes: ApprovedNodeRule[] | null,
+) {
+  if (!snapshot || approvedNodes === null) {
+    return snapshot;
+  }
+
+  const devices = snapshot.devices.filter((device) =>
+    approvedNodes.some((approvedNode) =>
+      matchesApprovedNodeIdentity(
+        approvedNode,
+        {
+          knownDeviceId: device.id,
+          peripheralId: device.peripheralId ?? null,
+          address: device.address ?? null,
+          localName: device.advertisedName ?? null,
+        },
+        approvedNodes,
+      ),
+    ),
+  );
+
+  if (devices.length === snapshot.devices.length) {
+    return snapshot;
+  }
+
+  const remainingDeviceIds = new Set(devices.map((device) => device.id));
+
+  return {
+    ...snapshot,
+    devices,
+    events: snapshot.events.filter((event) => remainingDeviceIds.has(event.deviceId)),
+    logs: snapshot.logs.filter((log) => remainingDeviceIds.has(log.deviceId)),
+    activities: snapshot.activities.filter((activity) =>
+      remainingDeviceIds.has(activity.deviceId),
+    ),
+  };
+}
 
 function applyRuntimeEvent(
   previousSnapshot: DesktopSnapshot | null,
@@ -107,6 +148,7 @@ export function useDesktopApp() {
 
       setState((current) => ({
         ...current,
+        snapshot: filterSnapshotToApprovedNodes(current.snapshot, setup.approvedNodes),
         setup,
       }));
     });
@@ -116,6 +158,10 @@ export function useDesktopApp() {
         setState((current) => ({
           ...current,
           setup: event.setup,
+          snapshot: filterSnapshotToApprovedNodes(
+            current.snapshot,
+            event.setup.approvedNodes,
+          ),
         }));
         return;
       }
@@ -123,7 +169,10 @@ export function useDesktopApp() {
       if (event.type === "gateway-updated" || event.type === "device-upserted") {
         setState((current) => ({
           ...current,
-          snapshot: applyRuntimeEvent(current.snapshot, event),
+          snapshot: filterSnapshotToApprovedNodes(
+            applyRuntimeEvent(current.snapshot, event),
+            current.setup?.approvedNodes ?? null,
+          ),
         }));
         return;
       }
@@ -131,7 +180,10 @@ export function useDesktopApp() {
       startTransition(() => {
         setState((current) => ({
           ...current,
-          snapshot: applyRuntimeEvent(current.snapshot, event),
+          snapshot: filterSnapshotToApprovedNodes(
+            applyRuntimeEvent(current.snapshot, event),
+            current.setup?.approvedNodes ?? null,
+          ),
         }));
       });
     });
@@ -174,11 +226,15 @@ export function useDesktopApp() {
       const setup = await window.gymMotionDesktop.rescanAdapters();
       setState((current) => ({
         ...current,
+        snapshot: filterSnapshotToApprovedNodes(current.snapshot, setup.approvedNodes),
         setup,
       }));
     },
     async requestSilentReconnect() {
       await window.gymMotionDesktop.requestSilentReconnect();
+    },
+    async connectApprovedNode(ruleId: string) {
+      await window.gymMotionDesktop.connectApprovedNode(ruleId);
     },
     async recoverApprovedNode(ruleId: string) {
       await window.gymMotionDesktop.recoverApprovedNode(ruleId);
@@ -190,6 +246,7 @@ export function useDesktopApp() {
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => ({
         ...current,
+        snapshot: filterSnapshotToApprovedNodes(current.snapshot, setup.approvedNodes),
         setup,
       }));
     },

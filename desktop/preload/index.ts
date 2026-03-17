@@ -23,6 +23,9 @@ const desktopApi: DesktopApi = {
   async requestSilentReconnect() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect);
   },
+  async connectApprovedNode(ruleId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode, ruleId);
+  },
   async recoverApprovedNode(ruleId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, ruleId);
   },

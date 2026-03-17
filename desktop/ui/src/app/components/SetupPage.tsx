@@ -12,7 +12,10 @@ import {
 import { toast } from 'sonner';
 
 import { isOperatorVisibleScan } from '@core/gateway-scan';
-import { buildApprovedNodeRules } from '../../lib/setup-rules';
+import {
+  buildApprovedNodeRules,
+  resolveApprovedNodeRuleId,
+} from '../../lib/setup-rules';
 import { buildPairedDevices, buildSetupVisibleDevices } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
 import { Badge } from './ui/badge';
@@ -43,6 +46,7 @@ export function SetupPage() {
     snapshot,
     rescanAdapters,
     requestSilentReconnect,
+    connectApprovedNode,
     recoverApprovedNode,
     setAllowedNodes,
   } = useDesktopRuntime();
@@ -131,12 +135,26 @@ export function SetupPage() {
     const nextIds = new Set(setup.approvedNodes.map((node) => node.id));
     nextIds.add(deviceId);
     const nextRules = buildApprovedNodeRules(setup, nextIds);
+    const visibleNode =
+      setup.nodes.find((node) => node.id === deviceId) ??
+      setup.approvedNodes.find((node) => node.id === deviceId);
+    const ruleId = visibleNode
+      ? resolveApprovedNodeRuleId(nextRules, {
+          fallbackId: deviceId,
+          peripheralId: visibleNode.peripheralId ?? null,
+          address: visibleNode.address ?? null,
+          localName:
+            "localName" in visibleNode ? visibleNode.localName ?? null : null,
+          knownDeviceId: visibleNode.knownDeviceId ?? null,
+        })
+      : deviceId;
     let pairedSaved = false;
 
     try {
       await setAllowedNodes(nextRules);
       pairedSaved = true;
       await requestSilentReconnect();
+      await connectApprovedNode(ruleId);
       setPendingPairIds((current) => removeFromSet(current, deviceId));
       toast.success('Device paired. Connecting...');
     } catch (error) {
