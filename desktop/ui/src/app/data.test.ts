@@ -958,7 +958,7 @@ describe("buildPairedDevices", () => {
     expect(devices[0]?.connectionState).toBe("reconnecting");
     expect(devices[0]?.name).toBe("Leg Press");
     expect(devices[0]?.macAddress).toBe("peripheral-1");
-    expect(devices[0]?.lastDisconnectReason).toBe("link lost");
+    expect(devices[0]?.lastDisconnectReason).toBeNull();
     expect(devices[0]?.reconnectAttempt).toBe(4);
   });
 
@@ -1275,8 +1275,99 @@ describe("buildPairedDevices", () => {
 
     expect(devices[0]?.name).toBe("Leg Press");
     expect(devices[0]?.macAddress).toBe("AA:BB");
+  expect(devices[0]?.connectionState).toBe("reconnecting");
+  expect(devices[0]?.signalStrength).toBe(84);
+  });
+
+  it("hides disconnect reasons while a paired node is already reconnecting", () => {
+    const devices = buildPairedDevices(
+      {
+        adapterIssue: null,
+        approvedNodes: [
+          {
+            id: "known:stack-001",
+            label: "Leg Press",
+            peripheralId: "peripheral-1",
+            address: "AA:BB:CC:DD",
+            localName: "GymMotion-f4e9d4",
+            knownDeviceId: "stack-001",
+          },
+        ],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
+      },
+      {
+        liveStatus: "Waiting for approved BLE nodes",
+        trayHint: "Waiting",
+        runtimeState: "running",
+        gatewayIssue: null,
+        gateway: {
+          hostname: "test-host",
+          mode: "reference-ble-node-gateway",
+          sessionId: "session-1",
+          adapterState: "poweredOn",
+          scanState: "scanning",
+          connectedNodeCount: 0,
+          reconnectingNodeCount: 1,
+          knownNodeCount: 1,
+          startedAt: new Date("2026-03-14T20:00:00.000Z").toISOString(),
+          updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+          lastAdvertisementAt: null,
+        },
+        devices: [
+          {
+            id: "stack-001",
+            lastState: "still",
+            lastSeenAt: Date.parse("2026-03-14T20:05:00.000Z"),
+            lastDelta: null,
+            updatedAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+            hardwareId: "hw-1",
+            bootId: "boot-1",
+            firmwareVersion: "0.5.2",
+            machineLabel: "Leg Press",
+            siteId: "Dallas",
+            provisioningState: "provisioned",
+            updateStatus: "idle",
+            updateTargetVersion: null,
+            updateDetail: null,
+            updateUpdatedAt: null,
+            lastHeartbeatAt: null,
+            lastEventReceivedAt: null,
+            healthStatus: "offline",
+            gatewayConnectionState: "reconnecting",
+            telemetryFreshness: "missing",
+            peripheralId: "peripheral-1",
+            address: "AA:BB:CC:DD",
+            gatewayLastAdvertisementAt: null,
+            gatewayLastConnectedAt: new Date("2026-03-14T20:04:00.000Z").toISOString(),
+            gatewayLastDisconnectedAt: new Date("2026-03-14T20:05:05.000Z").toISOString(),
+            gatewayLastTelemetryAt: null,
+            gatewayDisconnectReason: "manual recovery failed: app-session lease step failed",
+            advertisedName: "GymMotion-f4e9d4",
+            lastRssi: -62,
+            otaStatus: "idle",
+            otaTargetVersion: null,
+            otaProgressBytesSent: null,
+            otaTotalBytes: null,
+            otaLastPhase: null,
+            otaFailureDetail: null,
+            otaLastStatusMessage: null,
+            otaUpdatedAt: null,
+            reconnectAttempt: 1,
+            reconnectAttemptLimit: 20,
+            reconnectRetryExhausted: false,
+          },
+        ],
+        events: [],
+        logs: [],
+        activities: [],
+      },
+    );
+
     expect(devices[0]?.connectionState).toBe("reconnecting");
-    expect(devices[0]?.signalStrength).toBe(84);
+    expect(devices[0]?.lastDisconnectReason).toBeNull();
   });
 
   it("surfaces disconnect reasons and recovery metadata for paired nodes", () => {

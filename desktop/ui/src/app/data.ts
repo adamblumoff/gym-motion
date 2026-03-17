@@ -198,7 +198,10 @@ export function buildPairedDevices(
       reconnectAttemptLimit: runtimeDevice?.reconnectAttemptLimit ?? 20,
       reconnectRetryExhausted: runtimeDevice?.reconnectRetryExhausted ?? false,
       reconnectAwaitingDecision: runtimeDevice?.reconnectAwaitingDecision ?? false,
-      lastDisconnectReason: runtimeDevice?.gatewayDisconnectReason ?? null,
+      lastDisconnectReason:
+        runtimeDevice?.gatewayConnectionState === "disconnected"
+          ? runtimeDevice.gatewayDisconnectReason ?? null
+          : null,
     };
   });
 }
