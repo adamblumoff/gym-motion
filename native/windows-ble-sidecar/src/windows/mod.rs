@@ -35,7 +35,7 @@ use self::{
         mark_node_connected, next_reconnect_attempt, node_key, prune_reconnect_states,
         reconnect_candidate_ready, reconnect_status_for_rule, rule_matches_node, scan_reason,
         should_clear_reconnect_peripherals, should_restart_approved_reconnect_scan, should_scan,
-        ApprovedReconnectState, APPROVED_RECONNECT_SCAN_BURST_LIMIT,
+        ApprovedReconnectState, DiscoveryClassification, APPROVED_RECONNECT_SCAN_BURST_LIMIT,
         APPROVED_RECONNECT_SCAN_BURST_MS, RECONNECT_ATTEMPT_LIMIT,
     },
     config::Config,
@@ -114,6 +114,15 @@ fn added_allowed_rule_ids(
         .filter(|rule| !previous_rules.iter().any(|previous| previous.id == rule.id))
         .map(|rule| rule.id.clone())
         .collect()
+}
+
+fn explicit_connect_candidate_ready(
+    classification: &DiscoveryClassification,
+    local_name_present: bool,
+    allow_name_prefix_connect: bool,
+) -> bool {
+    reconnect_candidate_ready(classification, local_name_present, None)
+        || (allow_name_prefix_connect && classification.name_prefix_matched)
 }
 
 async fn emit_gateway_state(
@@ -857,6 +866,7 @@ async fn run_session(
                             &shutdown,
                             &rule_id,
                             false,
+                            true,
                         )
                         .await?
                         {
@@ -904,6 +914,7 @@ async fn run_session(
                             &command_sender,
                             &shutdown,
                             &rule_id,
+                            true,
                             true,
                         )
                         .await?
@@ -988,6 +999,7 @@ async fn run_session(
                                 &command_sender,
                                 &shutdown,
                                 &rule_id,
+                                false,
                                 false,
                             )
                             .await?
@@ -1966,6 +1978,7 @@ async fn recover_visible_approved_node(
     shutdown: &watch::Receiver<bool>,
     rule_id: &str,
     manual_recovery: bool,
+    allow_name_prefix_connect: bool,
 ) -> Result<bool> {
     let allowed = allowed_nodes.read().await.clone();
     let allow_identity_fallback = allow_approved_identity_fallback(
@@ -1997,10 +2010,10 @@ async fn recover_visible_approved_node(
             continue;
         }
 
-        if !reconnect_candidate_ready(
+        if !explicit_connect_candidate_ready(
             &candidate.classification,
             candidate.node.local_name.is_some(),
-            None,
+            allow_name_prefix_connect,
         ) {
             continue;
         }
@@ -2052,6 +2065,7 @@ async fn recover_visible_approved_node(
                 "approvedIdentityMatched": candidate.classification.approved_identity_matched,
                 "namePrefixMatched": candidate.classification.name_prefix_matched,
                 "manualRecovery": manual_recovery,
+                "operatorVisibleDirectConnect": allow_name_prefix_connect,
                 "immediateVisibleMatch": true,
             }),
         )
@@ -4004,6 +4018,29 @@ mod tests {
             false,
             Some(&record),
         ));
+    }
+
+    #[test]
+    fn explicit_windows_pairing_can_connect_visible_name_prefix_nodes() {
+        let classification = classify_discovery_candidate(
+            "peripheral-2",
+            Some("aa:bb"),
+            Some("GymMotion-f4e9d4"),
+            false,
+            &Config {
+                service_uuid: Uuid::nil(),
+                telemetry_uuid: Uuid::nil(),
+                control_uuid: Uuid::nil(),
+                status_uuid: Uuid::nil(),
+                device_name_prefix: "GymMotion-".to_string(),
+                verbose_logging: false,
+            },
+            &[],
+            &HashMap::new(),
+        );
+
+        assert!(explicit_connect_candidate_ready(&classification, true, true));
+        assert!(!explicit_connect_candidate_ready(&classification, true, false));
     }
 
     #[test]

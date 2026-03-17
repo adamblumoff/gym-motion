@@ -155,7 +155,6 @@ export function SetupPage() {
       pairedSaved = true;
       await requestSilentReconnect();
       await connectApprovedNode(ruleId);
-      await recoverApprovedNode(ruleId);
       setPendingPairIds((current) => removeFromSet(current, deviceId));
       toast.success('Device paired. Connecting...');
     } catch (error) {
