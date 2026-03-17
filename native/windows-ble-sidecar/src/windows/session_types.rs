@@ -11,9 +11,28 @@ pub(super) struct SessionHandle {
     pub(super) task: JoinHandle<()>,
 }
 
+pub(super) enum ActiveSessionCommand {
+    StartHistorySync {
+        after_sequence: u64,
+        max_records: usize,
+    },
+    AckHistorySync {
+        sequence: u64,
+    },
+}
+
 pub(super) enum SessionCommand {
     StartManualScan,
     RefreshScanPolicy,
+    StartHistorySync {
+        connection_id: String,
+        after_sequence: u64,
+        max_records: usize,
+    },
+    AckHistorySync {
+        connection_id: String,
+        sequence: u64,
+    },
     PairManualCandidate {
         candidate_id: String,
     },

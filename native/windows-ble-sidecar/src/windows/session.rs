@@ -32,7 +32,7 @@ use super::{
         pause_approved_reconnect_for_operator_decision, restart_approved_reconnect_scan,
         sync_scan_state, APPROVED_RECONNECT_DIAGNOSTIC_MS,
     },
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
     session_util::{emit_verbose_log, normalize_adapter_state},
     writer::EventWriter,
 };
@@ -46,6 +46,8 @@ pub(super) struct SessionContext {
     pub(super) config: Config,
     pub(super) allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     pub(super) active_connections: Arc<Mutex<HashMap<String, DiscoveredNode>>>,
+    pub(super) active_session_controls:
+        Arc<Mutex<HashMap<String, mpsc::UnboundedSender<ActiveSessionCommand>>>>,
     pub(super) known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     pub(super) command_sender: mpsc::UnboundedSender<SessionCommand>,
 }
@@ -261,6 +263,7 @@ pub(super) async fn run_session(
         config,
         allowed_nodes,
         active_connections: Arc::new(Mutex::new(HashMap::new())),
+        active_session_controls: Arc::new(Mutex::new(HashMap::new())),
         known_device_ids: Arc::new(RwLock::new(HashMap::new())),
         command_sender,
     };

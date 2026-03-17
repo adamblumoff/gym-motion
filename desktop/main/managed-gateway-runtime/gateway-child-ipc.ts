@@ -8,6 +8,14 @@ export type GatewayChildPersistMessage = {
   type: GatewayChildPersistMessageType;
   deviceId: string;
   payload: unknown;
+  requestId?: string;
+};
+
+export type GatewayChildPersistResult = {
+  type: "persist-result";
+  requestId: string;
+  ok: boolean;
+  error?: string;
 };
 
 function isRecord(input: unknown): input is Record<string, unknown> {
@@ -30,7 +38,7 @@ export function parseGatewayChildPersistMessage(
     return null;
   }
 
-  const { type, deviceId, payload } = input;
+  const { type, deviceId, payload, requestId } = input;
 
   if (!isMessageType(type)) {
     return null;
@@ -40,9 +48,26 @@ export function parseGatewayChildPersistMessage(
     return null;
   }
 
+  if (requestId !== undefined && typeof requestId !== "string") {
+    return null;
+  }
+
   return {
     type,
     deviceId,
     payload,
+    requestId,
+  };
+}
+
+export function createGatewayChildPersistResult(
+  requestId: string,
+  outcome: { ok: true } | { ok: false; error: string },
+): GatewayChildPersistResult {
+  return {
+    type: "persist-result",
+    requestId,
+    ok: outcome.ok,
+    ...(outcome.ok ? {} : { error: outcome.error }),
   };
 }

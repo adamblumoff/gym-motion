@@ -163,6 +163,38 @@ impl Sidecar {
                 self.selected_adapter_id = Some(adapter_id);
                 self.emit_adapters().await?;
             }
+            Command::StartHistorySync {
+                connection_id,
+                after_sequence,
+                max_records,
+            } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session.commands.send(SessionCommand::StartHistorySync {
+                        connection_id,
+                        after_sequence,
+                        max_records,
+                    });
+                }
+            }
+            Command::AckHistorySync {
+                connection_id,
+                sequence,
+            } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session.commands.send(SessionCommand::AckHistorySync {
+                        connection_id,
+                        sequence,
+                    });
+                }
+            }
             Command::SetAllowedNodes { nodes } => {
                 let previous_nodes = self.allowed_nodes.read().await.clone();
                 let added_rule_ids = added_allowed_rule_ids(&previous_nodes, &nodes);

@@ -17,6 +17,10 @@ type CompactionNoticeRow = {
   message: string;
 };
 
+type SyncOverflowRow = {
+  last_overflow_detected_at: Date | null;
+};
+
 export { buildMovementAnalyticsFromEvents } from "../../../shared/movement-analytics";
 
 export async function getDeviceMovementAnalytics(
@@ -29,7 +33,14 @@ export async function getDeviceMovementAnalytics(
   const rangeStartAt = new Date(now.getTime() - windowMs);
   const db = getDb();
 
-  const [precedingResult, eventsResult, olderHistoryResult, lastEventResult, compactionResult] =
+  const [
+    precedingResult,
+    eventsResult,
+    olderHistoryResult,
+    lastEventResult,
+    compactionResult,
+    syncOverflowResult,
+  ] =
     await Promise.all([
       db.query<MotionAnalyticsEventRow>(
         `select
@@ -84,7 +95,21 @@ export async function getDeviceMovementAnalytics(
          limit 1`,
         [deviceId],
       ),
+      db.query<SyncOverflowRow>(
+        `select last_overflow_detected_at
+         from device_sync_state
+         where device_id = $1`,
+        [deviceId],
+      ),
     ]);
+
+  const lastOverflowDetectedAt =
+    syncOverflowResult.rows[0]?.last_overflow_detected_at?.toISOString() ?? null;
+  const compactionNotice =
+    compactionResult.rows[0]?.message ??
+    (lastOverflowDetectedAt
+      ? "The device compacted archived movement history before the gateway caught up, so some older detail may be missing."
+      : null);
 
   const analytics = buildMovementAnalyticsFromEvents({
     deviceId,
@@ -103,7 +128,7 @@ export async function getDeviceMovementAnalytics(
     })),
     hasOlderHistory: olderHistoryResult.rows[0]?.has_older_history ?? false,
     lastCanonicalEventAt: lastEventResult.rows[0]?.received_at?.toISOString() ?? null,
-    compactionNotice: compactionResult.rows[0]?.message ?? null,
+    compactionNotice,
   });
 
   return {

@@ -12,7 +12,7 @@ use super::{
     config::Config,
     session_transport_monitor::{monitor_active_session, MonitorSessionConfig},
     session_transport_setup::{prepare_session_stream, PrepareSessionConfig},
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
 };
 
@@ -40,6 +40,7 @@ pub(super) async fn connect_and_stream(
     reconnect: Option<ReconnectStatus>,
     session_shutdown: watch::Receiver<bool>,
     command_sender: mpsc::UnboundedSender<SessionCommand>,
+    session_commands: mpsc::UnboundedReceiver<ActiveSessionCommand>,
 ) -> Result<Option<String>> {
     let app_session_id = Uuid::new_v4().to_string();
     let app_session_nonce = Uuid::new_v4().to_string();
@@ -89,6 +90,7 @@ pub(super) async fn connect_and_stream(
         reconnect,
         session_shutdown,
         command_sender,
+        session_commands,
         app_session_id,
         app_session_nonce,
         reconnect_started_at,

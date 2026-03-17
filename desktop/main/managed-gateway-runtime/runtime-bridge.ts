@@ -12,6 +12,7 @@ import type {
 import { resolveGatewayScriptPath, resolveWindowsSidecarPath } from "../gateway-runtime-target";
 import { buildGatewayChildEnv } from "./gateway-child-env";
 import {
+  createGatewayChildPersistResult,
   parseGatewayChildPersistMessage,
   type GatewayChildPersistMessage,
 } from "./gateway-child-ipc";
@@ -149,12 +150,34 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         return;
       }
 
-      void deps.onChildPersistMessage(parsedMessage).catch((error) => {
-        console.error(
-          `[runtime] failed to persist gateway child message ${parsedMessage.type} for ${parsedMessage.deviceId}`,
-          error,
-        );
-      });
+      void deps
+        .onChildPersistMessage(parsedMessage)
+        .then(() => {
+          if (!parsedMessage.requestId || !spawnedChild.connected) {
+            return;
+          }
+
+          spawnedChild.send(
+            createGatewayChildPersistResult(parsedMessage.requestId, { ok: true }),
+          );
+        })
+        .catch((error) => {
+          console.error(
+            `[runtime] failed to persist gateway child message ${parsedMessage.type} for ${parsedMessage.deviceId}`,
+            error,
+          );
+
+          if (!parsedMessage.requestId || !spawnedChild.connected) {
+            return;
+          }
+
+          spawnedChild.send(
+            createGatewayChildPersistResult(parsedMessage.requestId, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        });
     });
     spawnedChild.once("exit", (code, signal) => {
       const wasIntentional = deps.intentionalChildExits.has(spawnedChild);

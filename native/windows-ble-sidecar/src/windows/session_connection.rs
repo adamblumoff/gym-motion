@@ -6,7 +6,7 @@ use btleplug::{
     platform::{Adapter, Peripheral},
 };
 use serde_json::json;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::protocol::{ApprovedNodeRule, DiscoveredNode, Event, ReconnectStatus};
 
@@ -209,10 +209,17 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
     let config_clone = context.config.clone();
     let allowed_nodes_clone = context.allowed_nodes.clone();
     let active_connections_clone = context.active_connections.clone();
+    let active_session_controls_clone = context.active_session_controls.clone();
     let known_device_ids_clone = context.known_device_ids.clone();
     let command_tx_clone = context.command_sender.clone();
     let shutdown_clone = shutdown.clone();
     let node_for_task = node.clone();
+    let (session_command_tx, session_command_rx) = mpsc::unbounded_channel();
+    context
+        .active_session_controls
+        .lock()
+        .await
+        .insert(key.clone(), session_command_tx);
 
     tokio::spawn(async move {
         let result = connect_and_stream(
@@ -230,6 +237,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
             }),
             shutdown_clone,
             command_tx_clone.clone(),
+            session_command_rx,
         )
         .await;
 
@@ -285,6 +293,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
         }
 
         active_connections_clone.lock().await.remove(&key);
+        active_session_controls_clone.lock().await.remove(&key);
     });
 
     Ok(true)
@@ -350,10 +359,17 @@ pub(super) async fn spawn_manual_pair_for_candidate(
     let config_clone = context.config.clone();
     let allowed_nodes_clone = context.allowed_nodes.clone();
     let active_connections_clone = context.active_connections.clone();
+    let active_session_controls_clone = context.active_session_controls.clone();
     let known_device_ids_clone = context.known_device_ids.clone();
     let command_tx_clone = context.command_sender.clone();
     let shutdown_clone = shutdown.clone();
     let node_for_task = node.clone();
+    let (session_command_tx, session_command_rx) = mpsc::unbounded_channel();
+    context
+        .active_session_controls
+        .lock()
+        .await
+        .insert(key.clone(), session_command_tx);
 
     tokio::spawn(async move {
         let result = connect_and_stream(
@@ -366,6 +382,7 @@ pub(super) async fn spawn_manual_pair_for_candidate(
             None,
             shutdown_clone,
             command_tx_clone.clone(),
+            session_command_rx,
         )
         .await;
 
@@ -398,6 +415,7 @@ pub(super) async fn spawn_manual_pair_for_candidate(
         }
 
         active_connections_clone.lock().await.remove(&key);
+        active_session_controls_clone.lock().await.remove(&key);
     });
 
     Ok(true)

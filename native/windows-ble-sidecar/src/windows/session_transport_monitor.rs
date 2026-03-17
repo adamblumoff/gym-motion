@@ -16,8 +16,8 @@ use tokio::{
 use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
-        ApprovedNodeRule, DiscoveredNode, Event, ReconnectStatus, RuntimeStatusPayload,
-        TelemetryPayload,
+        ApprovedNodeRule, DiscoveredNode, Event, HistoryRecordStatusPayload,
+        HistorySyncCompletePayload, ReconnectStatus, RuntimeStatusPayload, TelemetryPayload,
     },
 };
 
@@ -29,7 +29,7 @@ use super::{
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
     session_transport_setup::PreparedSession,
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
 };
 
@@ -39,6 +39,59 @@ pub(super) struct MonitorSessionConfig {
     pub(super) session_health_ack_timeout_ms: u64,
     pub(super) session_bootstrap_retry_limit: u32,
     pub(super) session_telemetry_confirm_retry_limit: u32,
+}
+
+async fn enrich_node_with_device_id(
+    node: &DiscoveredNode,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    device_id: &str,
+) -> DiscoveredNode {
+    if let Some(peripheral_id) = node.peripheral_id.clone() {
+        known_device_ids
+            .write()
+            .await
+            .insert(peripheral_id, device_id.to_string());
+    }
+
+    let mut enriched = node.clone();
+    enriched.known_device_id = Some(device_id.to_string());
+    enriched
+}
+
+async fn send_history_sync_begin(
+    peripheral: &btleplug::platform::Peripheral,
+    control_characteristic: &btleplug::api::Characteristic,
+    node: &DiscoveredNode,
+    after_sequence: u64,
+    max_records: usize,
+) -> Result<()> {
+    let payload = json!({
+        "type": "history-sync-begin",
+        "afterSequence": after_sequence,
+        "maxRecords": max_records,
+    })
+    .to_string();
+
+    write_chunked_json_command(peripheral, control_characteristic, &payload)
+        .await
+        .with_context(|| format!("history-sync-begin failed for {}", node.label))
+}
+
+async fn send_history_ack(
+    peripheral: &btleplug::platform::Peripheral,
+    control_characteristic: &btleplug::api::Characteristic,
+    node: &DiscoveredNode,
+    sequence: u64,
+) -> Result<()> {
+    let payload = json!({
+        "type": "history-ack",
+        "sequence": sequence,
+    })
+    .to_string();
+
+    write_chunked_json_command(peripheral, control_characteristic, &payload)
+        .await
+        .with_context(|| format!("history-ack failed for {}", node.label))
 }
 
 pub(super) async fn monitor_active_session(
@@ -51,6 +104,7 @@ pub(super) async fn monitor_active_session(
     reconnect: Option<ReconnectStatus>,
     mut session_shutdown: watch::Receiver<bool>,
     command_sender: mpsc::UnboundedSender<SessionCommand>,
+    mut session_commands: mpsc::UnboundedReceiver<ActiveSessionCommand>,
     app_session_id: String,
     app_session_nonce: String,
     reconnect_started_at: Instant,
@@ -118,94 +172,145 @@ pub(super) async fn monitor_active_session(
 
                 if notification.uuid == config.status_uuid {
                     for payload in status_decoder.push_bytes(&notification.value)? {
+                        let payload_clone = payload.clone();
+
                         match serde_json::from_value::<RuntimeStatusPayload>(payload) {
                             Ok(status) => {
-                                if status.status_type != "app-session-online" {
-                                    continue;
-                                }
+                                match status.status_type.as_str() {
+                                    "app-session-online" => {
+                                        let Some(session_id) = status.session_id.clone() else {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "Ignoring app-session-online status without a session id.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                    })),
+                                                })
+                                                .await?;
+                                            continue;
+                                        };
 
-                                let Some(session_id) = status.session_id.clone() else {
-                                    writer
-                                        .send(&Event::Log {
-                                            level: "warn".to_string(),
-                                            message: "Ignoring app-session-online status without a session id.".to_string(),
-                                            details: Some(json!({
-                                                "peripheralId": node.peripheral_id,
-                                                "knownDeviceId": node.known_device_id,
-                                                "address": node.address,
-                                            })),
-                                        })
+                                        if session_id != app_session_id {
+                                            continue;
+                                        }
+                                        let Some(session_nonce) = status.session_nonce.clone() else {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "Ignoring app-session-online status without a session nonce.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                        "expectedSessionId": app_session_id,
+                                                    })),
+                                                })
+                                                .await?;
+                                            continue;
+                                        };
+                                        if session_nonce != app_session_nonce {
+                                            continue;
+                                        }
+                                        ack_session_id = Some(session_id);
+                                        ack_received = true;
+                                        let enriched = if let Some(device_id) = status.device_id.clone() {
+                                            enrich_node_with_device_id(&node, &known_device_ids, &device_id).await
+                                        } else {
+                                            node.clone()
+                                        };
+                                        ack_confirmed_node = Some(enriched.clone());
+                                        emit_handshake_step(
+                                            &writer,
+                                            config.verbose_logging,
+                                            &node,
+                                            &reconnect,
+                                            "sending sync-now",
+                                        )
                                         .await?;
-                                    continue;
-                                };
-
-                                if session_id != app_session_id {
-                                    continue;
-                                }
-                                let Some(session_nonce) = status.session_nonce.clone() else {
-                                    writer
-                                        .send(&Event::Log {
-                                            level: "warn".to_string(),
-                                            message: "Ignoring app-session-online status without a session nonce.".to_string(),
-                                            details: Some(json!({
-                                                "peripheralId": node.peripheral_id,
-                                                "knownDeviceId": node.known_device_id,
-                                                "address": node.address,
-                                                "expectedSessionId": app_session_id,
-                                            })),
-                                        })
-                                        .await?;
-                                    continue;
-                                };
-                                if session_nonce != app_session_nonce {
-                                    continue;
-                                }
-                                ack_session_id = Some(session_id);
-                                ack_received = true;
-                                let mut enriched = node.clone();
-                                if let Some(device_id) = status.device_id.clone() {
-                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
-                                        known_device_ids
-                                            .write()
-                                            .await
-                                            .insert(peripheral_id, device_id.clone());
+                                        if let Err(error) = write_chunked_json_command(
+                                            &prepared.peripheral,
+                                            &current_control_characteristic,
+                                            r#"{"type":"sync-now"}"#,
+                                        )
+                                        .await
+                                        {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: format!("sync-now step failed for {}", node.label),
+                                                    details: Some(json!({
+                                                        "peripheralId": enriched.peripheral_id,
+                                                        "knownDeviceId": enriched.known_device_id,
+                                                        "address": enriched.address,
+                                                        "error": format!("{:#}", error),
+                                                    })),
+                                                })
+                                                .await?;
+                                        }
+                                        session_health_sleep.as_mut().reset(
+                                            (Instant::now()
+                                                + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
+                                            .into(),
+                                        );
                                     }
-                                    enriched.known_device_id = Some(device_id);
+                                    "history-record" => {
+                                        match serde_json::from_value::<HistoryRecordStatusPayload>(payload_clone) {
+                                            Ok(history_record) => {
+                                                let enriched = enrich_node_with_device_id(
+                                                    &node,
+                                                    &known_device_ids,
+                                                    &history_record.device_id,
+                                                )
+                                                .await;
+                                                writer
+                                                    .send(&Event::HistoryRecord {
+                                                        node: enriched,
+                                                        device_id: history_record.device_id,
+                                                        record: history_record.record,
+                                                    })
+                                                    .await?;
+                                            }
+                                            Err(error) => {
+                                                writer
+                                                    .error(
+                                                        format!("Failed to parse history record payload: {error}"),
+                                                        Some(json!({ "node": node.id })),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                    "history-sync-complete" => {
+                                        match serde_json::from_value::<HistorySyncCompletePayload>(payload_clone) {
+                                            Ok(history_complete) => {
+                                                let enriched = enrich_node_with_device_id(
+                                                    &node,
+                                                    &known_device_ids,
+                                                    &history_complete.device_id,
+                                                )
+                                                .await;
+                                                writer
+                                                    .send(&Event::HistorySyncComplete {
+                                                        node: enriched,
+                                                        payload: history_complete,
+                                                    })
+                                                    .await?;
+                                            }
+                                            Err(error) => {
+                                                writer
+                                                    .error(
+                                                        format!("Failed to parse history sync completion payload: {error}"),
+                                                        Some(json!({ "node": node.id })),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                ack_confirmed_node = Some(enriched.clone());
-                                emit_handshake_step(
-                                    &writer,
-                                    config.verbose_logging,
-                                    &node,
-                                    &reconnect,
-                                    "sending sync-now",
-                                )
-                                .await?;
-                                if let Err(error) = write_chunked_json_command(
-                                    &prepared.peripheral,
-                                    &current_control_characteristic,
-                                    r#"{"type":"sync-now"}"#,
-                                )
-                                .await
-                                {
-                                    writer
-                                        .send(&Event::Log {
-                                            level: "warn".to_string(),
-                                            message: format!("sync-now step failed for {}", node.label),
-                                            details: Some(json!({
-                                                "peripheralId": enriched.peripheral_id,
-                                                "knownDeviceId": enriched.known_device_id,
-                                                "address": enriched.address,
-                                                "error": format!("{:#}", error),
-                                            })),
-                                        })
-                                        .await?;
-                                }
-                                session_health_sleep.as_mut().reset(
-                                    (Instant::now()
-                                        + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
-                                    .into(),
-                                );
                             }
                             Err(error) => {
                                 writer
@@ -271,6 +376,52 @@ pub(super) async fn monitor_active_session(
                                 )
                                 .await;
                         }
+                    }
+                }
+            }
+            Some(command) = session_commands.recv() => {
+                match command {
+                    ActiveSessionCommand::StartHistorySync {
+                        after_sequence,
+                        max_records,
+                    } => {
+                        if !session_healthy_reported {
+                            writer
+                                .send(&Event::Log {
+                                    level: "warn".to_string(),
+                                    message: "Ignoring history sync request until the active session is healthy.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": ack_confirmed_node
+                                            .as_ref()
+                                            .and_then(|current| current.known_device_id.clone())
+                                            .or_else(|| node.known_device_id.clone()),
+                                        "address": node.address,
+                                        "afterSequence": after_sequence,
+                                        "maxRecords": max_records,
+                                    })),
+                                })
+                                .await?;
+                            continue;
+                        }
+
+                        send_history_sync_begin(
+                            &prepared.peripheral,
+                            &current_control_characteristic,
+                            &node,
+                            after_sequence,
+                            max_records,
+                        )
+                        .await?;
+                    }
+                    ActiveSessionCommand::AckHistorySync { sequence } => {
+                        send_history_ack(
+                            &prepared.peripheral,
+                            &current_control_characteristic,
+                            &node,
+                            sequence,
+                        )
+                        .await?;
                     }
                 }
             }

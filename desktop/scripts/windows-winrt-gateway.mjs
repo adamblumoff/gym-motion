@@ -17,6 +17,7 @@ import {
   normalizeAllowedNodesPayload,
 } from "./windows-winrt-gateway-node.mjs";
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
+import { createHistorySyncCoordinator } from "./windows-winrt-gateway-history-sync.mjs";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.mjs";
 
 const config = createGatewayConfig();
@@ -61,6 +62,11 @@ const runtimeBridge = createRuntimeBridge({
   config,
   runtimeServer,
   debug,
+});
+
+const historySync = createHistorySyncCoordinator({
+  debug,
+  sendSidecarCommand: sendCommand,
 });
 
 function setRuntimeIssue(issue) {
@@ -348,6 +354,18 @@ function handleSidecarEvent(event) {
       break;
     case "node_connection_state":
       runtimeBridge.handleNodeConnectionState(event);
+      historySync.handleNodeConnectionState(event);
+      break;
+    case "history_record":
+      historySync.handleHistoryRecord(event);
+      break;
+    case "history_sync_complete":
+      void historySync.handleHistorySyncComplete(event).catch((error) => {
+        console.error("[gateway-winrt] failed to persist history sync page", error);
+        setRuntimeIssue(
+          error instanceof Error ? error.message : "History sync persistence failed.",
+        );
+      });
       break;
     case "telemetry": {
       const payload = {

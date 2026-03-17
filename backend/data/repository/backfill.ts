@@ -67,54 +67,56 @@ export async function recordBackfillBatch(
     const lastState = lastMotionRecord?.state ?? null;
     const lastDelta = lastMotionRecord?.delta ?? null;
 
-    await client.query<DeviceRow>(
-      `insert into devices (
-         id,
-         last_state,
-         last_seen_at,
-         last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         provisioning_state,
-         update_status,
-         last_event_received_at
-       )
-       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
-       on conflict (id) do update
-       set last_state = case
-             when $2::text is null then devices.last_state
-             when $3 >= devices.last_seen_at then $2::text
-             else devices.last_state
-           end,
-           last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
-           last_delta = case
-             when $2::text is null then devices.last_delta
-             when $3 >= devices.last_seen_at then coalesce($4::int, devices.last_delta)
-             else devices.last_delta
-           end,
-           updated_at = now(),
-           hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
-           boot_id = coalesce(excluded.boot_id, devices.boot_id),
-           firmware_version = coalesce(excluded.firmware_version, devices.firmware_version),
-           provisioning_state = case
-             when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
-             else devices.provisioning_state
-           end,
-           last_event_received_at = now()
-       returning
-         ${DEVICE_SELECT_COLUMNS}`,
-      [
-        input.deviceId,
-        lastState,
-        maxTimestamp,
-        lastDelta,
-        lastMotionRecord?.hardwareId ?? input.records.at(-1)?.hardwareId ?? null,
-        input.bootId ?? input.records.at(-1)?.bootId ?? null,
-        input.records.at(-1)?.firmwareVersion ?? "unknown",
-      ],
-    );
+    if (input.records.length > 0) {
+      await client.query<DeviceRow>(
+        `insert into devices (
+           id,
+           last_state,
+           last_seen_at,
+           last_delta,
+           updated_at,
+           hardware_id,
+           boot_id,
+           firmware_version,
+           provisioning_state,
+           update_status,
+           last_event_received_at
+         )
+         values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+         on conflict (id) do update
+         set last_state = case
+               when $2::text is null then devices.last_state
+               when $3 >= devices.last_seen_at then $2::text
+               else devices.last_state
+             end,
+             last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
+             last_delta = case
+               when $2::text is null then devices.last_delta
+               when $3 >= devices.last_seen_at then coalesce($4::int, devices.last_delta)
+               else devices.last_delta
+             end,
+             updated_at = now(),
+             hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
+             boot_id = coalesce(excluded.boot_id, devices.boot_id),
+             firmware_version = coalesce(excluded.firmware_version, devices.firmware_version),
+             provisioning_state = case
+               when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
+               else devices.provisioning_state
+             end,
+             last_event_received_at = now()
+         returning
+           ${DEVICE_SELECT_COLUMNS}`,
+        [
+          input.deviceId,
+          lastState,
+          maxTimestamp,
+          lastDelta,
+          lastMotionRecord?.hardwareId ?? input.records.at(-1)?.hardwareId ?? null,
+          input.bootId ?? input.records.at(-1)?.bootId ?? null,
+          input.records.at(-1)?.firmwareVersion ?? "unknown",
+        ],
+      );
+    }
 
     const insertedEvents = [];
     const insertedLogs = [];

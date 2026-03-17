@@ -17,7 +17,7 @@ use super::{
         peripheral_for_node, recover_visible_approved_node, spawn_manual_pair_for_candidate,
     },
     session_scan::emit_manual_scan_state,
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
 };
 
 pub(super) async fn handle_session_command(
@@ -37,6 +37,90 @@ pub(super) async fn handle_session_command(
         SessionCommand::RefreshScanPolicy => {
             let allowed = context.allowed_nodes.read().await.clone();
             prune_reconnect_states(&mut state.reconnect_states, &allowed);
+        }
+        SessionCommand::StartHistorySync {
+            connection_id,
+            after_sequence,
+            max_records,
+        } => {
+            let sender = {
+                let controls = context.active_session_controls.lock().await;
+                controls.get(&connection_id).cloned()
+            };
+            let Some(sender) = sender else {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Skipping history sync request because the node is no longer connected.".to_string(),
+                        details: Some(json!({
+                            "connectionId": connection_id,
+                            "afterSequence": after_sequence,
+                            "maxRecords": max_records,
+                        })),
+                    })
+                    .await?;
+                return Ok(());
+            };
+            if sender
+                .send(ActiveSessionCommand::StartHistorySync {
+                    after_sequence,
+                    max_records,
+                })
+                .is_err()
+            {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Skipping history sync request because the active session no longer accepts commands.".to_string(),
+                        details: Some(json!({
+                            "connectionId": connection_id,
+                            "afterSequence": after_sequence,
+                            "maxRecords": max_records,
+                        })),
+                    })
+                    .await?;
+            }
+        }
+        SessionCommand::AckHistorySync {
+            connection_id,
+            sequence,
+        } => {
+            let sender = {
+                let controls = context.active_session_controls.lock().await;
+                controls.get(&connection_id).cloned()
+            };
+            let Some(sender) = sender else {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Skipping history ack because the node is no longer connected.".to_string(),
+                        details: Some(json!({
+                            "connectionId": connection_id,
+                            "sequence": sequence,
+                        })),
+                    })
+                    .await?;
+                return Ok(());
+            };
+            if sender
+                .send(ActiveSessionCommand::AckHistorySync { sequence })
+                .is_err()
+            {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Skipping history ack because the active session no longer accepts commands.".to_string(),
+                        details: Some(json!({
+                            "connectionId": connection_id,
+                            "sequence": sequence,
+                        })),
+                    })
+                    .await?;
+            }
         }
         SessionCommand::PairManualCandidate { candidate_id } => {
             let Some(node) = state.manual_candidates.get(&candidate_id).cloned() else {
