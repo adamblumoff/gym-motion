@@ -526,7 +526,8 @@ function attachControlReader() {
           error: null,
           clearCandidates: true,
         });
-        sendCommand("start_manual_scan");
+        log("Manual scan requested from desktop runtime.");
+        sendCommand("rescan");
         return;
       }
 
@@ -623,7 +624,7 @@ function handleSidecarEvent(event) {
 
         if (scanRequestedFromBoot && selectedAdapterId) {
           scanRequestedFromBoot = false;
-          sendCommand("start_manual_scan");
+          sendCommand("rescan");
         }
       }
       break;

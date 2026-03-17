@@ -98,6 +98,7 @@ pub enum Command {
     SetAllowedNodes { nodes: Vec<ApprovedNodeRule> },
     Start,
     Stop,
+    Rescan,
     StartManualScan,
     RefreshScanPolicy,
     PairManualCandidate { candidate_id: String },
@@ -170,6 +171,13 @@ mod tests {
             serde_json::to_value(Command::RefreshScanPolicy).expect("command should serialize");
 
         assert_eq!(value["type"], "refresh_scan_policy");
+    }
+
+    #[test]
+    fn serializes_rescan_command() {
+        let value = serde_json::to_value(Command::Rescan).expect("command should serialize");
+
+        assert_eq!(value["type"], "rescan");
     }
 
     #[test]

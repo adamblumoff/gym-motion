@@ -544,8 +544,11 @@ impl Sidecar {
 
     async fn handle_command(&mut self, command: Command) -> Result<bool> {
         match command {
-            Command::ListAdapters | Command::StartManualScan | Command::RefreshScanPolicy => {
-                if matches!(command, Command::StartManualScan) {
+            Command::ListAdapters
+            | Command::Rescan
+            | Command::StartManualScan
+            | Command::RefreshScanPolicy => {
+                if matches!(command, Command::Rescan | Command::StartManualScan) {
                     if self.session.is_none() {
                         self.start_session().await?;
                     }
