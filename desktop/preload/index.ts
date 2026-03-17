@@ -20,11 +20,20 @@ const desktopApi: DesktopApi = {
   async startManualScan() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.startManualScan);
   },
+  async pairDiscoveredNode(candidateId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.pairDiscoveredNode, candidateId);
+  },
   async pairManualCandidate(candidateId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.pairManualCandidate, candidateId);
   },
+  async forgetNode(nodeId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.forgetNode, nodeId);
+  },
   async recoverApprovedNode(ruleId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, ruleId);
+  },
+  async resumeReconnectForNode(nodeId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.resumeReconnectForNode, nodeId);
   },
   async resumeApprovedNodeReconnect(ruleId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect, ruleId);

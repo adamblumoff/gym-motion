@@ -12,6 +12,7 @@ import {
 
 export {
   findMatchingGatewayDeviceForApprovedNode,
+  forgetApprovedNodeRules,
   nodeRuleId,
 } from "@core/approved-node-runtime-match";
 
