@@ -2,7 +2,7 @@ import type {
   ApprovedNodeRule,
   DiscoveredNodeSummary,
   GatewayRuntimeDeviceSummary,
-} from "@core/contracts";
+} from "./contracts";
 
 export type ApprovedNodeIdentity = {
   peripheralId: string | null;

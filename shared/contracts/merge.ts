@@ -1,9 +1,22 @@
 import type {
   DeviceActivitySummary,
   DeviceLogSummary,
+  DeviceSummary,
   GatewayRuntimeDeviceSummary,
   MotionEventSummary,
 } from "./types";
+
+export function mergeDeviceUpdate(
+  devices: DeviceSummary[],
+  device: DeviceSummary,
+): DeviceSummary[] {
+  const nextDevices = [device, ...devices.filter((item) => item.id !== device.id)];
+
+  return nextDevices.sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
+}
 
 export function mergeGatewayDeviceUpdate(
   devices: GatewayRuntimeDeviceSummary[],

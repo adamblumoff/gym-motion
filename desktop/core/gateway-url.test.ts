@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import {
   buildGatewayUrl,
   normalizeGatewayBaseUrl,
-} from "./gateway-url";
+} from "@core/gateway-url";
 
 describe("gateway connection helpers", () => {
   it("normalizes bare hostnames to http origins", () => {

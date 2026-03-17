@@ -25,15 +25,15 @@ describe("gateway runtime target", () => {
     ).toBe(path.join("/repo", "desktop", "scripts", "windows-winrt-gateway.mjs"));
   });
 
-  it("resolves the backend BLE gateway script path on Linux", () => {
-    expect(
+  it("rejects non-Windows runtime paths", () => {
+    expect(() =>
       resolveGatewayScriptPath({
         platform: "linux",
         isPackaged: false,
         cwd: "/repo",
         resourcesPath: "/resources",
       }),
-    ).toBe(path.join("/repo", "backend", "runtime", "ble-gateway.mjs"));
+    ).toThrow("Unsupported desktop BLE platform: linux");
   });
 
   it("resolves the packaged sidecar path", () => {

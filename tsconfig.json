@@ -14,12 +14,14 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@core/*": ["desktop/core/*"],
+      "@shared/*": ["shared/*"],
+      "@core/*": ["shared/*"],
       "@main/*": ["desktop/main/*"],
       "@ui/*": ["desktop/ui/src/*"]
     }
   },
   "include": [
+    "shared/**/*.ts",
     "desktop/**/*.ts",
     "desktop/**/*.tsx",
     "electron.vite.config.ts"

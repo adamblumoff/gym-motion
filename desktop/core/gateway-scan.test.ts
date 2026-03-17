@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isOperatorVisibleScan, liveStatusLabelForScan } from "./gateway-scan";
+import { isOperatorVisibleScan, liveStatusLabelForScan } from "@core/gateway-scan";
 
 describe("gateway scan helpers", () => {
   it("treats legacy scanning without a reason as operator-visible", () => {

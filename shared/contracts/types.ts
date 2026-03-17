@@ -1,11 +1,14 @@
 import type { z } from "zod";
 
 import type {
+  backfillBatchSchema,
+  backfillRecordSchema,
   deviceAssignmentSchema,
   deviceLogLevelSchema,
   deviceLogSchema,
   deviceRegistrationSchema,
   firmwareReleaseSchema,
+  firmwareReportSchema,
   gatewayConnectionStateSchema,
   healthStatusSchema,
   heartbeatPayloadSchema,
@@ -34,7 +37,10 @@ export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
 export type DeviceRegistrationInput = z.infer<typeof deviceRegistrationSchema>;
 export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
 export type DeviceLogInput = z.infer<typeof deviceLogSchema>;
+export type BackfillBatchInput = z.infer<typeof backfillBatchSchema>;
+export type BackfillRecordInput = z.infer<typeof backfillRecordSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -70,6 +76,12 @@ export type GatewayStatusSummary = {
   startedAt: string;
   updatedAt: string;
   lastAdvertisementAt: string | null;
+};
+
+export type GatewayHealthResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  error?: string;
 };
 
 export type BleAdapterSummary = {
@@ -156,6 +168,19 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   reconnectAwaitingDecision?: boolean;
 };
 
+export type GatewayRuntimeDevicesResponse = {
+  ok: boolean;
+  gateway: GatewayStatusSummary;
+  devices: GatewayRuntimeDeviceSummary[];
+  error?: string;
+};
+
+export type DeviceCleanupResult = {
+  deviceId: string;
+  deletedEvents: number;
+  deletedDevices: number;
+};
+
 export type MotionEventSummary = {
   id: number;
   deviceId: string;
@@ -218,4 +243,43 @@ export type DesktopSnapshot = {
 export type MotionStreamPayload = {
   device: DeviceSummary;
   event?: MotionEventSummary;
+};
+
+export type DeviceLogStreamPayload = {
+  log: DeviceLogSummary;
+};
+
+export type GatewayDeviceStreamPayload = {
+  device: GatewayRuntimeDeviceSummary;
+};
+
+export type GatewayStatusStreamPayload = GatewayHealthResponse;
+
+export type DeviceActivityResponse = {
+  activities: DeviceActivitySummary[];
+};
+
+export type DeviceSyncStateSummary = {
+  deviceId: string;
+  lastAckedSequence: number;
+  lastAckedBootId: string | null;
+  lastSyncCompletedAt: string | null;
+  lastOverflowDetectedAt: string | null;
+};
+
+export type BackfillBatchResult = {
+  insertedEvents: MotionEventSummary[];
+  insertedLogs: DeviceLogSummary[];
+  syncState: DeviceSyncStateSummary;
+};
+
+export type FirmwareReleaseSummary = {
+  version: string;
+  gitSha: string;
+  assetUrl: string;
+  sha256: string;
+  md5: string | null;
+  sizeBytes: number;
+  rolloutState: "draft" | "active" | "paused";
+  createdAt: string;
 };

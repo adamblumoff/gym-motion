@@ -16,6 +16,7 @@ const sidecarPath = path.join(
 export default {
   appId: "com.gymmotion.desktop",
   productName: "Gym Motion",
+  npmRebuild: false,
   asar: true,
   asarUnpack: [
     "backend/runtime/**",

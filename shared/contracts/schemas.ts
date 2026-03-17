@@ -85,6 +85,13 @@ export const firmwareReleaseSchema = z.object({
   rolloutState: z.enum(["draft", "active", "paused"]).default("draft"),
 });
 
+export const firmwareReportSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  status: updateStatusSchema,
+  targetVersion: z.string().trim().min(1).max(120).optional(),
+  detail: z.string().trim().min(1).max(280).optional(),
+});
+
 export const deviceLogSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
   level: deviceLogLevelSchema,
@@ -95,8 +102,42 @@ export const deviceLogSchema = z.object({
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
   hardwareId: z.string().trim().min(1).max(120).optional(),
   timestamp: z.number().int().nonnegative().optional(),
-  metadata: z.record(
-    z.string(),
-    z.union([z.string(), z.number(), z.boolean(), z.null()]),
-  ).optional(),
+  metadata: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+    .optional(),
+});
+
+export const backfillRecordSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("motion"),
+    sequence: z.number().int().nonnegative(),
+    state: motionStateSchema,
+    delta: z.number().int().nullable().optional(),
+    timestamp: z.number().int().positive(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+  }),
+  z.object({
+    kind: z.literal("node-log"),
+    sequence: z.number().int().nonnegative(),
+    level: deviceLogLevelSchema,
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(280),
+    timestamp: z.number().int().nonnegative().optional(),
+    bootId: z.string().trim().min(1).max(120).optional(),
+    firmwareVersion: z.string().trim().min(1).max(120).optional(),
+    hardwareId: z.string().trim().min(1).max(120).optional(),
+    metadata: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+      .optional(),
+  }),
+]);
+
+export const backfillBatchSchema = z.object({
+  deviceId: z.string().trim().min(1).max(120),
+  bootId: z.string().trim().min(1).max(120).optional(),
+  records: z.array(backfillRecordSchema).max(500),
+  ackSequence: z.number().int().nonnegative(),
+  overflowDetectedAt: z.string().datetime().optional(),
 });

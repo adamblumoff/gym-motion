@@ -10,31 +10,21 @@ export function resolveGatewayScriptPath(options: {
   cwd: string;
   resourcesPath: string;
 }) {
-  if (usesWindowsNativeGateway(options.platform)) {
-    if (options.isPackaged) {
-      return path.join(
-        options.resourcesPath,
-        "app.asar.unpacked",
-        "desktop",
-        "scripts",
-        "windows-winrt-gateway.mjs",
-      );
-    }
-
-    return path.join(options.cwd, "desktop", "scripts", "windows-winrt-gateway.mjs");
+  if (!usesWindowsNativeGateway(options.platform)) {
+    throw new Error(`Unsupported desktop BLE platform: ${options.platform}`);
   }
 
   if (options.isPackaged) {
     return path.join(
       options.resourcesPath,
       "app.asar.unpacked",
-      "backend",
-      "runtime",
-      "ble-gateway.mjs",
+      "desktop",
+      "scripts",
+      "windows-winrt-gateway.mjs",
     );
   }
 
-  return path.join(options.cwd, "backend", "runtime", "ble-gateway.mjs");
+  return path.join(options.cwd, "desktop", "scripts", "windows-winrt-gateway.mjs");
 }
 
 export function resolveWindowsSidecarPath(options: {

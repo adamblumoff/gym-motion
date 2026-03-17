@@ -16,8 +16,11 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   getSetupState: "runtime:get-setup-state",
   restartGatewayRuntime: "runtime:restart-gateway-runtime",
   startManualScan: "runtime:start-manual-scan",
+  pairDiscoveredNode: "runtime:pair-discovered-node",
   pairManualCandidate: "runtime:pair-manual-candidate",
+  forgetNode: "runtime:forget-node",
   recoverApprovedNode: "runtime:recover-approved-node",
+  resumeReconnectForNode: "runtime:resume-reconnect-for-node",
   resumeApprovedNodeReconnect: "runtime:resume-approved-node-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
   updated: "runtime:updated",
@@ -72,8 +75,11 @@ export type DesktopApi = {
   getSetupState: () => Promise<DesktopSetupState>;
   restartGatewayRuntime: () => Promise<DesktopSnapshot>;
   startManualScan: () => Promise<DesktopSetupState>;
+  pairDiscoveredNode: (candidateId: string) => Promise<DesktopSetupState>;
   pairManualCandidate: (candidateId: string) => Promise<DesktopSetupState>;
+  forgetNode: (nodeId: string) => Promise<DesktopSetupState>;
   recoverApprovedNode: (ruleId: string) => Promise<void>;
+  resumeReconnectForNode: (nodeId: string) => Promise<void>;
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;

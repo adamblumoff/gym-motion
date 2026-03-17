@@ -10,7 +10,7 @@ import {
   parseFirmwareRelease,
   parseHeartbeatPayload,
   parseIngestPayload,
-} from "./contracts";
+} from "@core/contracts";
 
 describe("parseIngestPayload", () => {
   it("accepts a valid motion event payload", () => {

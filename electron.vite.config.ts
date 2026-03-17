@@ -8,7 +8,8 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
-        "@core": path.resolve(__dirname, "desktop/core"),
+        "@shared": path.resolve(__dirname, "shared"),
+        "@core": path.resolve(__dirname, "shared"),
         "@main": path.resolve(__dirname, "desktop/main"),
       },
     },
@@ -23,7 +24,8 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
-        "@core": path.resolve(__dirname, "desktop/core"),
+        "@shared": path.resolve(__dirname, "shared"),
+        "@core": path.resolve(__dirname, "shared"),
       },
     },
     build: {
@@ -37,7 +39,8 @@ export default defineConfig({
     root: path.resolve(__dirname, "desktop/ui"),
     resolve: {
       alias: {
-        "@core": path.resolve(__dirname, "desktop/core"),
+        "@shared": path.resolve(__dirname, "shared"),
+        "@core": path.resolve(__dirname, "shared"),
         "@ui": path.resolve(__dirname, "desktop/ui/src"),
       },
     },

@@ -6,7 +6,7 @@ import {
   forgetApprovedNodeRules,
   matchesApprovedNodeIdentity,
   nodeRuleId,
-} from "./approved-node-runtime-match";
+} from "@core/approved-node-runtime-match";
 
 describe("approved-node identity policy", () => {
   it("builds rule ids by strongest available identity first", () => {
