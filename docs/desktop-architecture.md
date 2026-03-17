@@ -2,6 +2,10 @@
 
 read_when: you are touching the new Electron app, changing IPC boundaries, or deciding where gateway logic should live.
 
+Related:
+- [docs/desktop-code-map.md](/home/adamblumoff/gym-motion/docs/desktop-code-map.md)
+- [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md)
+
 ## Shape
 
 The desktop app is split into three layers:
@@ -24,11 +28,11 @@ The current product target is Windows only. The runtime BLE contract should be t
 - Shared Gym Motion types now live in `shared/contracts.*`; do not duplicate them between main and renderer anymore.
 - Transport connection state and telemetry freshness are separate signals; telemetry payloads must not flip the BLE connection status alone.
 - Ownership rule:
--  sidecar owns BLE scan/reconnect/handshake truth,
--  firmware owns app-session lease/watchdog truth,
--  runtime server owns projection/cache only,
--  Electron main owns persistence, lifecycle, and intent sequencing,
--  renderer owns presentation only.
+- The sidecar owns BLE scan, reconnect, and handshake truth.
+- The firmware owns app-session lease and watchdog truth.
+- The runtime server owns projection and cache only.
+- Electron main owns persistence, lifecycle, and intent sequencing.
+- The renderer owns presentation only.
 
 ## Intent & Runtime Ownership
 
@@ -36,6 +40,7 @@ The current product target is Windows only. The runtime BLE contract should be t
 - `desktop/preload` exposes those high-level intents plus `setThemePreference` and emits projection events derived from the runtime cache; the renderer consumes those events to update the UI without inventing its own transport logic.
 - `backend/runtime` remains the projection/cache owner: it translates sidecar events into device snapshots, known-node persistence, and HTTP APIs that only represent cached state, not raw BLE truth.
 - The sidecar is the sole owner of BLE transport truth, including scan/reconnect handshakes and handshake diagnostics; runtime/main ask it for actions, and the renderer only reacts to what the runtime reports.
+
 ## Migration Defaults
 
 - Windows is the only active desktop product target right now.

@@ -10,6 +10,12 @@ This repo now has one active product track:
 
 Firmware, bench scripts, and repo docs stay at the top level because they support the current desktop and hardware workflow.
 
+Start here before changing runtime behavior:
+
+- [docs/desktop-code-map.md](/home/adamblumoff/gym-motion/docs/desktop-code-map.md)
+- [docs/desktop-architecture.md](/home/adamblumoff/gym-motion/docs/desktop-architecture.md)
+- [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md)
+
 ## Desktop Stack
 
 - Electron main process for tray, lifecycle, and native integration

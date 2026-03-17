@@ -2,6 +2,10 @@
 
 read_when: you need to run the Electron app against real Windows BLE adapters or validate the packaged Windows build.
 
+Related:
+- [docs/desktop-code-map.md](/home/adamblumoff/gym-motion/docs/desktop-code-map.md)
+- [docs/desktop-architecture.md](/home/adamblumoff/gym-motion/docs/desktop-architecture.md)
+
 ## Working Copy
 
 The preferred Windows-native test copy lives at:
