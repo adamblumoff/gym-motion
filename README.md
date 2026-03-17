@@ -49,7 +49,7 @@ Windows-side testing guide:
 - `desktop/main`: Electron main process and runtime wiring
 - `desktop/preload`: typed preload bridge
 - `desktop/ui`: renderer app
-- `desktop/core`: shared contracts, helpers, and runtime abstractions
+- `shared`: shared contracts, identity rules, and runtime abstractions
 
 ## Notes
 

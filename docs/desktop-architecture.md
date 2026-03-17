@@ -6,31 +6,36 @@ read_when: you are touching the new Electron app, changing IPC boundaries, or de
 
 The desktop app is split into three layers:
 
-- `desktop/main`: owns Electron lifecycle, tray behavior, and native process concerns
-- `desktop/preload`: exposes a narrow typed API to the renderer
+- `desktop/main`: owns Electron lifecycle, persistence, and operator intents that drive the gateway runtime
+- `desktop/preload`: exposes the typed intent API (pair, forget, reconnect) and projection events to the renderer
 - `desktop/ui`: React app for the operator experience
-- `desktop/core`: shared domain models and service contracts
-- `backend/`: active gateway/runtime and data-access code shared by the desktop pipeline
+- `shared/`: the neutral TypeScript surface for contracts, approved-node matching, gateway scan helpers, and desktop services imported by both main and renderer
+- `backend/`: runtime server, data-access code, and projection helpers for caching sidecar events
 
 The current product target is Windows only. The runtime BLE contract should be treated as Windows app plus WinRT sidecar plus ESP32 firmware session handling, not as a cross-platform desktop abstraction.
 
 ## Boundary Rules
 
-- The renderer should not call localhost HTTP routes.
-- Live updates should cross the Electron boundary as typed events, not SSE.
-- Native BLE access should be treated as a Windows WinRT sidecar boundary first. Non-Windows BLE paths still in the repo are for bench and development use only and should not drive product behavior by default.
-- The Windows sidecar currently depends on a vendored, patched `btleplug` under [native/windows-ble-sidecar/vendor/btleplug-winrt-patched](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched). That patch is part of the supported Windows BLE transport contract right now, not an incidental local tweak.
-- Approved-node identity policy should have one TS source of truth under `desktop/core`. Do not re-implement `knownDeviceId -> peripheralId -> address -> unique localName` matching separately in setup UI, main-process setup reconciliation, or other desktop helpers.
-- Reconnect handshakes need exclusive adapter attention. On Windows, pause active BLE scanning before attempting reconnect GATT setup; otherwise WinRT can surface a half-connected state where the ESP32 sees a client but `connect()`/`discover_services()` still fail and the session never reaches bootstrap or lease.
-- Shared Gym Motion types should live in `desktop/core`, not be duplicated between main and renderer.
-- Transport connection state and telemetry freshness are separate signals. Motion or heartbeat telemetry must not change BLE connection state on their own.
-- State ownership rule:
-  sidecar owns BLE scan/reconnect/handshake truth,
-  firmware owns app-session lease/watchdog truth,
-  runtime server owns projection/cache only,
-  Electron main owns persistence and app lifecycle,
-  renderer owns presentation only.
+- The renderer should not call localhost HTTP routes; it talks to the gateway runtime via the preload intent API and typed events.
+- Native BLE access is owned by the Windows WinRT sidecar. The desktop product runtime no longer includes the older noble/HCI/USB BLE path.
+- The sidecar depends on the patched `btleplug` under [native/windows-ble-sidecar/vendor/btleplug-winrt-patched](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched) as part of the supported Windows transport contract.
+- Approved-node identity matching now lives under `shared/approved-node-runtime-match.ts`; that single resolver order (`knownDeviceId -> peripheralId -> address -> unique localName`) is the canonical source for both renderer selectors and main-process reconcilers.
+- Reconnect handshakes keep their own adapter attention. Windows pauses approval scans before reconnect so WinRT never reports a half-connected state that blocks bootstrap/lease.
+- Shared Gym Motion types now live in `shared/contracts.*`; do not duplicate them between main and renderer anymore.
+- Transport connection state and telemetry freshness are separate signals; telemetry payloads must not flip the BLE connection status alone.
+- Ownership rule:
+-  sidecar owns BLE scan/reconnect/handshake truth,
+-  firmware owns app-session lease/watchdog truth,
+-  runtime server owns projection/cache only,
+-  Electron main owns persistence, lifecycle, and intent sequencing,
+-  renderer owns presentation only.
 
+## Intent & Runtime Ownership
+
+- `desktop/main` sequences the operator intents (pair discovered node, forget node, resume reconnect) and owns persistence/lifecycle so the renderer never writes those flows directly.
+- `desktop/preload` exposes those high-level intents plus `setThemePreference` and emits projection events derived from the runtime cache; the renderer consumes those events to update the UI without inventing its own transport logic.
+- `backend/runtime` remains the projection/cache owner: it translates sidecar events into device snapshots, known-node persistence, and HTTP APIs that only represent cached state, not raw BLE truth.
+- The sidecar is the sole owner of BLE transport truth, including scan/reconnect handshakes and handshake diagnostics; runtime/main ask it for actions, and the renderer only reacts to what the runtime reports.
 ## Migration Defaults
 
 - Windows is the only active desktop product target right now.

@@ -5,11 +5,20 @@ This file captures BLE/runtime bugs we already paid to learn the hard way.
 Use it before changing the Windows BLE reconnect flow, the ESP32 app-session
 protocol, or the vendored WinRT `btleplug` package.
 
+## Ownership Reminder
+
+- The sidecar owns every BLE scan, reconnect, and handshake state machine; main and runtime only ask it to start actions or project events.
+- Firmware owns the app-session lease heartbeat and watchdog truth.
+- Runtime server (`backend/runtime`) projects sidecar events into cached devices, known-node persistence, and derived HTTP snapshots; it never invents BLE transport state.
+- `shared/` holds the neutral TS contracts and approved-node matching helpers shared by renderer and main so identity rules stay consistent.
+- Electron main owns persistence, lifecycle, and intent sequencing so the renderer can remain purely presentational.
+
 ## Scope
 
 - Desktop product target: Windows app + Rust WinRT sidecar + ESP32 firmware
 - Main BLE transport code:
-  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/mod.rs`
+  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/core_impl.rs`
+  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session.rs`
   - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/handshake.rs`
   - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched`
 - Firmware app-session code:

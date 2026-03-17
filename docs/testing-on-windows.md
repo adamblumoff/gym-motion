@@ -90,7 +90,7 @@ Validate the same Setup and reconnect flow in the packaged app.
 - The desktop runtime is real, not mock-backed.
 - Windows now uses the Rust WinRT BLE sidecar and should work with built-in Windows Bluetooth adapters.
 - The current desktop product is Windows-only. Bench validation should target the Windows app, the WinRT sidecar, and the ESP32 firmware runtime protocol together.
-- Approved-node identity matching on the desktop should come from one shared `desktop/core` policy. Setup visibility, pairing badges, paired-row folding, and approved-node reconciliation should all follow the same precedence: `knownDeviceId`, then `peripheralId`, then BLE address, then unique `localName`.
+- Approved-node identity matching on the desktop should come from one shared policy module under `shared/`. Setup visibility, pairing badges, paired-row folding, and approved-node reconciliation should all follow the same precedence: `knownDeviceId`, then `peripheralId`, then BLE address, then unique `localName`.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
 - The `Setup` tab is node-only, and Bluetooth discovery is manual-only for discovery and pairing.
   Manual scan is now a dedicated pair-and-connect flow for visible candidates; it should not chain through the background approved reconnect path.
@@ -143,4 +143,4 @@ Validate the same Setup and reconnect flow in the packaged app.
 - Paired sensor rows should keep showing the saved BLE address when one is known, even if the live runtime device also has an opaque WinRT peripheral handle.
 - Those paired rows should also bind to live runtime devices by strongest available identity first (`knownDeviceId`, then peripheral/address, then only safe fallbacks). A shared local name must not let one live sensor borrow another paired row's address, signal, or connection badge.
 - That same duplicate-name guard applies to reconnect bookkeeping too: one connected/recovered node must never satisfy multiple saved name-only approvals just because they share a `localName`.
-- The older noble / raw-USB BLE path is not part of the supported Windows product flow and should not be used to justify changes in the active WinRT architecture.
+- The older noble / raw-USB BLE path has been removed from the desktop product runtime and should not be used to justify changes in the active WinRT architecture.
