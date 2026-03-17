@@ -35,3 +35,49 @@ export function normalizeAllowedNodesPayload(approvedNodeRules) {
     known_device_id: node.knownDeviceId ?? null,
   }));
 }
+
+function normalizeBleAddress(address) {
+  return typeof address === "string" ? address.toLowerCase() : null;
+}
+
+export function approvedNodeRulesReferToSamePhysicalNode(left = {}, right = {}) {
+  if (
+    left.knownDeviceId &&
+    right.knownDeviceId &&
+    left.knownDeviceId === right.knownDeviceId
+  ) {
+    return true;
+  }
+
+  if (
+    left.peripheralId &&
+    right.peripheralId &&
+    left.peripheralId === right.peripheralId
+  ) {
+    return true;
+  }
+
+  if (
+    left.address &&
+    right.address &&
+    normalizeBleAddress(left.address) === normalizeBleAddress(right.address)
+  ) {
+    return true;
+  }
+
+  if (
+    !left.knownDeviceId &&
+    !right.knownDeviceId &&
+    !left.peripheralId &&
+    !right.peripheralId &&
+    !left.address &&
+    !right.address &&
+    left.localName &&
+    right.localName &&
+    left.localName === right.localName
+  ) {
+    return true;
+  }
+
+  return false;
+}

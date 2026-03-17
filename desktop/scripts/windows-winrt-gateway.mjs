@@ -16,6 +16,7 @@ import {
   selectPreferredAdapter,
 } from "./windows-winrt-gateway-config.mjs";
 import {
+  approvedNodeRulesReferToSamePhysicalNode,
   createDeviceContext,
   describeNode,
   normalizeAllowedNodesPayload,
@@ -485,6 +486,12 @@ async function handleDesktopControlCommand(command) {
     }));
     const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
     const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
+    const forgottenRules = removedRules.filter(
+      (removedRule) =>
+        !nextApprovedNodeRules.some((nextRule) =>
+          approvedNodeRulesReferToSamePhysicalNode(removedRule, nextRule),
+        ),
+    );
 
     for (const rule of nextApprovedNodeRules) {
       runtimeServer.restoreApprovedDevice({
@@ -496,7 +503,7 @@ async function handleDesktopControlCommand(command) {
       });
     }
 
-    for (const rule of removedRules) {
+    for (const rule of forgottenRules) {
       runtimeServer.forgetDevice({
         deviceId: rule.knownDeviceId ?? null,
         knownDeviceId: rule.knownDeviceId ?? null,
@@ -510,11 +517,13 @@ async function handleDesktopControlCommand(command) {
     log("Approved-node rules updated from desktop runtime.", {
       approvedCount: approvedNodeRules.length,
       removedCount: removedRules.length,
+      forgottenCount: forgottenRules.length,
     });
     syncAllowedNodes();
     return {
       approvedCount: approvedNodeRules.length,
       removedCount: removedRules.length,
+      forgottenCount: forgottenRules.length,
     };
   }
 
