@@ -5,6 +5,7 @@ read_when: you are touching the new Electron app, changing IPC boundaries, or de
 Related:
 - [docs/desktop-code-map.md](/home/adamblumoff/gym-motion/docs/desktop-code-map.md)
 - [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md)
+- [docs/movement-analytics.md](/home/adamblumoff/gym-motion/docs/movement-analytics.md)
 
 ## Shape
 
@@ -21,7 +22,8 @@ The current product target is Windows only. The runtime BLE contract should be t
 ## Boundary Rules
 
 - The renderer should not call localhost HTTP routes; it talks to the gateway runtime via the preload intent API and typed events.
-- The Windows gateway child now sends ingest, heartbeat, and a narrow set of device-log persistence messages back to Electron main over dedicated child-process IPC, not localhost HTTP. Raw sidecar logs stay console-only, and UI device history is intentionally limited to motion plus connected/disconnected lifecycle events.
+- The Windows gateway child now sends ingest, heartbeat, and a narrow set of persistence messages back to Electron main over dedicated child-process IPC, not localhost HTTP. Raw sidecar logs stay console-only, and canonical analytics is intentionally movement-only.
+- Canonical analytics is movement-only. Normal analytics should not depend on connection lifecycle logs; those belong in debug/runtime paths instead.
 - Native BLE access is owned by the Windows WinRT sidecar. The desktop product runtime no longer includes the older noble/HCI/USB BLE path.
 - The sidecar depends on the patched `btleplug` under [native/windows-ble-sidecar/vendor/btleplug-winrt-patched](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched) as part of the supported Windows transport contract.
 - Approved-node identity matching now lives under `shared/approved-node-runtime-match.ts`; that single resolver order (`knownDeviceId -> peripheralId -> address -> unique localName`) is the canonical source for both renderer selectors and main-process reconcilers.
@@ -34,6 +36,7 @@ The current product target is Windows only. The runtime BLE contract should be t
 - The runtime server owns projection and cache only.
 - Electron main owns persistence, lifecycle, and intent sequencing.
 - The renderer owns presentation only.
+- The analytics page reads canonical movement history through desktop IPC plus a local desktop cache; do not reintroduce ad hoc analytics queries from the renderer to localhost routes.
 
 ## Intent & Runtime Ownership
 

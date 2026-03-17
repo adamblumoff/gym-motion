@@ -90,7 +90,8 @@ export function invalidateCachedDeviceAnalytics(store: PreferencesStore, deviceI
     return;
   }
 
-  const { [deviceId]: _removed, ...remainingDevices } = cache.devices;
+  const remainingDevices = { ...cache.devices };
+  delete remainingDevices[deviceId];
 
   writeCache(store, {
     ...cache,

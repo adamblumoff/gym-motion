@@ -12,6 +12,7 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Child IPC persistence ingest: [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
 - Preload bridge: [desktop/preload/index.ts](/home/adamblumoff/gym-motion/desktop/preload/index.ts)
 - Renderer runtime provider: [desktop/ui/src/app/runtime-context.tsx](/home/adamblumoff/gym-motion/desktop/ui/src/app/runtime-context.tsx)
+- Movement analytics controller/cache: [desktop/main/managed-gateway-runtime/analytics-controller.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/analytics-controller.ts)
 - Windows gateway script: [desktop/scripts/windows-winrt-gateway.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway.mjs)
 - Windows gateway child-to-main bridge: [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
 - Runtime server root: [backend/runtime/gateway-runtime-server/core.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.mjs)
@@ -53,8 +54,12 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Device logs or telemetry are reaching the gateway console but not the per-device UI history:
   - start in [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
   - then check [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
-- Raw WinRT sidecar logs are visible in the gateway console but intentionally absent from UI device history:
-  - this is expected; only motion plus connected/disconnected lifecycle events are persisted for the UI
+- Movement analytics page is showing stale or wrong buckets:
+  - start in [backend/data/repository/movement-analytics.ts](/home/adamblumoff/gym-motion/backend/data/repository/movement-analytics.ts)
+  - then check [shared/movement-analytics.ts](/home/adamblumoff/gym-motion/shared/movement-analytics.ts)
+  - then check [desktop/main/managed-gateway-runtime/analytics-controller.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/analytics-controller.ts)
+- Raw WinRT sidecar logs are visible in the gateway console but intentionally absent from normal analytics history:
+  - this is expected; canonical analytics is movement-only
 - WinRT reconnect/handshake behavior is wrong:
   - start in [native/windows-ble-sidecar/src/windows/session_transport.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session_transport.rs)
   - then check [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md)

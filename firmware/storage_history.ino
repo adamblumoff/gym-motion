@@ -125,6 +125,12 @@ void dropOldestHistoryRecords(size_t bytesToDrop) {
     historyOverflowed = true;
     historyDroppedCount += droppedRecords;
     persistHistoryOverflowState();
+    journalNodeLog(
+      "warn",
+      "history.compacted",
+      "Dropped oldest movement history records to preserve storage.",
+      millis()
+    );
   }
 }
 
@@ -169,25 +175,6 @@ void appendHistoryRecord(const String& recordJson) {
   history.println(recordJson);
   history.close();
   enforceHistoryStorageLimit();
-}
-
-void journalNodeLog(
-  const String& level,
-  const String& code,
-  const String& message,
-  unsigned long timestamp
-) {
-  const unsigned long sequence = allocateHistorySequence();
-  appendHistoryRecord(
-    "{\"kind\":\"node-log\",\"sequence\":" + String(sequence) +
-    ",\"level\":\"" + escapeJsonString(level) +
-    "\",\"code\":\"" + escapeJsonString(code) +
-    "\",\"message\":\"" + escapeJsonString(message) +
-    "\",\"timestamp\":" + String(timestamp) +
-    ",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
-    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}"
-  );
 }
 
 void journalMotionState(const char* state, int delta, unsigned long timestamp) {

@@ -180,7 +180,7 @@ describe("windows winrt gateway runtime bridge", () => {
     expect(messages).toEqual([]);
   });
 
-  it("only persists connected and disconnected lifecycle logs", () => {
+  it("keeps connection lifecycle state out of persisted analytics logs", () => {
     const messages = [];
 
     const bridge = createRuntimeBridge({
@@ -194,11 +194,7 @@ describe("windows winrt gateway runtime bridge", () => {
             after: { gatewayConnectionState: "connected" },
           });
         },
-        resolveKnownDeviceId(input) {
-          if (input?.peripheralId === "AA:BB") {
-            return "esp32-known";
-          }
-
+        resolveKnownDeviceId() {
           return null;
         },
         noteDiscovery() {},
@@ -271,58 +267,6 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     });
 
-    expect(messages).toEqual([
-      {
-        type: "persist-device-log",
-        deviceId: "esp32-known",
-        payload: {
-          deviceId: "esp32-known",
-          level: "info",
-          code: "node.connected",
-          message: "Gateway connected to GymMotion-aabb.",
-          bootId: undefined,
-          firmwareVersion: undefined,
-          hardwareId: undefined,
-          metadata: {
-            peripheralId: "AA:BB",
-            address: null,
-            reconnectAttempt: null,
-            reconnectAttemptLimit: null,
-            transportStateBefore: "connecting",
-            transportStateAfter: "connected",
-            lastTelemetryAt: null,
-            lastConnectedAt: null,
-            lastDisconnectedAt: null,
-          },
-        },
-      },
-      {
-        type: "persist-device-log",
-        deviceId: "esp32-known",
-        payload: {
-          deviceId: "esp32-known",
-          level: "warn",
-          code: "node.disconnected",
-          message: "Gateway lost GymMotion-aabb.",
-          bootId: undefined,
-          firmwareVersion: undefined,
-          hardwareId: undefined,
-          metadata: {
-            peripheralId: "AA:BB",
-            address: null,
-            reason: "ble-disconnected",
-            reconnectAttempt: null,
-            reconnectAttemptLimit: null,
-            reconnectRetryExhausted: null,
-            reconnectAwaitingDecision: null,
-            transportStateBefore: "connected",
-            transportStateAfter: "disconnected",
-            lastTelemetryAt: null,
-            lastConnectedAt: null,
-            lastDisconnectedAt: null,
-          },
-        },
-      },
-    ]);
+    expect(messages).toEqual([]);
   });
 });

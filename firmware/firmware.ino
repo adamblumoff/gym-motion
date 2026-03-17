@@ -49,10 +49,13 @@ const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
 const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
+const size_t DEBUG_LOG_MAX_BYTES = 8 * 1024;
 const size_t HISTORY_SYNC_PAGE_SIZE = 80;
 const size_t STATUS_CHUNK_SIZE = 120;
 const char* HISTORY_LOG_PATH = "/history.log";
 const char* HISTORY_TEMP_PATH = "/history.tmp";
+const char* DEBUG_LOG_PATH = "/debug.log";
+const char* DEBUG_TEMP_PATH = "/debug.tmp";
 
 int16_t lastX = 0;
 int16_t lastY = 0;

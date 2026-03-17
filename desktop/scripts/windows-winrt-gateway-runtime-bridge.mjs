@@ -1,22 +1,8 @@
 import { sendToDesktop as defaultSendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
 import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.mjs";
 
-function trimMessage(message) {
-  const normalized = typeof message === "string" ? message.trim() : "";
-
-  if (normalized.length <= 280) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 277)}...`;
-}
-
 function telemetryQueueKey(payload) {
   return payload.deviceId;
-}
-
-function pendingLogKey(peripheralInfo) {
-  return peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
 }
 
 export function createRuntimeBridge({
@@ -26,78 +12,11 @@ export function createRuntimeBridge({
   sendToDesktop = defaultSendToDesktop,
 }) {
   const deviceContexts = new Map();
-  const pendingNodeLogs = new Map();
   const telemetryForwardChains = new Map();
 
   function emitPersistMessage(type, deviceId, payload) {
     if (!sendToDesktop({ type, deviceId, payload }, debug)) {
       debug(`skipped ${type} for ${deviceId} because desktop IPC is unavailable`);
-    }
-  }
-
-  function writeDeviceLog({
-    deviceId,
-    level = "info",
-    code,
-    message,
-    bootId,
-    firmwareVersion,
-    hardwareId,
-    metadata,
-  }) {
-    emitPersistMessage("persist-device-log", deviceId, {
-      deviceId,
-      level,
-      code,
-      message: trimMessage(message),
-      bootId,
-      firmwareVersion,
-      hardwareId,
-      metadata,
-    });
-  }
-
-  function queueNodeLog(peripheralInfo, entry) {
-    const key = pendingLogKey(peripheralInfo);
-    const knownDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
-
-    if (knownDeviceId) {
-      writeDeviceLog({
-        deviceId: knownDeviceId,
-        ...entry,
-      });
-      return;
-    }
-
-    const pendingEntries = pendingNodeLogs.get(key) ?? [];
-    pendingEntries.push({
-      ...entry,
-      peripheralInfo,
-    });
-    pendingNodeLogs.set(key, pendingEntries);
-  }
-
-  function flushNodeLogs(deviceId, peripheralInfo, devicePayload) {
-    const key = pendingLogKey(peripheralInfo);
-    const pendingEntries = pendingNodeLogs.get(key);
-
-    if (!pendingEntries?.length) {
-      return;
-    }
-
-    pendingNodeLogs.delete(key);
-
-    for (const entry of pendingEntries) {
-      writeDeviceLog({
-        deviceId,
-        level: entry.level,
-        code: entry.code,
-        message: entry.message,
-        bootId: devicePayload?.bootId ?? undefined,
-        firmwareVersion: devicePayload?.firmwareVersion ?? undefined,
-        hardwareId: devicePayload?.hardwareId ?? undefined,
-        metadata: entry.metadata,
-      });
     }
   }
 
@@ -122,8 +41,6 @@ export function createRuntimeBridge({
       deviceId: payload.deviceId,
       knownDeviceId: payload.deviceId,
     };
-
-    flushNodeLogs(payload.deviceId, peripheralInfo, payload);
 
     await runtimeServer.noteTelemetry(payload, peripheralInfo);
 
@@ -213,8 +130,6 @@ export function createRuntimeBridge({
   function handleNodeConnectionState(event) {
     const node = event.node ?? {};
     const peripheralInfo = describeNode(node);
-    const label =
-      node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node";
     const connectionState =
       event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
@@ -230,26 +145,11 @@ export function createRuntimeBridge({
     }
 
     if (connectionState === "connected") {
-      const transition = runtimeServer.noteConnected({
+      runtimeServer.noteConnected({
         ...peripheralInfo,
         reconnectAttempt: event.reconnect?.attempt ?? null,
         reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
         reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-      });
-      queueNodeLog(peripheralInfo, {
-        code: "node.connected",
-        message: `Gateway connected to ${label}.`,
-        metadata: {
-          peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-          address: node.address ?? null,
-          reconnectAttempt: event.reconnect?.attempt ?? null,
-          reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-          transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-          transportStateAfter: transition?.after?.gatewayConnectionState ?? "connected",
-          lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
-          lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
-          lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
-        },
       });
       return;
     }
@@ -269,28 +169,6 @@ export function createRuntimeBridge({
     if (transition.before?.gatewayConnectionState === "disconnected") {
       return;
     }
-
-    queueNodeLog(peripheralInfo, {
-      level: "warn",
-      code: "node.disconnected",
-      message: `Gateway lost ${label}.`,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        reason: event.reason ?? "ble-disconnected",
-        reconnectAttempt: event.reconnect?.attempt ?? null,
-        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-        reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-        transportStateBefore: transition.before?.gatewayConnectionState ?? null,
-        transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
-        lastTelemetryAt:
-          transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,
-        lastConnectedAt:
-          transition.after?.lastConnectedAt ?? transition.before?.lastConnectedAt ?? null,
-        lastDisconnectedAt: transition.after?.lastDisconnectedAt ?? null,
-      },
-    });
   }
 
   return {
