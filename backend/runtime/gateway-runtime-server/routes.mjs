@@ -2,8 +2,8 @@ import { STREAM_PING_MS, formatSseEvent, jsonResponse } from "./utils.mjs";
 
 export function createRequestHandler({
   gatewayState,
-  runtimeIssue,
-  availableAdapters,
+  getRuntimeIssue,
+  getAvailableAdapters,
   streamClients,
   getDevicesPayload,
   getManualScanPayload,
@@ -14,6 +14,7 @@ export function createRequestHandler({
   listDiscoveries,
 }) {
   return async function handleRequest(request, response) {
+    const runtimeIssue = getRuntimeIssue();
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
 
     if (request.method === "GET" && url.pathname === "/health") {
@@ -45,7 +46,7 @@ export function createRequestHandler({
 
     if (request.method === "GET" && url.pathname === "/adapters") {
       jsonResponse(response, 200, {
-        adapters: availableAdapters,
+        adapters: getAvailableAdapters(),
         error: runtimeIssue ?? undefined,
       });
       return;

@@ -1,14 +1,11 @@
-/* global Buffer, console, fetch, setTimeout */
+/* global console, setTimeout */
 
 import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
-import {
-  shouldWriteDiscoveryLog,
-  shouldWriteSidecarLog,
-} from "./windows-winrt-gateway-logging.mjs";
+import { shouldWriteSidecarLog } from "./windows-winrt-gateway-logging.mjs";
 import {
   createGatewayConfig,
   parseApprovedNodeRules,
@@ -17,10 +14,10 @@ import {
 } from "./windows-winrt-gateway-config.mjs";
 import {
   approvedNodeRulesReferToSamePhysicalNode,
-  createDeviceContext,
-  describeNode,
   normalizeAllowedNodesPayload,
 } from "./windows-winrt-gateway-node.mjs";
+import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
+import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.mjs";
 
 const config = createGatewayConfig();
 
@@ -35,8 +32,6 @@ const runtimeServer = createGatewayRuntimeServer({
   verbose: config.verbose,
 });
 
-const deviceContexts = new Map();
-const pendingNodeLogs = new Map();
 let sidecar = null;
 let shuttingDown = false;
 let latestGatewayIssue = null;
@@ -61,6 +56,12 @@ function debug(message, details) {
 
   log(message, details);
 }
+
+const runtimeBridge = createRuntimeBridge({
+  config,
+  runtimeServer,
+  debug,
+});
 
 function setRuntimeIssue(issue) {
   latestGatewayIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
@@ -102,348 +103,6 @@ function refreshSelectionIssue(adapters) {
   if (latestGatewayIssue?.startsWith("Bluetooth is unavailable")) {
     setRuntimeIssue(null);
   }
-}
-
-async function postJson(targetPath, body) {
-  const response = await fetch(`${config.apiBaseUrl}${targetPath}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${targetPath} -> ${response.status}: ${text}`);
-  }
-
-  return await response.json();
-}
-
-async function writeDeviceLog({
-  deviceId,
-  level = "info",
-  code,
-  message,
-  bootId,
-  firmwareVersion,
-  hardwareId,
-  metadata,
-}) {
-  try {
-    await postJson("/api/device-logs", {
-      deviceId,
-      level,
-      code,
-      message,
-      bootId,
-      firmwareVersion,
-      hardwareId,
-      metadata,
-    });
-  } catch (error) {
-    debug(
-      `failed to write gateway log ${code}`,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-function queueNodeLog(peripheralInfo, entry) {
-  const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
-  const knownDeviceId = runtimeServer.resolveKnownDeviceId(peripheralInfo);
-
-  if (knownDeviceId) {
-    void writeDeviceLog({
-      deviceId: knownDeviceId,
-      ...entry,
-    });
-    return;
-  }
-
-  const pendingEntries = pendingNodeLogs.get(key) ?? [];
-  pendingEntries.push({
-    ...entry,
-    peripheralInfo,
-  });
-  pendingNodeLogs.set(key, pendingEntries);
-}
-
-function flushNodeLogs(deviceId, peripheralInfo, devicePayload) {
-  const key = peripheralInfo.peripheralId ?? peripheralInfo.localName ?? "unknown";
-  const pendingEntries = pendingNodeLogs.get(key);
-
-  if (!pendingEntries?.length) {
-    return;
-  }
-
-  pendingNodeLogs.delete(key);
-
-  for (const entry of pendingEntries) {
-    void writeDeviceLog({
-      deviceId,
-      level: entry.level,
-      code: entry.code,
-      message: entry.message,
-      bootId: devicePayload?.bootId ?? null,
-      firmwareVersion: devicePayload?.firmwareVersion ?? null,
-      hardwareId: devicePayload?.hardwareId ?? null,
-      metadata: entry.metadata,
-    });
-  }
-}
-
-async function forwardTelemetry(payload, node = {}) {
-  let context = deviceContexts.get(payload.deviceId);
-
-  if (!context) {
-    context = createDeviceContext(payload.deviceId);
-    deviceContexts.set(payload.deviceId, context);
-  }
-
-  context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion;
-  context.bootId = payload.bootId ?? context.bootId ?? null;
-  context.hardwareId = payload.hardwareId ?? context.hardwareId ?? null;
-  context.peripheralId = node.peripheralId ?? context.peripheralId ?? null;
-  context.address = node.address ?? context.address ?? null;
-  context.advertisedName = node.localName ?? context.advertisedName ?? null;
-  context.rssi = node.lastRssi ?? node.rssi ?? context.rssi ?? null;
-
-  const peripheralInfo = {
-    ...describeNode(node),
-    deviceId: payload.deviceId,
-    knownDeviceId: payload.deviceId,
-  };
-
-  flushNodeLogs(payload.deviceId, peripheralInfo, payload);
-
-  const telemetryResult = await runtimeServer.noteTelemetry(payload, peripheralInfo);
-  const connectionStateBeforeTelemetry = telemetryResult?.before?.gatewayConnectionState ?? null;
-
-  if (
-    connectionStateBeforeTelemetry &&
-    connectionStateBeforeTelemetry !== "connected" &&
-    context.lastTelemetryConnectionState !== connectionStateBeforeTelemetry
-  ) {
-    void writeDeviceLog({
-      deviceId: payload.deviceId,
-      level: "warn",
-      code: "node.telemetry_without_transport",
-      message: `Telemetry arrived while transport state was ${connectionStateBeforeTelemetry}.`,
-      bootId: payload.bootId ?? null,
-      firmwareVersion: payload.firmwareVersion ?? null,
-      hardwareId: payload.hardwareId ?? null,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        transportStateBefore: connectionStateBeforeTelemetry,
-        transportStateAfter: telemetryResult?.after?.gatewayConnectionState ?? null,
-        telemetryFreshnessAfter: telemetryResult?.after?.telemetryFreshness ?? null,
-        lastTelemetryAt: telemetryResult?.after?.lastTelemetryAt ?? null,
-        lastConnectedAt: telemetryResult?.after?.lastConnectedAt ?? null,
-        lastDisconnectedAt: telemetryResult?.after?.lastDisconnectedAt ?? null,
-      },
-    });
-  }
-  context.lastTelemetryConnectionState = connectionStateBeforeTelemetry;
-
-  const stateChanged = context.lastState !== payload.state;
-
-  if (stateChanged) {
-    await postJson("/api/ingest", {
-      deviceId: payload.deviceId,
-      state: payload.state,
-      timestamp: payload.timestamp,
-      delta: payload.delta ?? null,
-      sequence: payload.sequence,
-      bootId: payload.bootId,
-      firmwareVersion: payload.firmwareVersion,
-      hardwareId: payload.hardwareId,
-    });
-    context.lastState = payload.state;
-    context.lastHeartbeatForwardedAt = Date.now();
-    return;
-  }
-
-  if (Date.now() - context.lastHeartbeatForwardedAt < config.heartbeatMinIntervalMs) {
-    return;
-  }
-
-  await postJson("/api/heartbeat", {
-    deviceId: payload.deviceId,
-    timestamp: payload.timestamp,
-    bootId: payload.bootId,
-    firmwareVersion: payload.firmwareVersion,
-    hardwareId: payload.hardwareId,
-  });
-  context.lastHeartbeatForwardedAt = Date.now();
-}
-
-function handleNodeDiscovered(node, scanReason = null) {
-  const peripheralInfo = describeNode(node);
-
-  if (scanReason === "manual") {
-    runtimeServer.upsertManualScanCandidate({
-      id: node.id,
-      label:
-        node.localName ??
-        node.local_name ??
-        node.knownDeviceId ??
-        node.known_device_id ??
-        node.peripheralId ??
-        node.peripheral_id ??
-        "Visible node",
-      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-      address: node.address ?? null,
-      localName: node.localName ?? node.local_name ?? null,
-      knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-      machineLabel: null,
-      siteId: null,
-      lastRssi: node.lastRssi ?? node.last_rssi ?? node.rssi ?? null,
-      lastSeenAt: node.lastSeenAt ?? node.last_seen_at ?? null,
-    });
-  }
-
-  runtimeServer.noteDiscovery({
-    ...peripheralInfo,
-    reconnectAttempt: node.reconnect?.attempt ?? null,
-    reconnectAttemptLimit: node.reconnect?.attempt_limit ?? null,
-    reconnectRetryExhausted: node.reconnect?.retry_exhausted ?? null,
-    reconnectAwaitingDecision: node.reconnect?.awaiting_user_decision ?? null,
-  });
-
-  if (!shouldWriteDiscoveryLog(scanReason)) {
-    return;
-  }
-
-  queueNodeLog(peripheralInfo, {
-    code: "node.discovered",
-    message: `Gateway discovered ${node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node"}.`,
-    metadata: {
-      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-      address: node.address ?? null,
-      advertisedName: node.localName ?? node.local_name ?? null,
-      rssi: node.lastRssi ?? node.last_rssi ?? node.rssi ?? null,
-    },
-  });
-}
-
-function handleNodeConnectionState(event) {
-  const node = event.node ?? {};
-  const peripheralInfo = describeNode(node);
-  const label =
-    node.localName ?? node.local_name ?? node.peripheralId ?? node.peripheral_id ?? "a BLE node";
-  const connectionState =
-    event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
-
-  if (connectionState === "connecting") {
-    const transition = runtimeServer.noteConnecting({
-      ...peripheralInfo,
-      reconnectAttempt: event.reconnect?.attempt ?? null,
-      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-    });
-    queueNodeLog(peripheralInfo, {
-      code: "node.connecting",
-      message: `Gateway is connecting to ${label}.`,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        reconnectAttempt: event.reconnect?.attempt ?? null,
-        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-        reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-        transportStateAfter: transition?.after?.gatewayConnectionState ?? "connecting",
-        lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
-        lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
-        lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
-      },
-    });
-    return;
-  }
-
-  if (connectionState === "connected") {
-    const transition = runtimeServer.noteConnected({
-      ...peripheralInfo,
-      reconnectAttempt: event.reconnect?.attempt ?? null,
-      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-    });
-    queueNodeLog(peripheralInfo, {
-      code: "node.connected",
-      message: `Gateway connected to ${label}.`,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        reconnectAttempt: event.reconnect?.attempt ?? null,
-        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-        transportStateAfter: transition?.after?.gatewayConnectionState ?? "connected",
-        lastTelemetryAt: transition?.after?.lastTelemetryAt ?? null,
-        lastConnectedAt: transition?.after?.lastConnectedAt ?? null,
-        lastDisconnectedAt: transition?.after?.lastDisconnectedAt ?? null,
-      },
-    });
-    return;
-  }
-
-  const transition = runtimeServer.noteDisconnected({
-    ...peripheralInfo,
-    reason: event.reason ?? "ble-disconnected",
-    reconnectAttempt: event.reconnect?.attempt ?? null,
-    reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-    reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-    reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-  });
-  if (!transition?.applied) {
-    queueNodeLog(peripheralInfo, {
-      level: "warn",
-      code: "node.disconnect_ignored",
-      message: `Gateway ignored a transient disconnect signal for ${label}.`,
-      metadata: {
-        peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-        address: node.address ?? null,
-        reason: event.reason ?? "ble-disconnected",
-        reconnectAttempt: event.reconnect?.attempt ?? null,
-        reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-        reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-        reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-        transportStateBefore: transition?.before?.gatewayConnectionState ?? null,
-        transportStateAfter: transition?.after?.gatewayConnectionState ?? null,
-        lastTelemetryAt: transition?.before?.lastTelemetryAt ?? null,
-        lastConnectedAt: transition?.before?.lastConnectedAt ?? null,
-        lastDisconnectedAt: transition?.before?.lastDisconnectedAt ?? null,
-      },
-    });
-    return;
-  }
-
-  if (transition.before?.gatewayConnectionState === "disconnected") {
-    return;
-  }
-
-  queueNodeLog(peripheralInfo, {
-    level: "warn",
-    code: "node.disconnected",
-    message: `Gateway lost ${label}.`,
-    metadata: {
-      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-      address: node.address ?? null,
-      reason: event.reason ?? "ble-disconnected",
-      reconnectAttempt: event.reconnect?.attempt ?? null,
-      reconnectAttemptLimit: event.reconnect?.attempt_limit ?? null,
-      reconnectRetryExhausted: event.reconnect?.retry_exhausted ?? null,
-      reconnectAwaitingDecision: event.reconnect?.awaiting_user_decision ?? null,
-      transportStateBefore: transition.before?.gatewayConnectionState ?? null,
-      transportStateAfter: transition.after?.gatewayConnectionState ?? connectionState,
-      lastTelemetryAt: transition.after?.lastTelemetryAt ?? transition.before?.lastTelemetryAt ?? null,
-      lastConnectedAt: transition.after?.lastConnectedAt ?? transition.before?.lastConnectedAt ?? null,
-      lastDisconnectedAt: transition.after?.lastDisconnectedAt ?? null,
-    },
-  });
 }
 
 function sendCommand(type, payload = {}) {
@@ -540,10 +199,7 @@ async function handleDesktopControlCommand(command) {
     return { state: "scanning" };
   }
 
-  if (
-    command.type === "pair_manual_candidate" &&
-    typeof command.candidateId === "string"
-  ) {
+  if (command.type === "pair_manual_candidate" && typeof command.candidateId === "string") {
     requireSidecar("pair a manual scan candidate");
     setManualScanState({
       state: "pairing",
@@ -626,49 +282,45 @@ function handleSidecarEvent(event) {
     case "ready":
       log("Windows BLE sidecar is ready.");
       break;
-    case "adapter_list":
-      {
-        const adapters = Array.isArray(event.adapters)
-          ? event.adapters.map((adapter) => ({
-              id: adapter.id,
-              label: adapter.label,
-              transport: adapter.transport ?? "winrt",
-              runtimeDeviceId: null,
-              isAvailable: adapter.is_available ?? adapter.isAvailable ?? false,
-              issue: adapter.issue ?? null,
-              details: Array.isArray(adapter.details) ? adapter.details : [],
-            }))
-          : [];
-        const adapterSnapshot = JSON.stringify(adapters);
-        if (adapterSnapshot !== lastLoggedAdapterSnapshot) {
-          lastLoggedAdapterSnapshot = adapterSnapshot;
-          log(
-            `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
-            adapters,
-          );
-        }
-        if (!selectedAdapterId) {
-          selectedAdapterId = selectPreferredAdapter(adapters);
+    case "adapter_list": {
+      const adapters = Array.isArray(event.adapters)
+        ? event.adapters.map((adapter) => ({
+            id: adapter.id,
+            label: adapter.label,
+            transport: adapter.transport ?? "winrt",
+            runtimeDeviceId: null,
+            isAvailable: adapter.is_available ?? adapter.isAvailable ?? false,
+            issue: adapter.issue ?? null,
+            details: Array.isArray(adapter.details) ? adapter.details : [],
+          }))
+        : [];
+      const adapterSnapshot = JSON.stringify(adapters);
+      if (adapterSnapshot !== lastLoggedAdapterSnapshot) {
+        lastLoggedAdapterSnapshot = adapterSnapshot;
+        log(`received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`, adapters);
+      }
+      if (!selectedAdapterId) {
+        selectedAdapterId = selectPreferredAdapter(adapters);
 
-          if (selectedAdapterId) {
-            sendCommand("select_adapter", { adapter_id: selectedAdapterId });
-          }
-        }
-
-        runtimeServer.setAvailableAdapters(adapters);
-        refreshSelectionIssue(adapters);
-
-        if (!sidecarSessionStarted && selectedAdapterId) {
-          sidecarSessionStarted = true;
-          sendCommand("start");
-        }
-
-        if (scanRequestedFromBoot && selectedAdapterId) {
-          scanRequestedFromBoot = false;
-          sendCommand("rescan");
+        if (selectedAdapterId) {
+          sendCommand("select_adapter", { adapter_id: selectedAdapterId });
         }
       }
+
+      runtimeServer.setAvailableAdapters(adapters);
+      refreshSelectionIssue(adapters);
+
+      if (!sidecarSessionStarted && selectedAdapterId) {
+        sidecarSessionStarted = true;
+        sendCommand("start");
+      }
+
+      if (scanRequestedFromBoot && selectedAdapterId) {
+        scanRequestedFromBoot = false;
+        sendCommand("rescan");
+      }
       break;
+    }
     case "gateway_state":
       currentScanReason = event.gateway?.scan_reason ?? event.scanReason ?? null;
       runtimeServer.setAdapterState(
@@ -683,53 +335,46 @@ function handleSidecarEvent(event) {
     case "manual_scan_state":
       setManualScanState({
         state: event.state ?? "idle",
-        pairingCandidateId:
-          event.candidate_id ?? event.candidateId ?? null,
+        pairingCandidateId: event.candidate_id ?? event.candidateId ?? null,
         error: event.error ?? null,
         clearCandidates: (event.state ?? "idle") === "idle",
       });
       break;
     case "node_discovered":
-      handleNodeDiscovered(
+      runtimeBridge.handleNodeDiscovered(
         event.node ?? {},
         event.scan_reason ?? event.scanReason ?? null,
       );
       break;
     case "node_connection_state":
-      handleNodeConnectionState(event);
+      runtimeBridge.handleNodeConnectionState(event);
       break;
-    case "telemetry":
-      {
-        const payload = {
-          deviceId: event.payload?.device_id ?? event.payload?.deviceId,
-          state: event.payload?.state,
-          timestamp: event.payload?.timestamp,
-          delta: event.payload?.delta ?? null,
-          sequence: event.payload?.sequence,
-          bootId: event.payload?.boot_id ?? event.payload?.bootId,
-          firmwareVersion:
-            event.payload?.firmware_version ?? event.payload?.firmwareVersion,
-          hardwareId: event.payload?.hardware_id ?? event.payload?.hardwareId,
-        };
+    case "telemetry": {
+      const payload = {
+        deviceId: event.payload?.device_id ?? event.payload?.deviceId,
+        state: event.payload?.state,
+        timestamp: event.payload?.timestamp,
+        delta: event.payload?.delta ?? null,
+        sequence: event.payload?.sequence,
+        bootId: event.payload?.boot_id ?? event.payload?.bootId,
+        firmwareVersion: event.payload?.firmware_version ?? event.payload?.firmwareVersion,
+        hardwareId: event.payload?.hardware_id ?? event.payload?.hardwareId,
+      };
 
-        if (!payload.deviceId || !payload.state || !payload.timestamp) {
-          setRuntimeIssue("Windows BLE sidecar emitted an invalid telemetry payload.");
-          break;
-        }
+      if (!payload.deviceId || !payload.state || !payload.timestamp) {
+        setRuntimeIssue("Windows BLE sidecar emitted an invalid telemetry payload.");
+        break;
+      }
 
-        void forwardTelemetry(payload, event.node ?? {}).catch((error) => {
+      void runtimeBridge.forwardTelemetry(payload, event.node ?? {}).catch((error) => {
         console.error("[gateway-winrt] failed to forward telemetry", error);
         setRuntimeIssue(error instanceof Error ? error.message : "Telemetry forwarding failed.");
-        });
-      }
+      });
       break;
+    }
     case "log":
       if (
-        shouldWriteSidecarLog(
-          event.level ?? "info",
-          event.message ?? "sidecar log",
-          config.verbose,
-        )
+        shouldWriteSidecarLog(event.level ?? "info", event.message ?? "sidecar log", config.verbose)
       ) {
         log(event.message ?? "sidecar log", event.details);
       }
@@ -741,35 +386,6 @@ function handleSidecarEvent(event) {
     default:
       debug("ignored sidecar event", event);
   }
-}
-
-function attachJsonLineReader(stream, onEvent) {
-  let buffer = "";
-
-  stream.on("data", (chunk) => {
-    buffer += Buffer.from(chunk).toString("utf8");
-
-    while (true) {
-      const newlineIndex = buffer.indexOf("\n");
-
-      if (newlineIndex === -1) {
-        break;
-      }
-
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-
-      if (!line) {
-        continue;
-      }
-
-      try {
-        onEvent(JSON.parse(line));
-      } catch (error) {
-        console.error("[gateway-winrt] failed to parse sidecar output", line, error);
-      }
-    }
-  });
 }
 
 async function startSidecar() {
@@ -865,7 +481,8 @@ process.on("SIGINT", () => {
 
 attachControlReader();
 
-void runtimeServer.start()
+void runtimeServer
+  .start()
   .then(async () => {
     runtimeServer.setGatewayIssue("Starting Windows BLE runtime…");
     await startSidecar();
