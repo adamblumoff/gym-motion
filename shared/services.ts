@@ -27,6 +27,7 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   setAllowedNodes: "runtime:set-allowed-nodes",
   getDeviceAnalytics: "runtime:get-device-analytics",
   refreshDeviceAnalytics: "runtime:refresh-device-analytics",
+  requestDeviceHistorySync: "runtime:request-device-history-sync",
   deleteDeviceAnalyticsHistory: "runtime:delete-device-analytics-history",
   updated: "runtime:updated",
 } as const;
@@ -95,6 +96,7 @@ export type DesktopApi = {
     deviceId: string,
     range: MovementAnalyticsRange,
   ) => Promise<DeviceMovementAnalyticsResult>;
+  requestDeviceHistorySync: (deviceId: string) => Promise<{ ok: true }>;
   deleteDeviceAnalyticsHistory: (deviceId: string) => Promise<{ ok: true }>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;

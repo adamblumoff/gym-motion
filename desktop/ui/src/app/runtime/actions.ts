@@ -64,6 +64,9 @@ export function createDesktopAppActions(
     async refreshDeviceAnalytics(deviceId: string, range: MovementAnalyticsRange) {
       return window.gymMotionDesktop.refreshDeviceAnalytics(deviceId, range);
     },
+    async requestDeviceHistorySync(deviceId: string) {
+      return window.gymMotionDesktop.requestDeviceHistorySync(deviceId);
+    },
     async deleteDeviceAnalyticsHistory(deviceId: string) {
       return window.gymMotionDesktop.deleteDeviceAnalyticsHistory(deviceId);
     },

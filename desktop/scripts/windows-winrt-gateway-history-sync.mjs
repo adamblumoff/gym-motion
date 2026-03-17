@@ -6,6 +6,14 @@ function connectionKeyForNode(node = {}) {
   return node.peripheralId ?? node.peripheral_id ?? node.id ?? null;
 }
 
+function knownDeviceIdForNode(node = {}) {
+  return node.knownDeviceId ?? node.known_device_id ?? null;
+}
+
+function localNameForNode(node = {}) {
+  return node.localName ?? node.local_name ?? null;
+}
+
 function normalizeHistoryRecord(record) {
   if (!record || typeof record !== "object") {
     return null;
@@ -84,7 +92,8 @@ function normalizeHistorySyncCompletePayload(payload) {
     sentCount,
     hasMore,
     overflowed: payload?.overflowed === true,
-    droppedCount: typeof payload?.dropped_count === "number" ? payload.dropped_count : payload?.droppedCount,
+    droppedCount:
+      typeof payload?.dropped_count === "number" ? payload.dropped_count : payload?.droppedCount,
   };
 }
 
@@ -101,13 +110,76 @@ function buildPersistPayload(deviceId, session, completion) {
   };
 }
 
+function isHistorySyncFailureMessage(message) {
+  return (
+    message === "Ignoring history sync request until the active session is healthy." ||
+    message.startsWith("History replay start failed") ||
+    message.startsWith("History replay ack failed")
+  );
+}
+
+function normalizeFailureEvent(event = {}) {
+  const message = typeof event.message === "string" ? event.message : null;
+
+  if (!message || !isHistorySyncFailureMessage(message)) {
+    return null;
+  }
+
+  const details = event.details && typeof event.details === "object" ? event.details : {};
+  const detailError =
+    typeof details.error === "string"
+      ? details.error
+      : typeof details.recoveryError === "string"
+        ? details.recoveryError
+        : null;
+
+  return {
+    connectionId: details.peripheralId ?? null,
+    deviceId: details.knownDeviceId ?? null,
+    address: details.address ?? null,
+    localName: details.localName ?? null,
+    error: detailError ? `${message} ${detailError}` : message,
+  };
+}
+
 export function createHistorySyncCoordinator({
   debug = () => {},
   sendSidecarCommand,
   sendRequestToDesktop = defaultSendRequestToDesktop,
+  onHistorySyncStateChanged = () => {},
   pageSize = DEFAULT_HISTORY_PAGE_SIZE,
 }) {
   const sessions = new Map();
+
+  function publishState(details = {}, state, error = null) {
+    if (!details.deviceId && !details.connectionId) {
+      return;
+    }
+
+    onHistorySyncStateChanged({
+      deviceId: details.deviceId ?? null,
+      knownDeviceId: details.deviceId ?? null,
+      peripheralId: details.connectionId ?? null,
+      address: details.address ?? null,
+      localName: details.localName ?? null,
+      state,
+      error,
+    });
+  }
+
+  function buildSessionDetails(node = {}, existing = null) {
+    const connectionId = connectionKeyForNode(node) ?? existing?.connectionId ?? null;
+
+    return {
+      connectionId,
+      deviceId: knownDeviceIdForNode(node) ?? existing?.deviceId ?? null,
+      address: node.address ?? existing?.address ?? null,
+      localName: localNameForNode(node) ?? existing?.localName ?? null,
+      records: existing?.records ?? [],
+      inFlight: existing?.inFlight ?? false,
+      parseFailed: existing?.parseFailed ?? false,
+    };
+  }
 
   async function persistHistoryBatch(deviceId, payload) {
     await sendRequestToDesktop(
@@ -120,52 +192,50 @@ export function createHistorySyncCoordinator({
     );
   }
 
-  function startHistorySyncForNode(node = {}) {
-    const connectionId = connectionKeyForNode(node);
+  function requestHistorySyncForNode(node = {}, afterSequence = 0) {
+    const existing = sessions.get(connectionKeyForNode(node));
+    const nextSession = buildSessionDetails(node, existing);
 
-    if (!connectionId) {
+    if (!nextSession.connectionId) {
       debug("skipped history sync start because the node had no connection key", node);
-      return;
+      return false;
     }
-
-    const existing = sessions.get(connectionId);
 
     if (existing?.inFlight) {
-      return;
+      return false;
     }
 
-    sessions.set(connectionId, {
-      connectionId,
-      deviceId: node.knownDeviceId ?? node.known_device_id ?? existing?.deviceId ?? null,
+    sessions.set(nextSession.connectionId, {
+      ...nextSession,
       records: [],
       inFlight: true,
       parseFailed: false,
     });
+    publishState(nextSession, "syncing");
 
     sendSidecarCommand("start_history_sync", {
-      connection_id: connectionId,
-      after_sequence: 0,
+      connection_id: nextSession.connectionId,
+      after_sequence: afterSequence,
       max_records: pageSize,
     });
+    return true;
   }
 
-  function handleNodeConnectionState(event = {}) {
-    const connectionState =
-      event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
-    const connectionId = connectionKeyForNode(event.node ?? {});
+  function handleNodeConnected(node = {}) {
+    requestHistorySyncForNode(node);
+  }
 
-    if (!connectionId) {
-      return;
-    }
+  function handleNodeDisconnected(event = {}) {
+    const node = event.node ?? {};
+    const connectionId = connectionKeyForNode(node);
+    const existing = connectionId ? sessions.get(connectionId) : null;
+    const details = buildSessionDetails(node, existing);
 
-    if (connectionState === "connected") {
-      startHistorySyncForNode(event.node ?? {});
-      return;
-    }
-
-    if (connectionState === "disconnected") {
+    if (connectionId) {
       sessions.delete(connectionId);
     }
+
+    publishState(details, "idle");
   }
 
   function handleHistoryRecord(event = {}) {
@@ -177,17 +247,38 @@ export function createHistorySyncCoordinator({
       return;
     }
 
-    const current = sessions.get(connectionId) ?? {
-      connectionId,
-      deviceId: event.device_id ?? event.deviceId ?? null,
-      records: [],
+    const existing = sessions.get(connectionId) ?? null;
+    const current = {
+      ...buildSessionDetails(event.node ?? {}, existing),
+      deviceId: event.device_id ?? event.deviceId ?? existing?.deviceId ?? null,
+      records: [...(existing?.records ?? []), record],
       inFlight: true,
       parseFailed: false,
     };
 
-    current.deviceId = event.device_id ?? event.deviceId ?? current.deviceId ?? null;
-    current.records.push(record);
     sessions.set(connectionId, current);
+  }
+
+  function handleRuntimeLog(event = {}) {
+    const failure = normalizeFailureEvent(event);
+
+    if (!failure) {
+      return;
+    }
+
+    const existing = failure.connectionId ? sessions.get(failure.connectionId) ?? null : null;
+    const details = {
+      connectionId: failure.connectionId ?? existing?.connectionId ?? null,
+      deviceId: failure.deviceId ?? existing?.deviceId ?? null,
+      address: failure.address ?? existing?.address ?? null,
+      localName: failure.localName ?? existing?.localName ?? null,
+    };
+
+    if (failure.connectionId) {
+      sessions.delete(failure.connectionId);
+    }
+
+    publishState(details, "failed", failure.error);
   }
 
   async function handleHistorySyncComplete(event = {}) {
@@ -199,14 +290,10 @@ export function createHistorySyncCoordinator({
       return;
     }
 
-    const session = sessions.get(connectionId) ?? {
-      connectionId,
+    const session = {
+      ...buildSessionDetails(event.node ?? {}, sessions.get(connectionId) ?? null),
       deviceId: completion.deviceId,
-      records: [],
-      inFlight: true,
-      parseFailed: false,
     };
-    session.deviceId = completion.deviceId;
 
     if (session.records.length !== completion.sentCount) {
       debug("history sync page size mismatch; leaving firmware records unacked", {
@@ -215,14 +302,25 @@ export function createHistorySyncCoordinator({
         actual: session.records.length,
       });
       sessions.delete(connectionId);
+      publishState(session, "failed", "History sync page mismatch. Use Refresh to retry.");
       return;
     }
 
-    if (session.records.length > 0 || completion.overflowed) {
-      await persistHistoryBatch(
-        completion.deviceId,
-        buildPersistPayload(completion.deviceId, session, completion),
+    try {
+      if (session.records.length > 0 || completion.overflowed) {
+        await persistHistoryBatch(
+          completion.deviceId,
+          buildPersistPayload(completion.deviceId, session, completion),
+        );
+      }
+    } catch (error) {
+      sessions.delete(connectionId);
+      publishState(
+        session,
+        "failed",
+        error instanceof Error ? error.message : "Failed to persist history sync page.",
       );
+      return;
     }
 
     if (completion.latestSequence > 0) {
@@ -233,19 +331,22 @@ export function createHistorySyncCoordinator({
     }
 
     if (completion.hasMore && completion.sentCount === 0) {
-      debug("history sync reported more data without sending records; stopping to avoid a replay loop", {
-        connectionId,
-        latestSequence: completion.latestSequence,
-        highWaterSequence: completion.highWaterSequence,
-      });
+      debug(
+        "history sync reported more data without sending records; stopping to avoid a replay loop",
+        {
+          connectionId,
+          latestSequence: completion.latestSequence,
+          highWaterSequence: completion.highWaterSequence,
+        },
+      );
       sessions.delete(connectionId);
+      publishState(session, "failed", "History sync stalled before the next page could load.");
       return;
     }
 
     if (completion.hasMore && completion.latestSequence < completion.highWaterSequence) {
       sessions.set(connectionId, {
-        connectionId,
-        deviceId: completion.deviceId,
+        ...session,
         records: [],
         inFlight: true,
         parseFailed: false,
@@ -255,15 +356,20 @@ export function createHistorySyncCoordinator({
         after_sequence: completion.latestSequence,
         max_records: pageSize,
       });
+      publishState(session, "syncing");
       return;
     }
 
     sessions.delete(connectionId);
+    publishState(session, "idle");
   }
 
   return {
-    handleNodeConnectionState,
+    handleNodeConnected,
+    handleNodeDisconnected,
     handleHistoryRecord,
     handleHistorySyncComplete,
+    handleRuntimeLog,
+    requestHistorySyncForNode,
   };
 }

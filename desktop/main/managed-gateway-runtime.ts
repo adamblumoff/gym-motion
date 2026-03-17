@@ -482,6 +482,18 @@ export function createManagedGatewayRuntime(
     refreshDeviceAnalytics(deviceId, range) {
       return analyticsController.refreshDeviceAnalytics(deviceId, range);
     },
+    async requestDeviceHistorySync(deviceId) {
+      if (!deviceId) {
+        throw new Error("A device must be selected before requesting history sync.");
+      }
+
+      await sendGatewayCommand({
+        type: "request_device_history_sync",
+        deviceId,
+      });
+
+      return { ok: true };
+    },
     deleteDeviceAnalyticsHistory(deviceId) {
       return analyticsController.deleteDeviceAnalyticsHistory(deviceId);
     },

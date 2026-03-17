@@ -67,6 +67,9 @@ const runtimeBridge = createRuntimeBridge({
 const historySync = createHistorySyncCoordinator({
   debug,
   sendSidecarCommand: sendCommand,
+  onHistorySyncStateChanged(update) {
+    runtimeServer.noteHistorySyncState(update);
+  },
 });
 
 function setRuntimeIssue(issue) {
@@ -253,6 +256,35 @@ async function handleDesktopControlCommand(command) {
     return { ruleId: command.ruleId };
   }
 
+  if (
+    command.type === "request_device_history_sync" &&
+    typeof command.deviceId === "string" &&
+    command.deviceId.trim().length > 0
+  ) {
+    const connection = runtimeServer.inspectNodeConnection({ deviceId: command.deviceId });
+
+    if (!connection || connection.gatewayConnectionState !== "connected") {
+      throw new Error("That device is not connected, so history sync cannot start yet.");
+    }
+
+    if (!connection.peripheralId) {
+      throw new Error("That device does not have an active BLE connection key.");
+    }
+
+    const started = historySync.requestHistorySyncForNode({
+      peripheralId: connection.peripheralId,
+      knownDeviceId: connection.deviceId,
+      address: connection.address,
+      localName: connection.advertisedName,
+    });
+
+    if (!started) {
+      return { ok: true, started: false };
+    }
+
+    return { ok: true, started: true };
+  }
+
   throw new Error(`Unsupported control command: ${String(command.type ?? "unknown")}`);
 }
 
@@ -354,7 +386,14 @@ function handleSidecarEvent(event) {
       break;
     case "node_connection_state":
       runtimeBridge.handleNodeConnectionState(event);
-      historySync.handleNodeConnectionState(event);
+      if (
+        (event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected") ===
+        "connected"
+      ) {
+        historySync.handleNodeConnected(event.node ?? {});
+      } else {
+        historySync.handleNodeDisconnected(event);
+      }
       break;
     case "history_record":
       historySync.handleHistoryRecord(event);
@@ -391,6 +430,7 @@ function handleSidecarEvent(event) {
       break;
     }
     case "log":
+      historySync.handleRuntimeLog(event);
       if (
         shouldWriteSidecarLog(event.level ?? "info", event.message ?? "sidecar log", config.verbose)
       ) {

@@ -66,6 +66,9 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     reconnectAttempt: existing?.reconnectAttempt ?? 0,
     reconnectAttemptLimit: existing?.reconnectAttemptLimit ?? 20,
     reconnectRetryExhausted: existing?.reconnectRetryExhausted ?? false,
+    historySyncState: existing?.historySyncState ?? "idle",
+    historySyncError: existing?.historySyncError ?? null,
+    historySyncUpdatedAt: existing?.historySyncUpdatedAt ?? null,
     ...partialDevice,
   };
 }

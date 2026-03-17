@@ -29,6 +29,7 @@ export type ManagedGatewayRuntime = {
     deviceId: string,
     range: MovementAnalyticsRange,
   ) => Promise<DeviceMovementAnalyticsResult>;
+  requestDeviceHistorySync: (deviceId: string) => Promise<{ ok: true }>;
   deleteDeviceAnalyticsHistory: (deviceId: string) => Promise<{ ok: true }>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };

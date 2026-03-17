@@ -203,6 +203,9 @@ export function createRuntimeDeviceEventController({
         gatewayConnectionState: "connected",
         gatewayLastConnectedAt: nowIso(),
         gatewayDisconnectReason: null,
+        historySyncState: "idle",
+        historySyncError: null,
+        historySyncUpdatedAt: nowIso(),
         advertisedName: localName ?? null,
         lastRssi: rssi ?? null,
         reconnectAttempt: reconnectAttempt ?? 0,
@@ -332,6 +335,9 @@ export function createRuntimeDeviceEventController({
         gatewayConnectionState: "disconnected",
         gatewayLastDisconnectedAt: nowIso(),
         gatewayDisconnectReason: reason ?? "ble-disconnected",
+        historySyncState: "idle",
+        historySyncError: null,
+        historySyncUpdatedAt: nowIso(),
         reconnectAttempt:
           reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
         reconnectAttemptLimit:
@@ -354,6 +360,43 @@ export function createRuntimeDeviceEventController({
         before: previous,
         after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
       };
+    },
+
+    noteHistorySyncState({
+      deviceId = null,
+      knownDeviceId = null,
+      peripheralId,
+      localName,
+      address,
+      state,
+      error = null,
+    }) {
+      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+        deviceId,
+        knownDeviceId,
+        peripheralId,
+        localName,
+        address,
+      });
+
+      if (!resolvedDeviceId) {
+        return null;
+      }
+
+      updateRuntimeNode(resolvedDeviceId, {
+        peripheralId:
+          peripheralId ?? runtimeByDeviceId.get(resolvedDeviceId)?.peripheralId ?? null,
+        address:
+          address ?? runtimeByDeviceId.get(resolvedDeviceId)?.address ?? null,
+        advertisedName:
+          localName ?? runtimeByDeviceId.get(resolvedDeviceId)?.advertisedName ?? null,
+        historySyncState: state,
+        historySyncError: state === "failed" ? error ?? "History sync needs a manual retry." : null,
+        historySyncUpdatedAt: nowIso(),
+      });
+      emitDevice(resolvedDeviceId);
+      broadcastGatewayStatus();
+      return inspectNodeConnection({ deviceId: resolvedDeviceId });
     },
 
     clearReconnectDecision({

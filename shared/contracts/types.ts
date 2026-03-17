@@ -33,6 +33,7 @@ export type OtaRuntimeStatus = z.infer<typeof otaRuntimeStatusSchema>;
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>;
 export type MovementAnalyticsRange = "24h" | "7d";
+export type DeviceHistorySyncState = "idle" | "syncing" | "failed";
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
 export type HeartbeatPayload = z.infer<typeof heartbeatPayloadSchema>;
 export type DeviceAssignmentInput = z.infer<typeof deviceAssignmentSchema>;
@@ -167,6 +168,9 @@ export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   reconnectAttemptLimit: number;
   reconnectRetryExhausted: boolean;
   reconnectAwaitingDecision?: boolean;
+  historySyncState?: DeviceHistorySyncState;
+  historySyncError?: string | null;
+  historySyncUpdatedAt?: string | null;
 };
 
 export type GatewayRuntimeDevicesResponse = {

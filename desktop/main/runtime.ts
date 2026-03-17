@@ -58,6 +58,9 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics, (_event, deviceId, range) =>
     runtime.refreshDeviceAnalytics(deviceId, range),
   );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.requestDeviceHistorySync, (_event, deviceId) =>
+    runtime.requestDeviceHistorySync(deviceId),
+  );
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory, (_event, deviceId) =>
     runtime.deleteDeviceAnalyticsHistory(deviceId),
   );
@@ -83,6 +86,7 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.requestDeviceHistorySync);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory);
     },
   };

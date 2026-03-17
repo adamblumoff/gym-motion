@@ -76,6 +76,9 @@ export function createProjectionHelpers({
       reconnectAttemptLimit: runtime?.reconnectAttemptLimit ?? 20,
       reconnectRetryExhausted: runtime?.reconnectRetryExhausted ?? false,
       reconnectAwaitingDecision: runtime?.reconnectAwaitingDecision ?? false,
+      historySyncState: runtime?.historySyncState ?? "idle",
+      historySyncError: runtime?.historySyncError ?? null,
+      historySyncUpdatedAt: runtime?.historySyncUpdatedAt ?? null,
     };
   }
 
@@ -188,6 +191,9 @@ export function createProjectionHelpers({
       firmwareVersion: "unknown",
       bootId: null,
       hardwareId: null,
+      historySyncState: "idle",
+      historySyncError: null,
+      historySyncUpdatedAt: null,
       ...emptyOtaRuntimeState(),
       ...emptyReconnectRuntimeState(),
       updatedAt: nowIso(),
@@ -240,10 +246,16 @@ export function createProjectionHelpers({
       deviceId: resolvedDeviceId,
       gatewayConnectionState: merged.gatewayConnectionState,
       telemetryFreshness: merged.telemetryFreshness,
+      peripheralId: merged.peripheralId,
+      address: merged.address,
+      advertisedName: merged.advertisedName,
       lastTelemetryAt: runtime?.gatewayLastTelemetryAt ?? null,
       lastConnectedAt: runtime?.gatewayLastConnectedAt ?? null,
       lastDisconnectedAt: runtime?.gatewayLastDisconnectedAt ?? null,
       disconnectReason: runtime?.gatewayDisconnectReason ?? null,
+      historySyncState: merged.historySyncState ?? "idle",
+      historySyncError: merged.historySyncError ?? null,
+      historySyncUpdatedAt: merged.historySyncUpdatedAt ?? null,
     };
   }
 

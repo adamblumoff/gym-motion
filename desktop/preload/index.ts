@@ -47,6 +47,9 @@ const desktopApi: DesktopApi = {
   async refreshDeviceAnalytics(deviceId, range) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.refreshDeviceAnalytics, deviceId, range);
   },
+  async requestDeviceHistorySync(deviceId) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.requestDeviceHistorySync, deviceId);
+  },
   async deleteDeviceAnalyticsHistory(deviceId) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.deleteDeviceAnalyticsHistory, deviceId);
   },

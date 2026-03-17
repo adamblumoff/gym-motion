@@ -6,6 +6,7 @@ describe("windows winrt gateway history sync", () => {
   it("persists a completed history page before acking firmware and requesting the next page", async () => {
     const commands = [];
     const persisted = [];
+    const states = [];
 
     const coordinator = createHistorySyncCoordinator({
       sendSidecarCommand(type, payload) {
@@ -15,17 +16,17 @@ describe("windows winrt gateway history sync", () => {
         persisted.push(message);
         return Promise.resolve();
       },
+      onHistorySyncStateChanged(update) {
+        states.push(update);
+      },
       debug() {},
       pageSize: 2,
     });
 
-    coordinator.handleNodeConnectionState({
-      gatewayConnectionState: "connected",
-      node: {
-        id: "candidate-1",
-        peripheralId: "peripheral:abc",
-        knownDeviceId: "stack-001",
-      },
+    coordinator.handleNodeConnected({
+      id: "candidate-1",
+      peripheralId: "peripheral:abc",
+      knownDeviceId: "stack-001",
     });
 
     coordinator.handleHistoryRecord({
@@ -123,6 +124,26 @@ describe("windows winrt gateway history sync", () => {
         },
       },
     ]);
+    expect(states).toEqual([
+      {
+        deviceId: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral:abc",
+        address: null,
+        localName: null,
+        state: "syncing",
+        error: null,
+      },
+      {
+        deviceId: "stack-001",
+        knownDeviceId: "stack-001",
+        peripheralId: "peripheral:abc",
+        address: null,
+        localName: null,
+        state: "syncing",
+        error: null,
+      },
+    ]);
   });
 
   it("stores overflow-only sync pages without acking nonexistent records", async () => {
@@ -140,13 +161,10 @@ describe("windows winrt gateway history sync", () => {
       debug() {},
     });
 
-    coordinator.handleNodeConnectionState({
-      gatewayConnectionState: "connected",
-      node: {
-        id: "candidate-1",
-        peripheralId: "peripheral:def",
-        knownDeviceId: "stack-002",
-      },
+    coordinator.handleNodeConnected({
+      id: "candidate-1",
+      peripheralId: "peripheral:def",
+      knownDeviceId: "stack-002",
     });
 
     await coordinator.handleHistorySyncComplete({
@@ -173,6 +191,59 @@ describe("windows winrt gateway history sync", () => {
           after_sequence: 0,
           max_records: 250,
         },
+      },
+    ]);
+  });
+
+  it("surfaces history replay failures without tearing down the session state", () => {
+    const states = [];
+
+    const coordinator = createHistorySyncCoordinator({
+      sendSidecarCommand() {},
+      sendRequestToDesktop() {
+        return Promise.resolve();
+      },
+      onHistorySyncStateChanged(update) {
+        states.push(update);
+      },
+      debug() {},
+    });
+
+    coordinator.handleNodeConnected({
+      peripheralId: "peripheral:ghi",
+      knownDeviceId: "stack-003",
+      localName: "GymMotion-003",
+    });
+
+    coordinator.handleRuntimeLog({
+      level: "warn",
+      message: "History replay start failed; leaving the session online and deferring replay.",
+      details: {
+        peripheralId: "peripheral:ghi",
+        knownDeviceId: "stack-003",
+        error: "The object has been closed.",
+      },
+    });
+
+    expect(states).toEqual([
+      {
+        deviceId: "stack-003",
+        knownDeviceId: "stack-003",
+        peripheralId: "peripheral:ghi",
+        address: null,
+        localName: "GymMotion-003",
+        state: "syncing",
+        error: null,
+      },
+      {
+        deviceId: "stack-003",
+        knownDeviceId: "stack-003",
+        peripheralId: "peripheral:ghi",
+        address: null,
+        localName: "GymMotion-003",
+        state: "failed",
+        error:
+          "History replay start failed; leaving the session online and deferring replay. The object has been closed.",
       },
     ]);
   });
