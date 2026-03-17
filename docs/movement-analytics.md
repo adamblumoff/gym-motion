@@ -27,7 +27,10 @@ Related:
 - Canonical movement buckets are currently computed from stored `motion_events` using `received_at` time on the gateway/backend side.
 - The renderer does not compute canonical history from raw snapshot events anymore.
 - The renderer may still build a short live provisional overlay from snapshot movement events for the current tail.
-- The Windows runtime now requests firmware history pages from the sidecar after a session becomes healthy, persists each page through child-process IPC, and only then acks firmware compaction.
+- The Windows runtime now treats reconnect and history replay as separate phases:
+  - first the session must reach normal runtime `connected`
+  - only after that does the child request firmware history pages
+- Each history page is persisted through child-process IPC before firmware compaction is acked.
 - Firmware archive replay still reuses raw motion history rows today; compact boot-session span archival is still a future firmware-format improvement rather than a desktop/runtime gap.
 
 ## Desktop Cache
@@ -38,7 +41,11 @@ Related:
 
 ## Page Behavior
 
+- The Analytics dropdown can show approved devices even when they are disconnected or reconnecting; connected nodes should sort to the top.
+- The selected device stays pinned even if it drops offline.
+- Connection and replay state belongs on the Analytics page itself, not in dropdown eligibility.
 - If a device has cached canonical analytics, show it immediately and refresh in the background.
-- If a device has no canonical analytics yet, the page can show a live provisional chart while history is being built.
+- If history replay is already running, keep cached analytics visible and show a page-level loading banner until replay finishes.
+- If a device has no canonical analytics yet, the page can show a loading skeleton while history is being built and still fall back to a live provisional chart when that is all we have.
 - Sync problems and compaction/storage-pressure notices belong on the analytics page, not the dashboard.
 - Storage-pressure notices can come from either persisted compaction logs or `device_sync_state.last_overflow_detected_at` when the firmware reported overflow during replay.

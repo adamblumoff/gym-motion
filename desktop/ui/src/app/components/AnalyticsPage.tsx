@@ -23,6 +23,7 @@ import { Toaster, toast } from "sonner";
 import type {
   DeviceMovementAnalytics,
   DeviceMovementAnalyticsResult,
+  GatewayConnectionState,
   MovementAnalyticsRange,
 } from "@core/contracts";
 
@@ -93,37 +94,125 @@ function formatLastSyncLabel(analytics: DeviceMovementAnalytics | null) {
   })}`;
 }
 
+function connectionSortValue(connectionState: GatewayConnectionState) {
+  switch (connectionState) {
+    case "connected":
+      return 0;
+    case "reconnecting":
+      return 1;
+    case "connecting":
+      return 2;
+    case "discovered":
+      return 3;
+    case "disconnected":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function buildAnalyticsBanner({
+  connectionState,
+  historySyncState,
+  historySyncError,
+}: {
+  connectionState: GatewayConnectionState;
+  historySyncState: "idle" | "syncing" | "failed";
+  historySyncError: string | null;
+}) {
+  if (connectionState === "reconnecting" || connectionState === "connecting") {
+    return {
+      tone: "amber",
+      message: "Reconnecting to this node. Cached analytics stay visible while the session comes back.",
+    };
+  }
+
+  if (connectionState === "disconnected" || connectionState === "unreachable") {
+    return {
+      tone: "zinc",
+      message: "This node is offline right now. Showing cached analytics when they are available.",
+    };
+  }
+
+  if (historySyncState === "failed") {
+    return {
+      tone: "amber",
+      message: historySyncError ?? "History sync paused. Use Refresh to retry.",
+    };
+  }
+
+  if (historySyncState === "syncing") {
+    return {
+      tone: "amber",
+      message: "Loading latest history. Cached analytics stay visible until replay finishes.",
+    };
+  }
+
+  return null;
+}
+
 export function AnalyticsPage() {
   const {
     snapshot,
     setup,
     getDeviceAnalytics,
     refreshDeviceAnalytics,
+    requestDeviceHistorySync,
     deleteDeviceAnalyticsHistory,
   } = useDesktopRuntime();
   const nodes = useMemo(
     () => (snapshot ? buildBluetoothNodes(snapshot, setup?.approvedNodes ?? []) : []),
     [setup?.approvedNodes, snapshot],
   );
+  const analyticsNodes = useMemo(
+    () =>
+      nodes.toSorted((left, right) => {
+        const connectionOrder =
+          connectionSortValue(left.connectionState) - connectionSortValue(right.connectionState);
+
+        if (connectionOrder !== 0) {
+          return connectionOrder;
+        }
+
+        return left.name.localeCompare(right.name);
+      }),
+    [nodes],
+  );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [range, setRange] = useState<MovementAnalyticsRange>("24h");
   const [analyticsResult, setAnalyticsResult] = useState<DeviceMovementAnalyticsResult | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedDeviceId && nodes.length > 0) {
-      setSelectedDeviceId(nodes[0]?.id ?? null);
+    if (!selectedDeviceId && analyticsNodes.length > 0) {
+      setSelectedDeviceId(analyticsNodes[0]?.id ?? null);
       return;
     }
 
-    if (selectedDeviceId && nodes.some((node) => node.id === selectedDeviceId)) {
+    if (selectedDeviceId && analyticsNodes.some((node) => node.id === selectedDeviceId)) {
       return;
     }
 
-    setSelectedDeviceId(nodes[0]?.id ?? null);
-  }, [nodes, selectedDeviceId]);
+    setSelectedDeviceId(analyticsNodes[0]?.id ?? null);
+  }, [analyticsNodes, selectedDeviceId]);
+
+  const selectedDeviceSummary =
+    snapshot?.devices.find((device) => device.id === selectedDeviceId) ?? null;
+  const historySyncState = selectedDeviceSummary?.historySyncState ?? "idle";
+  const historySyncError =
+    selectedDeviceSummary?.historySyncState === "failed"
+      ? (selectedDeviceSummary.historySyncError ?? "History sync paused. Use Refresh to retry.")
+      : null;
+  const showHistorySyncing = historySyncState === "syncing";
+  const banner = selectedDeviceSummary
+    ? buildAnalyticsBanner({
+        connectionState: selectedDeviceSummary.gatewayConnectionState,
+        historySyncState,
+        historySyncError,
+      })
+    : null;
 
   useEffect(() => {
     if (!selectedDeviceId) {
@@ -136,13 +225,15 @@ export function AnalyticsPage() {
 
     async function loadAnalytics() {
       const deviceId = selectedDeviceId;
+      const hasMatchingAnalytics =
+        analyticsResult?.analytics?.deviceId === deviceId && analyticsResult.analytics.range === range;
 
       if (!deviceId) {
         return;
       }
 
       setSyncError(null);
-      setLoading(true);
+      setLoading(!hasMatchingAnalytics);
 
       try {
         const cachedResult = await getDeviceAnalytics(deviceId, range);
@@ -152,14 +243,13 @@ export function AnalyticsPage() {
         }
 
         setAnalyticsResult(cachedResult);
+        setLoading(false);
 
-        if (!cachedResult.fromCache) {
-          setLoading(false);
+        if (!cachedResult.fromCache || historySyncState === "syncing") {
           return;
         }
 
-        setLoading(false);
-        setSyncing(true);
+        setRefreshing(true);
 
         const refreshedResult = await refreshDeviceAnalytics(deviceId, range);
 
@@ -177,7 +267,7 @@ export function AnalyticsPage() {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          setSyncing(false);
+          setRefreshing(false);
         }
       }
     }
@@ -187,7 +277,13 @@ export function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [getDeviceAnalytics, refreshDeviceAnalytics, range, selectedDeviceId]);
+  }, [
+    getDeviceAnalytics,
+    historySyncState,
+    refreshDeviceAnalytics,
+    range,
+    selectedDeviceId,
+  ]);
 
   const canonicalAnalytics = analyticsResult?.analytics ?? null;
   const liveAnalytics = useMemo(
@@ -207,29 +303,44 @@ export function AnalyticsPage() {
     [canonicalAnalytics, liveAnalytics],
   );
   const totals = useMemo(() => summarizeMovementChart(chartPoints), [chartPoints]);
-  const selectedNode = nodes.find((node) => node.id === selectedDeviceId) ?? null;
+  const selectedNode = analyticsNodes.find((node) => node.id === selectedDeviceId) ?? null;
   const showProvisionalOnly =
     !canonicalAnalytics?.hasCanonicalHistory && liveAnalytics !== null;
-  const showSkeleton = loading && !showProvisionalOnly;
+  const showSkeleton =
+    (loading || (showHistorySyncing && !canonicalAnalytics && !showProvisionalOnly)) &&
+    !!selectedNode;
+  const effectiveSyncError = syncError;
+  const isBusy = refreshing || showHistorySyncing;
 
   async function handleRefresh() {
     if (!selectedDeviceId) {
       return;
     }
 
-    setSyncing(true);
+    setRefreshing(true);
     setSyncError(null);
 
     try {
+      if (
+        selectedDeviceSummary?.gatewayConnectionState === "connected" &&
+        historySyncState !== "syncing"
+      ) {
+        await requestDeviceHistorySync(selectedDeviceId);
+      }
+
       const refreshedResult = await refreshDeviceAnalytics(selectedDeviceId, range);
       setAnalyticsResult(refreshedResult);
-      toast.success("Canonical movement history refreshed.");
+      toast.success(
+        selectedDeviceSummary?.gatewayConnectionState === "connected"
+          ? "History sync requested. Analytics will refresh as replay completes."
+          : "Canonical movement history refreshed.",
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to refresh analytics.";
       setSyncError(message);
       toast.error(message);
     } finally {
-      setSyncing(false);
+      setRefreshing(false);
     }
   }
 
@@ -268,8 +379,8 @@ export function AnalyticsPage() {
         backLabel="Back to Dashboard"
         rightSlot={(
           <div className="flex items-center gap-2 text-xs text-zinc-500">
-            {syncing ? <div className="size-2 rounded-full bg-amber-400 animate-pulse" /> : <div className="size-2 rounded-full bg-emerald-400" />}
-            {syncing ? "Syncing history" : formatLastSyncLabel(canonicalAnalytics)}
+            {isBusy ? <div className="size-2 animate-pulse rounded-full bg-amber-400" /> : <div className="size-2 rounded-full bg-emerald-400" />}
+            {showHistorySyncing ? "Loading latest history" : formatLastSyncLabel(canonicalAnalytics)}
           </div>
         )}
       />
@@ -295,8 +406,8 @@ export function AnalyticsPage() {
                 onChange={(event) => setSelectedDeviceId(event.target.value || null)}
                 className="rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-blue-500"
               >
-                {nodes.length === 0 ? <option value="">No devices</option> : null}
-                {nodes.map((node) => (
+                {analyticsNodes.length === 0 ? <option value="">No devices</option> : null}
+                {analyticsNodes.map((node) => (
                   <option key={node.id} value={node.id}>
                     {node.name}
                   </option>
@@ -322,10 +433,10 @@ export function AnalyticsPage() {
                 size="sm"
                 title="Refresh canonical analytics history"
                 onClick={() => void handleRefresh()}
-                disabled={!selectedDeviceId || syncing}
+                disabled={!selectedDeviceId || isBusy}
                 className="border-zinc-800 bg-black text-zinc-200 hover:bg-zinc-900"
               >
-                <RefreshCcw className={`size-4 ${syncing ? "animate-spin" : ""}`} />
+                <RefreshCcw className={`size-4 ${isBusy ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
               <Button
@@ -342,9 +453,21 @@ export function AnalyticsPage() {
             </div>
           </div>
 
-          {syncError ? (
+          {banner ? (
+            <div
+              className={
+                banner.tone === "zinc"
+                  ? "rounded-2xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-300"
+                  : "rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200"
+              }
+            >
+              {banner.message}
+            </div>
+          ) : null}
+
+          {effectiveSyncError ? (
             <div className="rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-              Analytics sync warning: {syncError}
+              Analytics sync warning: {effectiveSyncError}
             </div>
           ) : null}
 
@@ -408,10 +531,18 @@ export function AnalyticsPage() {
                           <TimerReset className="size-5 text-amber-300" />
                           Building history
                         </>
-                      ) : syncing ? (
+                      ) : showHistorySyncing ? (
                         <>
                           <RefreshCcw className="size-5 animate-spin text-amber-300" />
-                          Syncing
+                          Loading latest history
+                        </>
+                      ) : selectedDeviceSummary?.gatewayConnectionState !== "connected" ? (
+                        <>
+                          <ShieldAlert className="size-5 text-zinc-400" />
+                          {selectedDeviceSummary?.gatewayConnectionState === "reconnecting" ||
+                          selectedDeviceSummary?.gatewayConnectionState === "connecting"
+                            ? "Reconnecting"
+                            : "Offline"}
                         </>
                       ) : (
                         <>
@@ -422,9 +553,11 @@ export function AnalyticsPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="pt-0 text-sm text-zinc-400">
-                    {canonicalAnalytics?.hasOlderHistory
-                      ? "Additional older history exists beyond the current dropdown."
-                      : "Visible range is fully represented here."}
+                      {canonicalAnalytics?.hasOlderHistory
+                        ? "Additional older history exists beyond the current dropdown."
+                        : selectedDeviceSummary?.gatewayConnectionState === "connected"
+                          ? "Visible range is fully represented here."
+                          : "Cached analytics remain available while this node is offline."}
                   </CardContent>
                 </Card>
               </div>
