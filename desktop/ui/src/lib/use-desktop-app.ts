@@ -6,6 +6,7 @@ import type {
   DesktopSnapshot,
 } from "@core/contracts";
 import { matchesApprovedNodeIdentity } from "@core/approved-node-runtime-match";
+import { liveStatusLabelForScan } from "@core/gateway-scan";
 import {
   mergeActivityUpdate,
   mergeEventUpdate,
@@ -50,15 +51,45 @@ function filterSnapshotToApprovedNodes(
   }
 
   const remainingDeviceIds = new Set(devices.map((device) => device.id));
+  const connectedNodeCount = devices.filter(
+    (device) => device.gatewayConnectionState === "connected",
+  ).length;
+  const reconnectingNodeCount = devices.filter((device) =>
+    ["connecting", "reconnecting"].includes(device.gatewayConnectionState),
+  ).length;
+  const liveStatus =
+    snapshot.runtimeState === "starting"
+      ? "Starting gateway runtime…"
+      : snapshot.runtimeState === "restarting"
+        ? "Restarting gateway runtime…"
+        : snapshot.runtimeState === "degraded"
+          ? "Gateway degraded"
+          : connectedNodeCount > 0
+            ? "Gateway live"
+            : liveStatusLabelForScan(
+                  snapshot.gateway.scanState,
+                  snapshot.gateway.scanReason,
+                  reconnectingNodeCount,
+                ) ??
+                (snapshot.gateway.adapterState !== "poweredOn"
+                  ? "Waiting for BLE adapter"
+                  : "Waiting for approved BLE nodes");
 
   return {
     ...snapshot,
+    liveStatus,
     devices,
     events: snapshot.events.filter((event) => remainingDeviceIds.has(event.deviceId)),
     logs: snapshot.logs.filter((log) => remainingDeviceIds.has(log.deviceId)),
     activities: snapshot.activities.filter((activity) =>
       remainingDeviceIds.has(activity.deviceId),
     ),
+    gateway: {
+      ...snapshot.gateway,
+      connectedNodeCount,
+      reconnectingNodeCount,
+      knownNodeCount: devices.length,
+    },
   };
 }
 
