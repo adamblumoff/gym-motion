@@ -49,3 +49,12 @@ pub(super) async fn report_reconnect_completed(
         .await?;
     Ok(())
 }
+
+pub(super) async fn report_history_sync_ready(
+    writer: &EventWriter,
+    node: &DiscoveredNode,
+) -> Result<()> {
+    writer
+        .send(&Event::HistorySyncReady { node: node.clone() })
+        .await
+}

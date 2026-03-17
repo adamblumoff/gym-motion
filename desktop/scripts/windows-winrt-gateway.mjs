@@ -70,7 +70,7 @@ const historySync = createHistorySyncCoordinator({
   onHistorySyncStateChanged(update) {
     runtimeServer.noteHistorySyncState(update);
   },
-  autoStartDelayMs: 5_000,
+  autoStartDelayMs: 0,
 });
 
 function setRuntimeIssue(issue) {
@@ -388,13 +388,14 @@ function handleSidecarEvent(event) {
     case "node_connection_state":
       runtimeBridge.handleNodeConnectionState(event);
       if (
-        (event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected") ===
+        (event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected") !==
         "connected"
       ) {
-        historySync.handleNodeConnected(event.node ?? {});
-      } else {
         historySync.handleNodeDisconnected(event);
       }
+      break;
+    case "history_sync_ready":
+      historySync.handleNodeConnected(event.node ?? {});
       break;
     case "history_record":
       historySync.handleHistoryRecord(event);

@@ -10,7 +10,8 @@ use crate::protocol::{ApprovedNodeRule, DiscoveredNode, Event, ReconnectStatus};
 use super::{
     approval::is_approved,
     config::Config,
-    session_transport_monitor::{monitor_active_session, MonitorSessionConfig},
+    session_transport_monitor::monitor_active_session,
+    session_transport_monitor_helpers::MonitorSessionConfig,
     session_transport_setup::{prepare_session_stream, PrepareSessionConfig},
     session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
@@ -19,6 +20,7 @@ use super::{
 pub(super) const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 1_000;
+const HISTORY_SYNC_START_CONFIRM_TIMEOUT_MS: u64 = 2_000;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 2;
 const GATT_SETUP_RETRY_DELAY_MS: u64 = 300;
 const SERVICE_DISCOVERY_RETRY_ATTEMPTS: u32 = 2;
@@ -97,6 +99,7 @@ pub(super) async fn connect_and_stream(
         MonitorSessionConfig {
             connection_health_poll_ms: CONNECTION_HEALTH_POLL_MS,
             session_health_ack_timeout_ms: SESSION_HEALTH_ACK_TIMEOUT_MS,
+            history_sync_start_confirm_timeout_ms: HISTORY_SYNC_START_CONFIRM_TIMEOUT_MS,
             session_bootstrap_retry_limit: SESSION_BOOTSTRAP_RETRY_LIMIT,
             session_telemetry_confirm_retry_limit: SESSION_TELEMETRY_CONFIRM_RETRY_LIMIT,
         },

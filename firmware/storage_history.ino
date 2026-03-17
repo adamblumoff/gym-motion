@@ -206,14 +206,44 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
   }
 }
 
+void sendHistorySyncReady(
+  const String& requestId,
+  unsigned long afterSequence,
+  unsigned long highWaterSequence,
+  size_t maxRecords
+) {
+  String payload =
+    "{\"type\":\"history-sync-ready\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) + "\"";
+
+  if (requestId.length() > 0) {
+    payload += ",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
+  }
+
+  payload +=
+    ",\"afterSequence\":" + String(afterSequence) +
+    ",\"highWaterSequence\":" + String(highWaterSequence) +
+    ",\"maxRecords\":" + String(maxRecords) +
+    "}";
+
+  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+}
+
 void sendHistorySyncComplete(
+  const String& requestId,
   unsigned long latestSequence,
   unsigned long highWaterSequence,
   size_t sentCount
 ) {
   String payload =
     "{\"type\":\"history-sync-complete\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"latestSequence\":" + String(latestSequence) +
+    "\"";
+
+  if (requestId.length() > 0) {
+    payload += ",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
+  }
+
+  payload +=
+    ",\"latestSequence\":" + String(latestSequence) +
     ",\"highWaterSequence\":" + String(highWaterSequence) +
     ",\"sentCount\":" + String(sentCount) +
     ",\"hasMore\":" + String(latestSequence < highWaterSequence ? "true" : "false");
@@ -226,15 +256,18 @@ void sendHistorySyncComplete(
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
-void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
+void streamHistoryRecords(const String& requestId, unsigned long afterSequence, size_t maxRecords) {
   File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
   const unsigned long highWaterSequence =
     nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
 
   if (!history) {
-    sendHistorySyncComplete(afterSequence, highWaterSequence, 0);
+    sendHistorySyncReady(requestId, afterSequence, highWaterSequence, maxRecords);
+    sendHistorySyncComplete(requestId, afterSequence, highWaterSequence, 0);
     return;
   }
+
+  sendHistorySyncReady(requestId, afterSequence, highWaterSequence, maxRecords);
 
   size_t sentCount = 0;
   unsigned long latestSequence = afterSequence;
@@ -267,5 +300,5 @@ void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
   }
 
   history.close();
-  sendHistorySyncComplete(latestSequence, highWaterSequence, sentCount);
+  sendHistorySyncComplete(requestId, latestSequence, highWaterSequence, sentCount);
 }

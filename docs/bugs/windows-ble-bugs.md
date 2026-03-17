@@ -180,9 +180,14 @@ protocol, or the vendored WinRT `btleplug` package.
 - Only fall back to reconnect scan bursts if in-session recovery fails.
 - Serialize active-session control writes so lease heartbeats, `sync-now`, and
   history replay commands cannot interleave framed writes on the same control
-  characteristic.
-- Delay automatic history replay briefly after reconnect so the live session can
-  prove the steady-state control path is healthy before replay starts.
+  characteristic, and let lease heartbeats take priority over replay writes.
+- Do not treat `history-sync-begin` as a blind retryable write. Attach a
+  request id, have firmware emit `history-sync-ready` before streaming records,
+  and wait for that acceptance signal before deciding a closed-handle error
+  really needs recovery.
+- Delay automatic history replay until the first confirmed post-connect lease
+  heartbeat lands; the gateway should react to the sidecar's
+  `history_sync_ready` event rather than the raw `connected` transition.
 
 ### Watch Out For
 

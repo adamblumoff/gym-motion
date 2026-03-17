@@ -114,6 +114,8 @@ function buildPersistPayload(deviceId, session, completion) {
 function isHistorySyncFailureMessage(message) {
   return (
     message === "Ignoring history sync request until the active session is healthy." ||
+    message ===
+      "Ignoring history sync request until the active session confirms a steady-state lease heartbeat." ||
     message.startsWith("History replay start failed") ||
     message.startsWith("History replay ack failed")
   );

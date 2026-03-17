@@ -509,9 +509,14 @@ void handleRuntimeControl(const String& payload) {
 
   if (type == "history-sync-begin") {
     disarmRuntimeBootstrapWatchdog();
+    const String requestId = extractJsonString(payload, "requestId");
     const unsigned long afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
     const size_t maxRecords = extractJsonSize(payload, "maxRecords", HISTORY_SYNC_PAGE_SIZE);
-    streamHistoryRecords(afterSequence, maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE);
+    streamHistoryRecords(
+      requestId,
+      afterSequence,
+      maxRecords > 0 ? maxRecords : HISTORY_SYNC_PAGE_SIZE
+    );
     return;
   }
 

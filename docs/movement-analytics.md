@@ -31,10 +31,11 @@ Related:
 - The Windows runtime now treats reconnect and history replay as separate phases:
   - first the session must reach normal runtime `connected`
   - only after that does the child request firmware history pages
-  - auto replay is delayed by one lease interval so a freshly reconnected session can prove the steady-state control path is healthy before replay begins
+  - auto replay now waits for the first confirmed post-connect lease refresh; the sidecar emits `history_sync_ready` only after that steady-state heartbeat lands
 - Each history page is persisted through child-process IPC before firmware compaction is acked.
 - After a page is persisted, replay advancement is serialized behind that ack. The gateway child must not fire a second `start_history_sync` in parallel with the ack for the page that just landed; the sidecar owns the "ack then next page" sequence on the live session.
-- If replay hits a closed-handle WinRT control-path error, pause replay for that session immediately. Keep the node connected only if active-session recovery can reacquire the full runtime IO path; otherwise force a clean reconnect instead of pretending the live session is still healthy.
+- Replay start now carries a request id and the firmware emits `history-sync-ready` before the page stream. If WinRT reports a closed-handle write failure for `history-sync-begin`, the sidecar waits briefly for `history-sync-ready`, `history-record`, or `history-sync-complete` before deciding whether recovery is actually needed.
+- If replay hits a closed-handle WinRT control-path error and the device never acknowledges the request, pause replay for that session immediately. Keep the node connected only if active-session recovery can reacquire the full runtime IO path; otherwise force a clean reconnect instead of pretending the live session is still healthy.
 - Firmware archive replay still reuses raw motion history rows today; compact boot-session span archival is still a future firmware-format improvement rather than a desktop/runtime gap.
 
 ## Desktop Cache

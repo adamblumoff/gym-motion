@@ -12,12 +12,14 @@ use tokio::{
     sync::{mpsc, watch, RwLock},
     time::sleep,
 };
+use uuid::Uuid;
 
 use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
         ApprovedNodeRule, DiscoveredNode, Event, HistoryRecordStatusPayload,
-        HistorySyncCompletePayload, ReconnectStatus, RuntimeStatusPayload, TelemetryPayload,
+        HistorySyncCompletePayload, HistorySyncReadyPayload, ReconnectStatus, RuntimeStatusPayload,
+        TelemetryPayload,
     },
 };
 
@@ -28,10 +30,18 @@ use super::{
         new_control_write_lock, send_app_session_bootstrap_locked, send_app_session_lease_locked,
         write_chunked_json_command_locked,
     },
-    session_lease::{is_closed_handle_error_message, spawn_lease_task},
+    session_lease::is_closed_handle_error_message,
     session_transport_history::{
         force_reconnect_after_recovery_failure, recover_control_path_with_retry, send_history_ack,
         send_history_sync_begin,
+    },
+    session_transport_monitor_helpers::{
+        accept_pending_history_sync_start, enrich_node_with_device_id,
+        handle_pending_history_sync_timeout, known_device_id_for_node,
+        log_ignored_history_sync_request, pending_history_sync_matches_complete,
+        pending_history_sync_matches_ready, replace_active_lease_task,
+        report_history_sync_ready_if_needed, spawn_active_lease_task, HistorySyncAttemptKind,
+        MonitorSessionConfig, PendingHistorySyncStart, PendingHistorySyncTimeoutOutcome,
     },
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::emit_handshake_step,
@@ -39,31 +49,6 @@ use super::{
     session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
 };
-
-#[derive(Clone, Copy)]
-pub(super) struct MonitorSessionConfig {
-    pub(super) connection_health_poll_ms: u64,
-    pub(super) session_health_ack_timeout_ms: u64,
-    pub(super) session_bootstrap_retry_limit: u32,
-    pub(super) session_telemetry_confirm_retry_limit: u32,
-}
-
-async fn enrich_node_with_device_id(
-    node: &DiscoveredNode,
-    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
-    device_id: &str,
-) -> DiscoveredNode {
-    if let Some(peripheral_id) = node.peripheral_id.clone() {
-        known_device_ids
-            .write()
-            .await
-            .insert(peripheral_id, device_id.to_string());
-    }
-
-    let mut enriched = node.clone();
-    enriched.known_device_id = Some(device_id.to_string());
-    enriched
-}
 
 pub(super) async fn monitor_active_session(
     mut prepared: PreparedSession,
@@ -102,21 +87,30 @@ pub(super) async fn monitor_active_session(
     let mut session_bootstrap_retry_count = 0_u32;
     let mut session_telemetry_confirm_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
+    let mut steady_state_lease_confirmed = false;
+    let mut history_sync_ready_reported = false;
+    let mut pending_history_sync_start: Option<PendingHistorySyncStart> = None;
     let mut current_control_characteristic = prepared.control_characteristic;
     let control_write_lock = new_control_write_lock();
-    let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) = spawn_lease_task(
-        control_write_lock.clone(),
-        prepared.peripheral.clone(),
-        current_control_characteristic.clone(),
-        app_session_id.clone(),
-    );
+    let pending_history_sync_sleep = sleep(Duration::from_secs(24 * 60 * 60));
+    tokio::pin!(pending_history_sync_sleep);
+    let (mut lease_shutdown_tx, mut lease_success_rx, mut lease_failure_rx, lease_task) =
+        spawn_active_lease_task(
+            &control_write_lock,
+            &prepared.peripheral,
+            &current_control_characteristic,
+            &app_session_id,
+        );
+    let mut lease_task = Some(lease_task);
 
     loop {
         tokio::select! {
             changed = session_shutdown.changed() => {
                 if changed.is_ok() && *session_shutdown.borrow() {
                     let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
+                    if let Some(task) = lease_task.take() {
+                        let _ = task.await;
+                    }
                     if prepared.peripheral.is_connected().await.unwrap_or(false) {
                         let _ = writer
                             .send(&Event::Log {
@@ -230,9 +224,48 @@ pub(super) async fn monitor_active_session(
                                             .into(),
                                         );
                                     }
+                                    "history-sync-ready" => {
+                                        match serde_json::from_value::<HistorySyncReadyPayload>(
+                                            payload_clone,
+                                        ) {
+                                            Ok(history_ready) => {
+                                                if pending_history_sync_matches_ready(
+                                                    &pending_history_sync_start,
+                                                    &history_ready.request_id,
+                                                ) {
+                                                    accept_pending_history_sync_start(
+                                                        &writer,
+                                                        &node,
+                                                        &ack_confirmed_node,
+                                                        &mut pending_history_sync_start,
+                                                        "history-sync-ready",
+                                                        "History replay start write hit a transient WinRT handle failure, but the device acknowledged the request; continuing replay on the current session.",
+                                                    )
+                                                    .await?;
+                                                }
+                                            }
+                                            Err(error) => {
+                                                writer
+                                                    .error(
+                                                        format!("Failed to parse history sync ready payload: {error}"),
+                                                        Some(json!({ "node": node.id })),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    }
                                     "history-record" => {
                                         match serde_json::from_value::<HistoryRecordStatusPayload>(payload_clone) {
                                             Ok(history_record) => {
+                                                accept_pending_history_sync_start(
+                                                    &writer,
+                                                    &node,
+                                                    &ack_confirmed_node,
+                                                    &mut pending_history_sync_start,
+                                                    "history-record",
+                                                    "History replay start write hit a transient WinRT handle failure, but the device began streaming records; continuing replay on the current session.",
+                                                )
+                                                .await?;
                                                 let enriched = enrich_node_with_device_id(
                                                     &node,
                                                     &known_device_ids,
@@ -260,6 +293,20 @@ pub(super) async fn monitor_active_session(
                                     "history-sync-complete" => {
                                         match serde_json::from_value::<HistorySyncCompletePayload>(payload_clone) {
                                             Ok(history_complete) => {
+                                                if pending_history_sync_matches_complete(
+                                                    &pending_history_sync_start,
+                                                    &history_complete,
+                                                ) {
+                                                    accept_pending_history_sync_start(
+                                                        &writer,
+                                                        &node,
+                                                        &ack_confirmed_node,
+                                                        &mut pending_history_sync_start,
+                                                        "history-sync-complete",
+                                                        "History replay start write hit a transient WinRT handle failure, but the device completed the page; continuing replay on the current session.",
+                                                    )
+                                                    .await?;
+                                                }
                                                 let enriched = enrich_node_with_device_id(
                                                     &node,
                                                     &known_device_ids,
@@ -340,6 +387,14 @@ pub(super) async fn monitor_active_session(
                                     false,
                                 )
                                 .await?;
+                                report_history_sync_ready_if_needed(
+                                    &writer,
+                                    &completed_node,
+                                    session_healthy_reported,
+                                    steady_state_lease_confirmed,
+                                    &mut history_sync_ready_reported,
+                                )
+                                .await?;
                             }
                         }
                         Err(error) => {
@@ -360,136 +415,107 @@ pub(super) async fn monitor_active_session(
                         max_records,
                     } => {
                         if !session_healthy_reported {
-                            writer
-                                .send(&Event::Log {
-                                    level: "warn".to_string(),
-                                    message: "Ignoring history sync request until the active session is healthy.".to_string(),
-                                    details: Some(json!({
-                                        "peripheralId": node.peripheral_id,
-                                        "knownDeviceId": ack_confirmed_node
-                                            .as_ref()
-                                            .and_then(|current| current.known_device_id.clone())
-                                            .or_else(|| node.known_device_id.clone()),
-                                        "address": node.address,
-                                        "afterSequence": after_sequence,
-                                        "maxRecords": max_records,
-                                    })),
-                                })
-                                .await?;
+                            log_ignored_history_sync_request(
+                                &writer,
+                                &node,
+                                &ack_confirmed_node,
+                                "Ignoring history sync request until the active session is healthy.",
+                                after_sequence,
+                                max_records,
+                            )
+                            .await?;
                             continue;
                         }
 
-                        let known_device_id = ack_confirmed_node
-                            .as_ref()
-                            .and_then(|current| current.known_device_id.clone())
-                            .or_else(|| node.known_device_id.clone());
+                        if !steady_state_lease_confirmed {
+                            log_ignored_history_sync_request(
+                                &writer,
+                                &node,
+                                &ack_confirmed_node,
+                                "Ignoring history sync request until the active session confirms a steady-state lease heartbeat.",
+                                after_sequence,
+                                max_records,
+                            )
+                            .await?;
+                            continue;
+                        }
+
+                        if pending_history_sync_start.is_some() {
+                            log_ignored_history_sync_request(
+                                &writer,
+                                &node,
+                                &ack_confirmed_node,
+                                "Ignoring history sync request while a previous replay start is still waiting for device-side confirmation.",
+                                after_sequence,
+                                max_records,
+                            )
+                            .await?;
+                            continue;
+                        }
+
+                        let request_id = Uuid::new_v4().to_string();
 
                         if let Err(error) = send_history_sync_begin(
                             &control_write_lock,
                             &prepared.peripheral,
                             &current_control_characteristic,
                             &node,
+                            &request_id,
                             after_sequence,
                             max_records,
                         )
                         .await
                         {
                             let error_message = format!("{:#}", error);
-                            let mut handled = false;
 
                             if is_closed_handle_error_message(&error_message) {
-                                let _ = lease_shutdown_tx.send(true);
-                                let _ = lease_task.await;
-                                match recover_control_path_with_retry(
-                                    &control_write_lock,
-                                    &prepared.peripheral,
-                                    &writer,
-                                    &node,
-                                    &reconnect,
-                                    &config,
-                                    &app_session_id,
-                                    &app_session_nonce,
-                                )
-                                .await
-                                {
-                                    Ok(recovered_control_characteristic) => {
-                                        current_control_characteristic =
-                                            recovered_control_characteristic;
-                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                            control_write_lock.clone(),
-                                            prepared.peripheral.clone(),
-                                            current_control_characteristic.clone(),
-                                            app_session_id.clone(),
-                                        );
-                                        lease_shutdown_tx = new_shutdown_tx;
-                                        lease_failure_rx = new_failure_rx;
-                                        lease_task = new_lease_task;
-
-                                        writer
-                                            .send(&Event::Log {
-                                                level: "warn".to_string(),
-                                                message: "History replay start failed, but the runtime control path recovered; leaving the session online and pausing replay until a manual retry.".to_string(),
-                                                details: Some(json!({
-                                                    "peripheralId": node.peripheral_id,
-                                                    "knownDeviceId": known_device_id,
-                                                    "address": node.address,
-                                                    "afterSequence": after_sequence,
-                                                    "maxRecords": max_records,
-                                                    "error": error_message,
-                                                })),
-                                            })
-                                            .await?;
-                                        handled = true;
-                                    }
-                                    Err(recovery_error) => {
-                                        writer
-                                            .send(&Event::Log {
-                                                level: "warn".to_string(),
-                                                message: "History replay start failed and control-path recovery did not succeed; forcing a clean reconnect.".to_string(),
-                                                details: Some(json!({
-                                                    "peripheralId": node.peripheral_id,
-                                                    "knownDeviceId": known_device_id,
-                                                    "address": node.address,
-                                                    "afterSequence": after_sequence,
-                                                    "maxRecords": max_records,
-                                                    "error": error_message,
-                                                    "recoveryError": format!("{:#}", recovery_error),
-                                                })),
-                                            })
-                                            .await?;
-                                        return Ok(Some(
-                                            force_reconnect_after_recovery_failure(
-                                                &prepared.peripheral,
-                                                &writer,
-                                                &node,
-                                                &reconnect,
-                                                &format!(
-                                                    "History replay start failed during active-session recovery for {}; forcing reconnect.",
-                                                    node.label
-                                                ),
-                                            )
-                                            .await?,
-                                        ));
-                                    }
-                                }
-                            }
-
-                            if !handled {
+                                pending_history_sync_start = Some(PendingHistorySyncStart {
+                                    request_id,
+                                    after_sequence,
+                                    max_records,
+                                    error_message: error_message.clone(),
+                                    attempt_kind: HistorySyncAttemptKind::Start,
+                                });
+                                pending_history_sync_sleep.as_mut().reset(
+                                    (Instant::now()
+                                        + Duration::from_millis(
+                                            monitor_config.history_sync_start_confirm_timeout_ms,
+                                        ))
+                                    .into(),
+                                );
                                 writer
                                     .send(&Event::Log {
                                         level: "warn".to_string(),
-                                        message: "History replay start failed; leaving the session online and deferring replay.".to_string(),
+                                        message: "History replay start write hit a transient WinRT handle failure; waiting briefly for device-side confirmation before forcing recovery.".to_string(),
                                         details: Some(json!({
                                             "peripheralId": node.peripheral_id,
-                                            "knownDeviceId": known_device_id,
+                                            "knownDeviceId": known_device_id_for_node(&ack_confirmed_node, &node),
                                             "address": node.address,
+                                            "requestId": pending_history_sync_start.as_ref().map(|pending| pending.request_id.clone()),
                                             "afterSequence": after_sequence,
                                             "maxRecords": max_records,
+                                            "confirmTimeoutMs": monitor_config.history_sync_start_confirm_timeout_ms,
                                             "error": error_message,
                                         })),
                                     })
                                     .await?;
+                                continue;
                             }
+
+                            writer
+                                .send(&Event::Log {
+                                    level: "warn".to_string(),
+                                    message: HistorySyncAttemptKind::Start.deferred_message().to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": known_device_id_for_node(&ack_confirmed_node, &node),
+                                        "address": node.address,
+                                        "afterSequence": after_sequence,
+                                        "maxRecords": max_records,
+                                        "error": error_message,
+                                    })),
+                                })
+                                .await?;
                         }
                     }
                     ActiveSessionCommand::AckHistorySync {
@@ -497,10 +523,7 @@ pub(super) async fn monitor_active_session(
                         continue_after_sequence,
                         max_records,
                     } => {
-                        let known_device_id = ack_confirmed_node
-                            .as_ref()
-                            .and_then(|current| current.known_device_id.clone())
-                            .or_else(|| node.known_device_id.clone());
+                        let known_device_id = known_device_id_for_node(&ack_confirmed_node, &node);
 
                         if let Err(error) = send_history_ack(
                             &control_write_lock,
@@ -516,7 +539,9 @@ pub(super) async fn monitor_active_session(
 
                             if is_closed_handle_error_message(&error_message) {
                                 let _ = lease_shutdown_tx.send(true);
-                                let _ = lease_task.await;
+                                if let Some(task) = lease_task.take() {
+                                    let _ = task.await;
+                                }
                                 match recover_control_path_with_retry(
                                     &control_write_lock,
                                     &prepared.peripheral,
@@ -530,17 +555,18 @@ pub(super) async fn monitor_active_session(
                                 .await
                                 {
                                     Ok(recovered_control_characteristic) => {
-                                        current_control_characteristic =
-                                            recovered_control_characteristic;
-                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                            control_write_lock.clone(),
-                                            prepared.peripheral.clone(),
-                                            current_control_characteristic.clone(),
-                                            app_session_id.clone(),
+                                        current_control_characteristic = recovered_control_characteristic;
+                                        steady_state_lease_confirmed = false;
+                                        replace_active_lease_task(
+                                            &control_write_lock,
+                                            &prepared.peripheral,
+                                            &current_control_characteristic,
+                                            &app_session_id,
+                                            &mut lease_shutdown_tx,
+                                            &mut lease_success_rx,
+                                            &mut lease_failure_rx,
+                                            &mut lease_task,
                                         );
-                                        lease_shutdown_tx = new_shutdown_tx;
-                                        lease_failure_rx = new_failure_rx;
-                                        lease_task = new_lease_task;
 
                                         writer
                                             .send(&Event::Log {
@@ -610,113 +636,71 @@ pub(super) async fn monitor_active_session(
 
                         if let Some(next_after_sequence) = continue_after_sequence {
                             let next_max_records = max_records.unwrap_or(250);
+                            let request_id = Uuid::new_v4().to_string();
 
                             if let Err(error) = send_history_sync_begin(
                                 &control_write_lock,
                                 &prepared.peripheral,
                                 &current_control_characteristic,
                                 &node,
+                                &request_id,
                                 next_after_sequence,
                                 next_max_records,
                             )
                             .await
                             {
                                 let error_message = format!("{:#}", error);
-                                let mut handled = false;
 
                                 if is_closed_handle_error_message(&error_message) {
-                                    let _ = lease_shutdown_tx.send(true);
-                                    let _ = lease_task.await;
-                                    match recover_control_path_with_retry(
-                                        &control_write_lock,
-                                        &prepared.peripheral,
-                                        &writer,
-                                        &node,
-                                        &reconnect,
-                                        &config,
-                                        &app_session_id,
-                                        &app_session_nonce,
-                                    )
-                                    .await
-                                    {
-                                        Ok(recovered_control_characteristic) => {
-                                            current_control_characteristic =
-                                                recovered_control_characteristic;
-                                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                                control_write_lock.clone(),
-                                                prepared.peripheral.clone(),
-                                                current_control_characteristic.clone(),
-                                                app_session_id.clone(),
-                                            );
-                                            lease_shutdown_tx = new_shutdown_tx;
-                                            lease_failure_rx = new_failure_rx;
-                                            lease_task = new_lease_task;
-
-                                            writer
-                                                .send(&Event::Log {
-                                                    level: "warn".to_string(),
-                                                    message: "History replay start failed after ack, but the runtime control path recovered; leaving the session online and pausing replay until a manual retry.".to_string(),
-                                                    details: Some(json!({
-                                                        "peripheralId": node.peripheral_id,
-                                                        "knownDeviceId": known_device_id,
-                                                        "address": node.address,
-                                                        "afterSequence": next_after_sequence,
-                                                        "maxRecords": next_max_records,
-                                                        "error": error_message,
-                                                    })),
-                                                })
-                                                .await?;
-                                            handled = true;
-                                        }
-                                        Err(recovery_error) => {
-                                            writer
-                                                .send(&Event::Log {
-                                                    level: "warn".to_string(),
-                                                    message: "History replay start failed after ack and control-path recovery did not succeed; forcing a clean reconnect.".to_string(),
-                                                    details: Some(json!({
-                                                        "peripheralId": node.peripheral_id,
-                                                        "knownDeviceId": known_device_id,
-                                                        "address": node.address,
-                                                        "afterSequence": next_after_sequence,
-                                                        "maxRecords": next_max_records,
-                                                        "error": error_message,
-                                                        "recoveryError": format!("{:#}", recovery_error),
-                                                    })),
-                                                })
-                                                .await?;
-                                            return Ok(Some(
-                                                force_reconnect_after_recovery_failure(
-                                                    &prepared.peripheral,
-                                                    &writer,
-                                                    &node,
-                                                    &reconnect,
-                                                    &format!(
-                                                        "History replay continuation failed during active-session recovery for {}; forcing reconnect.",
-                                                        node.label
-                                                    ),
-                                                )
-                                                .await?,
-                                            ));
-                                        }
-                                    }
-                                }
-
-                                if !handled {
+                                    pending_history_sync_start = Some(PendingHistorySyncStart {
+                                        request_id,
+                                        after_sequence: next_after_sequence,
+                                        max_records: next_max_records,
+                                        error_message: error_message.clone(),
+                                        attempt_kind: HistorySyncAttemptKind::Continuation,
+                                    });
+                                    pending_history_sync_sleep.as_mut().reset(
+                                        (Instant::now()
+                                            + Duration::from_millis(
+                                                monitor_config.history_sync_start_confirm_timeout_ms,
+                                            ))
+                                        .into(),
+                                    );
                                     writer
                                         .send(&Event::Log {
                                             level: "warn".to_string(),
-                                            message: "History replay start failed after ack; leaving the session online and pausing replay until a manual retry.".to_string(),
+                                            message: "History replay continuation write hit a transient WinRT handle failure; waiting briefly for device-side confirmation before forcing recovery.".to_string(),
                                             details: Some(json!({
                                                 "peripheralId": node.peripheral_id,
                                                 "knownDeviceId": known_device_id,
                                                 "address": node.address,
+                                                "requestId": pending_history_sync_start.as_ref().map(|pending| pending.request_id.clone()),
                                                 "afterSequence": next_after_sequence,
                                                 "maxRecords": next_max_records,
+                                                "confirmTimeoutMs": monitor_config.history_sync_start_confirm_timeout_ms,
                                                 "error": error_message,
                                             })),
                                         })
                                         .await?;
+                                    continue;
                                 }
+
+                                writer
+                                    .send(&Event::Log {
+                                        level: "warn".to_string(),
+                                        message: HistorySyncAttemptKind::Continuation
+                                            .deferred_message()
+                                            .to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": known_device_id,
+                                            "address": node.address,
+                                            "afterSequence": next_after_sequence,
+                                            "maxRecords": next_max_records,
+                                            "error": error_message,
+                                        })),
+                                    })
+                                    .await?;
                             }
                         }
                     }
@@ -843,11 +827,87 @@ pub(super) async fn monitor_active_session(
                     true,
                 )
                 .await?;
+                report_history_sync_ready_if_needed(
+                    &writer,
+                    &enriched,
+                    session_healthy_reported,
+                    steady_state_lease_confirmed,
+                    &mut history_sync_ready_reported,
+                )
+                .await?;
+            }
+            Some(()) = lease_success_rx.recv() => {
+                steady_state_lease_confirmed = true;
+                let ready_node = ack_confirmed_node
+                    .clone()
+                    .or_else(|| telemetry_fallback_node.clone())
+                    .unwrap_or_else(|| node.clone());
+                report_history_sync_ready_if_needed(
+                    &writer,
+                    &ready_node,
+                    session_healthy_reported,
+                    steady_state_lease_confirmed,
+                    &mut history_sync_ready_reported,
+                )
+                .await?;
+            }
+            _ = &mut pending_history_sync_sleep, if pending_history_sync_start.is_some() => {
+                let pending = pending_history_sync_start
+                    .take()
+                    .expect("pending history sync start should exist");
+
+                let _ = lease_shutdown_tx.send(true);
+                if let Some(task) = lease_task.take() {
+                    let _ = task.await;
+                }
+                match handle_pending_history_sync_timeout(
+                    &control_write_lock,
+                    &prepared.peripheral,
+                    &writer,
+                    &node,
+                    &reconnect,
+                    &config,
+                    &app_session_id,
+                    &app_session_nonce,
+                    pending,
+                    &ack_confirmed_node,
+                )
+                .await?
+                {
+                    PendingHistorySyncTimeoutOutcome::Recovered(recovered_control_characteristic) => {
+                        current_control_characteristic = recovered_control_characteristic;
+                        steady_state_lease_confirmed = false;
+                        replace_active_lease_task(
+                            &control_write_lock,
+                            &prepared.peripheral,
+                            &current_control_characteristic,
+                            &app_session_id,
+                            &mut lease_shutdown_tx,
+                            &mut lease_success_rx,
+                            &mut lease_failure_rx,
+                            &mut lease_task,
+                        );
+                    }
+                    PendingHistorySyncTimeoutOutcome::ReconnectRequired(reason) => {
+                        return Ok(Some(
+                            force_reconnect_after_recovery_failure(
+                                &prepared.peripheral,
+                                &writer,
+                                &node,
+                                &reconnect,
+                                &reason,
+                            )
+                            .await?,
+                        ));
+                    }
+                }
             }
             _ = sleep(Duration::from_millis(monitor_config.connection_health_poll_ms)) => {
                 if !is_approved(&node, &allowed_nodes.read().await) {
                     let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
+                    if let Some(task) = lease_task.take() {
+                        let _ = task.await;
+                    }
                     if prepared.peripheral.is_connected().await.unwrap_or(false) {
                         let _ = prepared.peripheral.disconnect().await;
                     }
@@ -855,13 +915,17 @@ pub(super) async fn monitor_active_session(
                 }
                 if !prepared.peripheral.is_connected().await.unwrap_or(false) {
                     let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
+                    if let Some(task) = lease_task.take() {
+                        let _ = task.await;
+                    }
                     return Ok(Some(format!("BLE transport ended for {}.", node.label)));
                 }
             }
             Some(reason) = lease_failure_rx.recv() => {
                 let _ = lease_shutdown_tx.send(true);
-                let _ = lease_task.await;
+                if let Some(task) = lease_task.take() {
+                    let _ = task.await;
+                }
                 if is_closed_handle_error_message(&reason) {
                     match recover_control_path_with_retry(
                         &control_write_lock,
@@ -877,15 +941,17 @@ pub(super) async fn monitor_active_session(
                     {
                         Ok(recovered_control_characteristic) => {
                             current_control_characteristic = recovered_control_characteristic;
-                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                control_write_lock.clone(),
-                                prepared.peripheral.clone(),
-                                current_control_characteristic.clone(),
-                                app_session_id.clone(),
+                            steady_state_lease_confirmed = false;
+                            replace_active_lease_task(
+                                &control_write_lock,
+                                &prepared.peripheral,
+                                &current_control_characteristic,
+                                &app_session_id,
+                                &mut lease_shutdown_tx,
+                                &mut lease_success_rx,
+                                &mut lease_failure_rx,
+                                &mut lease_task,
                             );
-                            lease_shutdown_tx = new_shutdown_tx;
-                            lease_failure_rx = new_failure_rx;
-                            lease_task = new_lease_task;
                             continue;
                         }
                         Err(error) => {
@@ -915,7 +981,9 @@ pub(super) async fn monitor_active_session(
     }
 
     let _ = lease_shutdown_tx.send(true);
-    let _ = lease_task.await;
+    if let Some(task) = lease_task.take() {
+        let _ = task.await;
+    }
 
     if prepared.peripheral.is_connected().await.unwrap_or(false) {
         let _ = prepared.peripheral.disconnect().await;

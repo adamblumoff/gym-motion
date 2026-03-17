@@ -246,6 +246,46 @@ describe("windows winrt gateway history sync", () => {
     ]);
   });
 
+  it("treats pre-lease history sync rejections as history sync failures", () => {
+    const states = [];
+
+    const coordinator = createHistorySyncCoordinator({
+      sendSidecarCommand() {},
+      sendRequestToDesktop() {
+        return Promise.resolve();
+      },
+      onHistorySyncStateChanged(update) {
+        states.push(update);
+      },
+      debug() {},
+      autoStartDelayMs: 0,
+    });
+
+    coordinator.handleRuntimeLog({
+      level: "warn",
+      message:
+        "Ignoring history sync request until the active session confirms a steady-state lease heartbeat.",
+      details: {
+        peripheralId: "peripheral:lease",
+        knownDeviceId: "stack-lease",
+        localName: "GymMotion-lease",
+      },
+    });
+
+    expect(states).toEqual([
+      {
+        deviceId: "stack-lease",
+        knownDeviceId: "stack-lease",
+        peripheralId: "peripheral:lease",
+        address: null,
+        localName: "GymMotion-lease",
+        state: "failed",
+        error:
+          "Ignoring history sync request until the active session confirms a steady-state lease heartbeat.",
+      },
+    ]);
+  });
+
   it("delays automatic history replay until after the configured post-connect delay", () => {
     const commands = [];
     const scheduled = [];

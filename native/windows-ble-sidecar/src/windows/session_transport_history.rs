@@ -9,7 +9,7 @@ use crate::protocol::{DiscoveredNode, Event, ReconnectStatus};
 
 use super::{
     config::Config,
-    handshake::{write_chunked_json_command_locked, ControlWriteLock},
+    handshake::{write_chunked_json_command_once_locked, ControlWriteLock},
     session_transport_recovery::recover_active_session_io,
     writer::EventWriter,
 };
@@ -22,17 +22,19 @@ pub(super) async fn send_history_sync_begin(
     peripheral: &btleplug::platform::Peripheral,
     control_characteristic: &btleplug::api::Characteristic,
     node: &DiscoveredNode,
+    request_id: &str,
     after_sequence: u64,
     max_records: usize,
 ) -> Result<()> {
     let payload = json!({
         "type": "history-sync-begin",
+        "requestId": request_id,
         "afterSequence": after_sequence,
         "maxRecords": max_records,
     })
     .to_string();
 
-    write_chunked_json_command_locked(
+    write_chunked_json_command_once_locked(
         control_write_lock,
         peripheral,
         control_characteristic,
@@ -55,7 +57,7 @@ pub(super) async fn send_history_ack(
     })
     .to_string();
 
-    write_chunked_json_command_locked(
+    write_chunked_json_command_once_locked(
         control_write_lock,
         peripheral,
         control_characteristic,

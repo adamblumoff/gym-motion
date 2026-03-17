@@ -20,10 +20,12 @@ pub(super) fn spawn_lease_task(
     session_id: String,
 ) -> (
     watch::Sender<bool>,
+    mpsc::UnboundedReceiver<()>,
     mpsc::UnboundedReceiver<String>,
     tokio::task::JoinHandle<()>,
 ) {
     let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
+    let (lease_success_tx, lease_success_rx) = mpsc::unbounded_channel::<()>();
     let (lease_failure_tx, lease_failure_rx) = mpsc::unbounded_channel::<String>();
     let lease_task = tokio::spawn(async move {
         let mut lease_heartbeat =
@@ -48,10 +50,16 @@ pub(super) fn spawn_lease_task(
                         let _ = lease_failure_tx.send(format_error_chain(&error));
                         break;
                     }
+                    let _ = lease_success_tx.send(());
                 }
             }
         }
     });
 
-    (lease_shutdown_tx, lease_failure_rx, lease_task)
+    (
+        lease_shutdown_tx,
+        lease_success_rx,
+        lease_failure_rx,
+        lease_task,
+    )
 }
