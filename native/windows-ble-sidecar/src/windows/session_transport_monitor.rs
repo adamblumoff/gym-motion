@@ -405,23 +405,221 @@ pub(super) async fn monitor_active_session(
                             continue;
                         }
 
-                        send_history_sync_begin(
+                        let known_device_id = ack_confirmed_node
+                            .as_ref()
+                            .and_then(|current| current.known_device_id.clone())
+                            .or_else(|| node.known_device_id.clone());
+
+                        if let Err(error) = send_history_sync_begin(
                             &prepared.peripheral,
                             &current_control_characteristic,
                             &node,
                             after_sequence,
                             max_records,
                         )
-                        .await?;
+                        .await
+                        {
+                            let error_message = format!("{:#}", error);
+                            let mut handled = false;
+
+                            if is_closed_handle_error_message(&error_message)
+                                && prepared.peripheral.is_connected().await.unwrap_or(false)
+                            {
+                                match recover_active_session_control_path(
+                                    &prepared.peripheral,
+                                    &writer,
+                                    &node,
+                                    &reconnect,
+                                    config.control_uuid,
+                                    &app_session_id,
+                                    &app_session_nonce,
+                                )
+                                .await
+                                {
+                                    Ok(recovered_control_characteristic) => {
+                                        let _ = lease_shutdown_tx.send(true);
+                                        let _ = lease_task.await;
+                                        current_control_characteristic =
+                                            recovered_control_characteristic;
+                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            prepared.peripheral.clone(),
+                                            current_control_characteristic.clone(),
+                                            app_session_id.clone(),
+                                        );
+                                        lease_shutdown_tx = new_shutdown_tx;
+                                        lease_failure_rx = new_failure_rx;
+                                        lease_task = new_lease_task;
+
+                                        if let Err(retry_error) = send_history_sync_begin(
+                                            &prepared.peripheral,
+                                            &current_control_characteristic,
+                                            &node,
+                                            after_sequence,
+                                            max_records,
+                                        )
+                                        .await
+                                        {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "History replay start failed after control-path recovery; leaving the session online and deferring replay.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": known_device_id,
+                                                        "address": node.address,
+                                                        "afterSequence": after_sequence,
+                                                        "maxRecords": max_records,
+                                                        "error": format!("{:#}", retry_error),
+                                                    })),
+                                                })
+                                                .await?;
+                                        }
+                                        handled = true;
+                                    }
+                                    Err(recovery_error) => {
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "warn".to_string(),
+                                                message: "History replay start failed and control-path recovery did not succeed; leaving the session online and deferring replay.".to_string(),
+                                                details: Some(json!({
+                                                    "peripheralId": node.peripheral_id,
+                                                    "knownDeviceId": known_device_id,
+                                                    "address": node.address,
+                                                    "afterSequence": after_sequence,
+                                                    "maxRecords": max_records,
+                                                    "error": error_message,
+                                                    "recoveryError": format!("{:#}", recovery_error),
+                                                })),
+                                            })
+                                            .await?;
+                                        handled = true;
+                                    }
+                                }
+                            }
+
+                            if !handled {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "warn".to_string(),
+                                        message: "History replay start failed; leaving the session online and deferring replay.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": known_device_id,
+                                            "address": node.address,
+                                            "afterSequence": after_sequence,
+                                            "maxRecords": max_records,
+                                            "error": error_message,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                        }
                     }
                     ActiveSessionCommand::AckHistorySync { sequence } => {
-                        send_history_ack(
+                        let known_device_id = ack_confirmed_node
+                            .as_ref()
+                            .and_then(|current| current.known_device_id.clone())
+                            .or_else(|| node.known_device_id.clone());
+
+                        if let Err(error) = send_history_ack(
                             &prepared.peripheral,
                             &current_control_characteristic,
                             &node,
                             sequence,
                         )
-                        .await?;
+                        .await
+                        {
+                            let error_message = format!("{:#}", error);
+                            let mut handled = false;
+
+                            if is_closed_handle_error_message(&error_message)
+                                && prepared.peripheral.is_connected().await.unwrap_or(false)
+                            {
+                                match recover_active_session_control_path(
+                                    &prepared.peripheral,
+                                    &writer,
+                                    &node,
+                                    &reconnect,
+                                    config.control_uuid,
+                                    &app_session_id,
+                                    &app_session_nonce,
+                                )
+                                .await
+                                {
+                                    Ok(recovered_control_characteristic) => {
+                                        let _ = lease_shutdown_tx.send(true);
+                                        let _ = lease_task.await;
+                                        current_control_characteristic =
+                                            recovered_control_characteristic;
+                                        let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
+                                            prepared.peripheral.clone(),
+                                            current_control_characteristic.clone(),
+                                            app_session_id.clone(),
+                                        );
+                                        lease_shutdown_tx = new_shutdown_tx;
+                                        lease_failure_rx = new_failure_rx;
+                                        lease_task = new_lease_task;
+
+                                        if let Err(retry_error) = send_history_ack(
+                                            &prepared.peripheral,
+                                            &current_control_characteristic,
+                                            &node,
+                                            sequence,
+                                        )
+                                        .await
+                                        {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "History replay ack failed after control-path recovery; leaving the session online and retrying on a later reconnect.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": known_device_id,
+                                                        "address": node.address,
+                                                        "sequence": sequence,
+                                                        "error": format!("{:#}", retry_error),
+                                                    })),
+                                                })
+                                                .await?;
+                                        }
+                                        handled = true;
+                                    }
+                                    Err(recovery_error) => {
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "warn".to_string(),
+                                                message: "History replay ack failed and control-path recovery did not succeed; leaving the session online and retrying on a later reconnect.".to_string(),
+                                                details: Some(json!({
+                                                    "peripheralId": node.peripheral_id,
+                                                    "knownDeviceId": known_device_id,
+                                                    "address": node.address,
+                                                    "sequence": sequence,
+                                                    "error": error_message,
+                                                    "recoveryError": format!("{:#}", recovery_error),
+                                                })),
+                                            })
+                                            .await?;
+                                        handled = true;
+                                    }
+                                }
+                            }
+
+                            if !handled {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "warn".to_string(),
+                                        message: "History replay ack failed; leaving the session online and retrying on a later reconnect.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": known_device_id,
+                                            "address": node.address,
+                                            "sequence": sequence,
+                                            "error": error_message,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                        }
                     }
                 }
             }

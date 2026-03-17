@@ -12,7 +12,7 @@ import { createInitialDesktopAppState } from "./state";
 
 export function useDesktopApp() {
   const [state, setState] = useState(createInitialDesktopAppState);
-  const actions = createDesktopAppActions(setState);
+  const [actions] = useState(() => createDesktopAppActions(setState));
 
   useEffect(() => {
     let mounted = true;

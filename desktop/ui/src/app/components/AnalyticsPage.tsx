@@ -470,6 +470,7 @@ export function AnalyticsPage() {
                           name="Canonical Duration"
                           fill="#0ea5e9"
                           radius={[6, 6, 0, 0]}
+                          isAnimationActive={false}
                         />
                         <Bar
                           yAxisId="duration"
@@ -477,6 +478,7 @@ export function AnalyticsPage() {
                           name="Live Duration"
                           fill="#f59e0b"
                           radius={[6, 6, 0, 0]}
+                          isAnimationActive={false}
                         />
                         <Line
                           yAxisId="count"
@@ -486,6 +488,7 @@ export function AnalyticsPage() {
                           stroke="#f4f4f5"
                           strokeWidth={2}
                           dot={false}
+                          isAnimationActive={false}
                         />
                       </ComposedChart>
                     </ResponsiveContainer>
