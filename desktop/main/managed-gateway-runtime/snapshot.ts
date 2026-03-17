@@ -51,7 +51,10 @@ export function createEmptySetupState(): DesktopSetupState {
   return {
     adapterIssue: null,
     approvedNodes: [],
-    nodes: [],
+    manualScanState: "idle",
+    pairingCandidateId: null,
+    manualScanError: null,
+    manualCandidates: [],
   };
 }
 

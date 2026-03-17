@@ -10,22 +10,7 @@ type DiscoveryIdentity = ApprovedNodeIdentity;
 type ForgetIdentity = DiscoveryIdentity & { id: string | null };
 
 export function resolveVisibleNodes(setup: DesktopSetupState) {
-  return setup.nodes.length > 0
-    ? setup.nodes
-    : setup.approvedNodes.map((node) => ({
-        id: node.id,
-        label: node.label,
-        peripheralId: node.peripheralId,
-        address: node.address,
-        localName: node.localName,
-        knownDeviceId: node.knownDeviceId,
-        machineLabel: null,
-        siteId: null,
-        lastRssi: null,
-        lastSeenAt: null,
-        gatewayConnectionState: "visible" as const,
-        isApproved: true,
-      }));
+  return setup.manualCandidates ?? [];
 }
 
 export function buildApprovedNodeRules(

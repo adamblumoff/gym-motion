@@ -142,29 +142,15 @@ export function buildBluetoothNodes(
   }));
 }
 
+export function buildDashboardRuntimeStatus(totalApprovedNodes: number) {
+  return totalApprovedNodes >= 1 ? "Gateway live" : "Waiting for BLE nodes";
+}
+
 export function buildSetupVisibleDevices(
   setup: DesktopSetupState,
   approvedNodes: ApprovedNodeRule[],
 ): SetupDevice[] {
-  const visibleNodes =
-    setup.nodes.length > 0
-      ? setup.nodes
-      : approvedNodes.map((node) => ({
-          id: node.id,
-          label: node.label,
-          peripheralId: node.peripheralId,
-          address: node.address,
-          localName: node.localName,
-          knownDeviceId: node.knownDeviceId,
-          machineLabel: null,
-          siteId: null,
-          lastRssi: null,
-          lastSeenAt: null,
-          gatewayConnectionState: "visible" as const,
-          isApproved: true,
-        }));
-
-  return visibleNodes.map((node) => ({
+  return (setup.manualCandidates ?? []).map((node) => ({
     id: node.id,
     name: displayDiscoveryName(node),
     macAddress: displayDiscoveryAddress(node),
@@ -177,7 +163,7 @@ export function buildSetupVisibleDevices(
         knownDeviceId: node.knownDeviceId ?? null,
       }, approvedNodes),
     ),
-    connectionState: node.gatewayConnectionState,
+    connectionState: "visible",
     reconnectAttempt: 0,
     reconnectAttemptLimit: 20,
     reconnectRetryExhausted: false,

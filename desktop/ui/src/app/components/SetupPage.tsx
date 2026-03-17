@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
   ArrowLeft,
@@ -11,11 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { isOperatorVisibleScan } from '@core/gateway-scan';
-import {
-  buildApprovedNodeRules,
-  resolveApprovedNodeRuleId,
-} from '../../lib/setup-rules';
+import { buildApprovedNodeRules } from '../../lib/setup-rules';
 import { buildPairedDevices, buildSetupVisibleDevices } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
 import { Badge } from './ui/badge';
@@ -44,9 +40,8 @@ export function SetupPage() {
   const {
     setup,
     snapshot,
-    rescanAdapters,
-    requestSilentReconnect,
-    connectApprovedNode,
+    startManualScan,
+    pairManualCandidate,
     recoverApprovedNode,
     setAllowedNodes,
   } = useDesktopRuntime();
@@ -54,21 +49,16 @@ export function SetupPage() {
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
   const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
-  const isScanning = snapshot
-    ? isOperatorVisibleScan(snapshot.gateway.scanState, snapshot.gateway.scanReason)
-    : false;
+  const isScanning =
+    setup?.manualScanState === 'scanning' || setup?.manualScanState === 'pairing';
+  const pairingCandidateId = setup?.pairingCandidateId ?? null;
   const [pendingPairIds, setPendingPairIds] = useState<Set<string>>(new Set());
   const [pendingRecoverIds, setPendingRecoverIds] = useState<Set<string>>(new Set());
   const [pendingRemoveIds, setPendingRemoveIds] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<RemovalTarget | null>(null);
+  const lastManualScanError = useRef<string | null>(null);
 
   useEffect(() => {
-    setPendingPairIds((current) => {
-      const next = new Set(
-        Array.from(current).filter((deviceId) => discoveredDevices.some((device) => device.id === deviceId)),
-      );
-      return next.size === current.size ? current : next;
-    });
     setPendingRecoverIds((current) => {
       const next = new Set(
         Array.from(current).filter((deviceId) => pairedDevices.some((device) => device.id === deviceId)),
@@ -82,6 +72,23 @@ export function SetupPage() {
       return next.size === current.size ? current : next;
     });
   }, [discoveredDevices, pairedDevices]);
+
+  useEffect(() => {
+    if (setup?.manualScanState !== 'pairing') {
+      setPendingPairIds(new Set());
+    }
+  }, [setup?.manualScanState]);
+
+  useEffect(() => {
+    const nextError = setup?.manualScanError ?? null;
+
+    if (!nextError || nextError === lastManualScanError.current) {
+      return;
+    }
+
+    lastManualScanError.current = nextError;
+    toast.error(nextError);
+  }, [setup?.manualScanError]);
 
   useEffect(() => {
     if (!removeTarget) {
@@ -119,7 +126,7 @@ export function SetupPage() {
 
   const handleScan = async () => {
     try {
-      await rescanAdapters();
+      await startManualScan();
       toast.success('Scan started.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to start scan.');
@@ -135,39 +142,14 @@ export function SetupPage() {
     const nextIds = new Set(setup.approvedNodes.map((node) => node.id));
     nextIds.add(deviceId);
     const nextRules = buildApprovedNodeRules(setup, nextIds);
-    const visibleNode =
-      setup.nodes.find((node) => node.id === deviceId) ??
-      setup.approvedNodes.find((node) => node.id === deviceId);
-    const ruleId = visibleNode
-      ? resolveApprovedNodeRuleId(nextRules, {
-          fallbackId: deviceId,
-          peripheralId: visibleNode.peripheralId ?? null,
-          address: visibleNode.address ?? null,
-          localName:
-            "localName" in visibleNode ? visibleNode.localName ?? null : null,
-          knownDeviceId: visibleNode.knownDeviceId ?? null,
-        })
-      : deviceId;
-    let pairedSaved = false;
 
     try {
       await setAllowedNodes(nextRules);
-      pairedSaved = true;
-      await requestSilentReconnect();
-      await connectApprovedNode(ruleId);
+      await pairManualCandidate(deviceId);
       setPendingPairIds((current) => removeFromSet(current, deviceId));
       toast.success('Device paired. Connecting...');
     } catch (error) {
       setPendingPairIds((current) => removeFromSet(current, deviceId));
-      if (pairedSaved) {
-        toast.error(
-          error instanceof Error
-            ? `Device paired, but failed to start connecting: ${error.message}`
-            : 'Device paired, but failed to start connecting.',
-        );
-        return;
-      }
-
       toast.error(error instanceof Error ? error.message : 'Failed to pair device.');
     }
   };
@@ -290,7 +272,9 @@ export function SetupPage() {
               <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                 <div className="flex items-center gap-2 text-sm text-blue-400">
                   <Signal className="size-4 animate-pulse" />
-                  Searching for Bluetooth devices...
+                  {setup?.manualScanState === 'pairing'
+                    ? 'Connecting to the selected device...'
+                    : 'Searching for Bluetooth devices...'}
                 </div>
               </div>
             )}
@@ -341,11 +325,13 @@ export function SetupPage() {
                     <Button
                       onClick={() => void handlePairDevice(device.id)}
                       size="sm"
-                      disabled={pendingPairIds.has(device.id)}
+                      disabled={pendingPairIds.has(device.id) || pairingCandidateId === device.id}
                       className="bg-blue-500 hover:bg-blue-600 text-white"
                     >
                       <Plus className="size-4 mr-1" />
-                      {pendingPairIds.has(device.id) ? 'Pairing...' : 'Pair'}
+                      {pendingPairIds.has(device.id) || pairingCandidateId === device.id
+                        ? 'Pairing...'
+                        : 'Pair'}
                     </Button>
                   </div>
                 </div>

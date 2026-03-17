@@ -4,6 +4,7 @@ import type { ApprovedNodeRule, DesktopSnapshot } from "@core/contracts";
 
 import {
   buildBluetoothNodes,
+  buildDashboardRuntimeStatus,
   buildPairedDevices,
   buildSetupVisibleDevices,
   buildMovementData,
@@ -759,7 +760,10 @@ describe("buildSetupVisibleDevices", () => {
             knownDeviceId: null,
           },
         ],
-        nodes: [
+        manualScanState: "scanning",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [
           {
             id: "known:stack-001",
             label: "Leg Press",
@@ -771,8 +775,6 @@ describe("buildSetupVisibleDevices", () => {
             siteId: null,
             lastRssi: -55,
             lastSeenAt: new Date().toISOString(),
-            gatewayConnectionState: "connected",
-            isApproved: true,
           },
         ],
       },
@@ -813,7 +815,10 @@ describe("buildSetupVisibleDevices", () => {
             knownDeviceId: null,
           },
         ],
-        nodes: [
+        manualScanState: "scanning",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [
           {
             id: "peripheral:peripheral-2",
             label: "GymMotion-f4e9d4",
@@ -825,8 +830,6 @@ describe("buildSetupVisibleDevices", () => {
             siteId: null,
             lastRssi: -61,
             lastSeenAt: new Date().toISOString(),
-            gatewayConnectionState: "visible",
-            isApproved: false,
           },
         ],
       },
@@ -854,6 +857,17 @@ describe("buildSetupVisibleDevices", () => {
   });
 });
 
+describe("buildDashboardRuntimeStatus", () => {
+  it("shows waiting when no approved nodes remain in the filtered dashboard", () => {
+    expect(buildDashboardRuntimeStatus(0)).toBe("Waiting for BLE nodes");
+  });
+
+  it("shows gateway live once at least one approved node remains", () => {
+    expect(buildDashboardRuntimeStatus(1)).toBe("Gateway live");
+    expect(buildDashboardRuntimeStatus(3)).toBe("Gateway live");
+  });
+});
+
 describe("buildPairedDevices", () => {
   it("reuses live runtime connection state for approved nodes", () => {
     const devices = buildPairedDevices(
@@ -869,7 +883,10 @@ describe("buildPairedDevices", () => {
             knownDeviceId: "stack-001",
           },
         ],
-        nodes: [],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
       },
       {
         liveStatus: "Gateway live",
@@ -959,7 +976,10 @@ describe("buildPairedDevices", () => {
             knownDeviceId: "stack-001",
           },
         ],
-        nodes: [],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
       },
       {
         liveStatus: "Gateway live",
@@ -1046,7 +1066,10 @@ describe("buildPairedDevices", () => {
             knownDeviceId: null,
           },
         ],
-        nodes: [],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
       },
       {
         liveStatus: "Gateway live",
@@ -1135,7 +1158,10 @@ describe("buildPairedDevices", () => {
             knownDeviceId: "stack-001",
           },
         ],
-        nodes: [],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
       },
       {
         liveStatus: "Gateway live",
@@ -1267,7 +1293,10 @@ describe("buildPairedDevices", () => {
             knownDeviceId: "stack-001",
           },
         ],
-        nodes: [],
+        manualScanState: "idle",
+        pairingCandidateId: null,
+        manualScanError: null,
+        manualCandidates: [],
       },
       {
         liveStatus: "Waiting for approved BLE nodes",

@@ -64,10 +64,12 @@ In the app:
 2. Confirm Bluetooth comes up automatically without any adapter picker.
 3. Click `Scan nodes`, then power the BLE node and confirm it appears in the visible node list.
 4. Click `Pair` on a visible node.
-5. Confirm the gateway manages that node.
-6. If a paired node stays disconnected, use `Recover` and confirm the row shows the latest failure reason if recovery still fails.
-7. Click `Remove` and confirm the node stops being managed.
-8. Confirm the restart control only exists in the header.
+5. Confirm `Pair` immediately switches into a single pair-and-connect flow for that visible row. It should not require a later silent reconnect cycle or a second operator action.
+6. Confirm the gateway manages that node.
+7. If a paired node stays disconnected, use `Recover` and confirm the row shows the latest failure reason if recovery still fails.
+8. Click `Remove` and confirm the node stops being managed.
+9. Confirm the dashboard header says `Waiting for BLE nodes` when zero approved nodes remain and `Gateway live` when one or more approved nodes remain.
+10. Confirm the restart control only exists in the header.
 
 ## Packaged Build
 
@@ -90,7 +92,9 @@ Validate the same Setup and reconnect flow in the packaged app.
 - The current desktop product is Windows-only. Bench validation should target the Windows app, the WinRT sidecar, and the ESP32 firmware runtime protocol together.
 - Approved-node identity matching on the desktop should come from one shared `desktop/core` policy. Setup visibility, pairing badges, paired-row folding, and approved-node reconciliation should all follow the same precedence: `knownDeviceId`, then `peripheralId`, then BLE address, then unique `localName`.
 - Windows Bluetooth adapter selection is automatic and stays out of the UI.
-- The `Setup` tab is node-only, and Bluetooth discovery is manual-only for discovery and pairing. Approved nodes should reconnect automatically in the background after app restarts or link loss.
+- The `Setup` tab is node-only, and Bluetooth discovery is manual-only for discovery and pairing.
+  Manual scan is now a dedicated pair-and-connect flow for visible candidates; it should not chain through the background approved reconnect path.
+  Approved nodes should still reconnect automatically in the background after app restarts or link loss.
 - When an approved node loses power or the BLE link drops, the dashboard should move to `Disconnected` immediately instead of waiting for telemetry freshness to age out.
 - While an approved node stays disconnected, the Windows app now keeps a silent approved-node reconnect scan running in the background. It should only show `Reconnecting` after that exact node is rediscovered and a real BLE reconnect attempt starts.
 - After the gateway reconnects to a managed node, it sends a runtime `sync-now` control command so the node republishes its current telemetry without waiting for fresh motion.

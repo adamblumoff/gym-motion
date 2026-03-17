@@ -98,9 +98,9 @@ pub enum Command {
     SetAllowedNodes { nodes: Vec<ApprovedNodeRule> },
     Start,
     Stop,
-    Rescan,
+    StartManualScan,
     RefreshScanPolicy,
-    ConnectApprovedNode { rule_id: String },
+    PairManualCandidate { candidate_id: String },
     RecoverApprovedNode { rule_id: String },
     ResumeApprovedNodeReconnect { rule_id: String },
     Shutdown,
@@ -118,6 +118,11 @@ pub enum Event {
     },
     GatewayState {
         gateway: GatewayStatePayload,
+    },
+    ManualScanState {
+        state: String,
+        candidate_id: Option<String>,
+        error: Option<String>,
     },
     NodeDiscovered {
         node: DiscoveredNode,
@@ -179,14 +184,14 @@ mod tests {
     }
 
     #[test]
-    fn serializes_connect_approved_node_command() {
-        let value = serde_json::to_value(Command::ConnectApprovedNode {
-            rule_id: "known:stack-001".to_string(),
+    fn serializes_pair_manual_candidate_command() {
+        let value = serde_json::to_value(Command::PairManualCandidate {
+            candidate_id: "peripheral:abc".to_string(),
         })
         .expect("command should serialize");
 
-        assert_eq!(value["type"], "connect_approved_node");
-        assert_eq!(value["rule_id"], "known:stack-001");
+        assert_eq!(value["type"], "pair_manual_candidate");
+        assert_eq!(value["candidate_id"], "peripheral:abc");
     }
 
     #[test]

@@ -28,12 +28,11 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSnapshot, () => runtime.getSnapshot());
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSetupState, () => runtime.getSetupState());
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime, () => runtime.restart());
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.rescanAdapters, () => runtime.rescanAdapters());
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect, () =>
-    runtime.requestSilentReconnect(),
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.startManualScan, () =>
+    runtime.startManualScan(),
   );
-  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode, (_event, ruleId) =>
-    runtime.connectApprovedNode(ruleId),
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.pairManualCandidate, (_event, candidateId) =>
+    runtime.pairManualCandidate(candidateId),
   );
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, (_event, ruleId) =>
     runtime.recoverApprovedNode(ruleId),
@@ -56,9 +55,8 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSnapshot);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getSetupState);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect);
-      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.startManualScan);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.pairManualCandidate);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);

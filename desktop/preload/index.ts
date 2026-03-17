@@ -17,14 +17,11 @@ const desktopApi: DesktopApi = {
   async restartGatewayRuntime() {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.restartGatewayRuntime);
   },
-  async rescanAdapters() {
-    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.rescanAdapters);
+  async startManualScan() {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.startManualScan);
   },
-  async requestSilentReconnect() {
-    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.requestSilentReconnect);
-  },
-  async connectApprovedNode(ruleId: string) {
-    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.connectApprovedNode, ruleId);
+  async pairManualCandidate(candidateId: string) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.pairManualCandidate, candidateId);
   },
   async recoverApprovedNode(ruleId: string) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.recoverApprovedNode, ruleId);

@@ -65,6 +65,20 @@ function setRuntimeIssue(issue) {
   runtimeServer.setGatewayIssue(latestGatewayIssue);
 }
 
+function setManualScanState({
+  state,
+  pairingCandidateId = null,
+  error = null,
+  clearCandidates = false,
+}) {
+  runtimeServer.setManualScanState({
+    state,
+    pairingCandidateId,
+    error,
+    clearCandidates,
+  });
+}
+
 function refreshSelectionIssue(adapters) {
   if (!selectedAdapterId) {
     setRuntimeIssue("Bluetooth is unavailable on this machine.");
@@ -266,6 +280,28 @@ async function forwardTelemetry(payload, node = {}) {
 
 function handleNodeDiscovered(node, scanReason = null) {
   const peripheralInfo = describeNode(node);
+
+  if (scanReason === "manual") {
+    runtimeServer.upsertManualScanCandidate({
+      id: node.id,
+      label:
+        node.localName ??
+        node.local_name ??
+        node.knownDeviceId ??
+        node.known_device_id ??
+        node.peripheralId ??
+        node.peripheral_id ??
+        "Visible node",
+      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+      address: node.address ?? null,
+      localName: node.localName ?? node.local_name ?? null,
+      knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+      machineLabel: null,
+      siteId: null,
+      lastRssi: node.lastRssi ?? node.last_rssi ?? node.rssi ?? null,
+      lastSeenAt: node.lastSeenAt ?? node.last_seen_at ?? null,
+    });
+  }
 
   runtimeServer.noteDiscovery({
     ...peripheralInfo,
@@ -480,23 +516,31 @@ function attachControlReader() {
           removedCount: removedRules.length,
         });
         syncAllowedNodes();
-        sendCommand("refresh_scan_policy");
         return;
       }
 
-      if (command.type === "rescan") {
-        sendCommand("rescan");
+      if (command.type === "start_manual_scan") {
+        setManualScanState({
+          state: "scanning",
+          pairingCandidateId: null,
+          error: null,
+          clearCandidates: true,
+        });
+        sendCommand("start_manual_scan");
         return;
       }
 
-      if (command.type === "request_silent_reconnect") {
-        sendCommand("refresh_scan_policy");
-        return;
-      }
-
-      if (command.type === "connect_approved_node" && typeof command.ruleId === "string") {
-        sendCommand("connect_approved_node", {
-          rule_id: command.ruleId,
+      if (
+        command.type === "pair_manual_candidate" &&
+        typeof command.candidateId === "string"
+      ) {
+        setManualScanState({
+          state: "pairing",
+          pairingCandidateId: command.candidateId,
+          error: null,
+        });
+        sendCommand("pair_manual_candidate", {
+          candidate_id: command.candidateId,
         });
         return;
       }
@@ -579,7 +623,7 @@ function handleSidecarEvent(event) {
 
         if (scanRequestedFromBoot && selectedAdapterId) {
           scanRequestedFromBoot = false;
-          sendCommand("rescan");
+          sendCommand("start_manual_scan");
         }
       }
       break;
@@ -593,6 +637,15 @@ function handleSidecarEvent(event) {
         currentScanReason,
       );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
+      break;
+    case "manual_scan_state":
+      setManualScanState({
+        state: event.state ?? "idle",
+        pairingCandidateId:
+          event.candidate_id ?? event.candidateId ?? null,
+        error: event.error ?? null,
+        clearCandidates: (event.state ?? "idle") === "idle",
+      });
       break;
     case "node_discovered":
       handleNodeDiscovered(
@@ -681,6 +734,12 @@ async function startSidecar() {
   sidecarSessionStarted = false;
   scanRequestedFromBoot = config.startScanOnBoot;
   lastLoggedAdapterSnapshot = null;
+  setManualScanState({
+    state: "idle",
+    pairingCandidateId: null,
+    error: null,
+    clearCandidates: true,
+  });
   sidecar = spawn(config.sidecarPath, [], {
     cwd: process.cwd(),
     env: {
@@ -699,6 +758,12 @@ async function startSidecar() {
     currentScanReason = null;
     runtimeServer.setAdapterState("unknown");
     runtimeServer.setScanState("stopped", null);
+    setManualScanState({
+      state: "idle",
+      pairingCandidateId: null,
+      error: null,
+      clearCandidates: true,
+    });
 
     if (!shuttingDown) {
       setRuntimeIssue(`Windows BLE sidecar exited (${signal ?? code ?? "unknown"}).`);

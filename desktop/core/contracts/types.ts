@@ -106,10 +106,28 @@ export type DiscoveredNodeSummary = {
   isApproved: boolean;
 };
 
+export type ManualScanState = "idle" | "scanning" | "pairing" | "failed";
+
+export type ManualScanCandidateSummary = {
+  id: string;
+  label: string;
+  peripheralId: string | null;
+  address: string | null;
+  localName: string | null;
+  knownDeviceId: string | null;
+  machineLabel: string | null;
+  siteId: string | null;
+  lastRssi: number | null;
+  lastSeenAt: string | null;
+};
+
 export type DesktopSetupState = {
   adapterIssue: string | null;
   approvedNodes: ApprovedNodeRule[];
-  nodes: DiscoveredNodeSummary[];
+  manualScanState: ManualScanState;
+  pairingCandidateId: string | null;
+  manualScanError: string | null;
+  manualCandidates: ManualScanCandidateSummary[];
 };
 
 export type GatewayRuntimeDeviceSummary = DeviceSummary & {

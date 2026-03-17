@@ -23,22 +23,23 @@ function createSetupState(): DesktopSetupState {
         knownDeviceId: "stack-001",
       },
     ],
-    nodes: [],
+    manualScanState: "idle",
+    pairingCandidateId: null,
+    manualScanError: null,
+    manualCandidates: [],
   };
 }
 
 describe("setup-rules", () => {
-  it("falls back to approved nodes when no live discoveries exist", () => {
+  it("returns no visible candidates when no manual scan results exist", () => {
     const visibleNodes = resolveVisibleNodes(createSetupState());
 
-    expect(visibleNodes).toHaveLength(1);
-    expect(visibleNodes[0]?.id).toBe("known:stack-001");
-    expect(visibleNodes[0]?.gatewayConnectionState).toBe("visible");
+    expect(visibleNodes).toEqual([]);
   });
 
   it("builds allowed node rules from visible nodes first", () => {
     const setup = createSetupState();
-    setup.nodes = [
+    setup.manualCandidates = [
       {
         id: "known:stack-001",
         label: "Visible Stack 001",
@@ -50,8 +51,6 @@ describe("setup-rules", () => {
         siteId: "west",
         lastRssi: -58,
         lastSeenAt: new Date().toISOString(),
-        gatewayConnectionState: "connected",
-        isApproved: true,
       },
     ];
 
@@ -188,7 +187,7 @@ describe("setup-rules", () => {
 
   it("resolves a newly paired rule id from visible node identity", () => {
     const setup = createSetupState();
-    setup.nodes = [
+    setup.manualCandidates = [
       {
         id: "visible:001",
         label: "Visible Stack 001",
@@ -200,8 +199,6 @@ describe("setup-rules", () => {
         siteId: null,
         lastRssi: -62,
         lastSeenAt: new Date().toISOString(),
-        gatewayConnectionState: "visible",
-        isApproved: false,
       },
     ];
 

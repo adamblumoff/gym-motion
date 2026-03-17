@@ -447,6 +447,43 @@ describe("gateway runtime server", () => {
     expect(payload.gateway?.scanReason).toBe("manual");
   });
 
+  it("exposes manual scan candidates and pairing state separately from gateway devices", async () => {
+    const runtimePort = 50410 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createIsolatedRuntimeServer({
+      apiBaseUrl: "http://127.0.0.1:9",
+      runtimeHost: "127.0.0.1",
+      runtimePort,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setManualScanState({
+      state: "pairing",
+      pairingCandidateId: "peripheral:pair-me",
+      error: null,
+      clearCandidates: true,
+    });
+    runtimeServer.upsertManualScanCandidate({
+      id: "peripheral:pair-me",
+      label: "GymMotion-f4e9d4",
+      peripheralId: "pair-me",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      knownDeviceId: null,
+      machineLabel: null,
+      siteId: null,
+      lastRssi: -58,
+      lastSeenAt: new Date("2026-03-14T20:05:00.000Z").toISOString(),
+    });
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/manual-scan`);
+    const payload = await response.json();
+
+    expect(payload.state).toBe("pairing");
+    expect(payload.pairingCandidateId).toBe("peripheral:pair-me");
+    expect(payload.candidates).toHaveLength(1);
+    expect(payload.candidates[0]?.id).toBe("peripheral:pair-me");
+  });
+
   it("defaults reconnectAttempt when connecting metadata omits it", async () => {
     const runtimePort = 50460 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createIsolatedRuntimeServer({

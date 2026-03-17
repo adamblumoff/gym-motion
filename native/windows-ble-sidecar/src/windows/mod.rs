@@ -81,10 +81,10 @@ struct SessionHandle {
 }
 
 enum SessionCommand {
-    StartScan,
+    StartManualScan,
     RefreshScanPolicy,
-    ConnectApprovedNode {
-        rule_id: String,
+    PairManualCandidate {
+        candidate_id: String,
     },
     RecoverApprovedNode {
         rule_id: String,
@@ -152,6 +152,21 @@ async fn emit_gateway_state(
         .await?;
 
     Ok(())
+}
+
+async fn emit_manual_scan_state(
+    writer: &EventWriter,
+    state: &str,
+    candidate_id: Option<String>,
+    error: Option<String>,
+) -> Result<()> {
+    writer
+        .send(&Event::ManualScanState {
+            state: state.to_string(),
+            candidate_id,
+            error,
+        })
+        .await
 }
 
 async fn emit_verbose_log(
@@ -529,14 +544,14 @@ impl Sidecar {
 
     async fn handle_command(&mut self, command: Command) -> Result<bool> {
         match command {
-            Command::ListAdapters | Command::Rescan | Command::RefreshScanPolicy => {
-                if matches!(command, Command::Rescan) {
+            Command::ListAdapters | Command::StartManualScan | Command::RefreshScanPolicy => {
+                if matches!(command, Command::StartManualScan) {
                     if self.session.is_none() {
                         self.start_session().await?;
                     }
 
                     if let Some(session) = &self.session {
-                        let _ = session.commands.send(SessionCommand::StartScan);
+                        let _ = session.commands.send(SessionCommand::StartManualScan);
                     }
                 } else if matches!(command, Command::RefreshScanPolicy) {
                     if self.session.is_none() {
@@ -560,7 +575,7 @@ impl Sidecar {
                         .send(SessionCommand::RecoverApprovedNode { rule_id });
                 }
             }
-            Command::ConnectApprovedNode { rule_id } => {
+            Command::PairManualCandidate { candidate_id } => {
                 if self.session.is_none() {
                     self.start_session().await?;
                 }
@@ -568,7 +583,7 @@ impl Sidecar {
                 if let Some(session) = &self.session {
                     let _ = session
                         .commands
-                        .send(SessionCommand::ConnectApprovedNode { rule_id });
+                        .send(SessionCommand::PairManualCandidate { candidate_id });
                 }
             }
             Command::ResumeApprovedNodeReconnect { rule_id } => {
@@ -772,6 +787,8 @@ async fn run_session(
     let mut startup_burst_deadline = None;
     let mut manual_scan_deadline = None;
     let mut manual_recover_rule_id: Option<String> = None;
+    let mut manual_pair_candidate_id: Option<String> = None;
+    let mut manual_candidates = HashMap::<String, DiscoveredNode>::new();
     let mut reconnect_diagnostic_tick =
         tokio::time::interval(Duration::from_millis(APPROVED_RECONNECT_DIAGNOSTIC_MS));
     reconnect_diagnostic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -787,6 +804,7 @@ async fn run_session(
 
     {
         let allowed = allowed_nodes.read().await.clone();
+        emit_manual_scan_state(&writer, "idle", None, None).await?;
         sync_scan_state(
             &adapter,
             &writer,
@@ -836,43 +854,71 @@ async fn run_session(
                 };
 
                 match command {
-                    SessionCommand::StartScan => {
-                        manual_scan_deadline = Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                    SessionCommand::StartManualScan => {
+                        manual_scan_deadline =
+                            Some(Instant::now() + Duration::from_secs(SCAN_WINDOW_SECS));
+                        manual_pair_candidate_id = None;
+                        manual_candidates.clear();
+                        emit_manual_scan_state(&writer, "scanning", None, None).await?;
                     }
                     SessionCommand::RefreshScanPolicy => {
                         let allowed = allowed_nodes.read().await.clone();
                         prune_reconnect_states(&mut reconnect_states, &allowed);
                     }
-                    SessionCommand::ConnectApprovedNode { rule_id } => {
-                        let allowed = allowed_nodes.read().await.clone();
-                        reconnect_states.insert(rule_id.clone(), ApprovedReconnectState::default());
-                        if recover_visible_approved_node(
+                    SessionCommand::PairManualCandidate { candidate_id } => {
+                        let Some(node) = manual_candidates.get(&candidate_id).cloned() else {
+                            emit_manual_scan_state(
+                                &writer,
+                                "failed",
+                                Some(candidate_id),
+                                Some("That scan result is no longer available. Start a new manual scan.".to_string()),
+                            )
+                            .await?;
+                            continue;
+                        };
+                        let Some(peripheral) = peripheral_for_node(&adapter, &node).await else {
+                            emit_manual_scan_state(
+                                &writer,
+                                "failed",
+                                Some(candidate_id),
+                                Some("That BLE device is no longer available. Start a new manual scan.".to_string()),
+                            )
+                            .await?;
+                            continue;
+                        };
+
+                        manual_pair_candidate_id = Some(candidate_id.clone());
+                        manual_scan_deadline = None;
+                        emit_manual_scan_state(
+                            &writer,
+                            "pairing",
+                            Some(candidate_id),
+                            None,
+                        )
+                        .await?;
+
+                        if spawn_manual_pair_for_candidate(
                             &adapter,
                             &writer,
                             &config,
                             &selected_adapter_id,
                             &allowed_nodes,
-                            &connected_nodes,
                             &active_connections,
                             &known_device_ids,
-                            &mut reconnect_states,
                             &mut scanning,
                             &mut current_scan_reason,
-                            manual_scan_deadline,
                             &last_advertisement_at,
                             &mut last_scan_progress_at,
                             &mut startup_burst_deadline,
                             &command_sender,
                             &shutdown,
-                            &rule_id,
-                            false,
-                            true,
+                            peripheral,
+                            node,
                         )
                         .await?
                         {
                             continue;
                         }
-                        reconnect_scan_burst = 0;
                     }
                     SessionCommand::RecoverApprovedNode { rule_id } => {
                         let allowed = allowed_nodes.read().await.clone();
@@ -972,6 +1018,14 @@ async fn run_session(
                                 let _ = peripheral.disconnect().await;
                             }
                         }
+                        let manual_scan_active = manual_scan_deadline
+                            .map(|deadline| deadline > Instant::now())
+                            .unwrap_or(false);
+
+                        if manual_scan_active || manual_pair_candidate_id.is_some() {
+                            continue;
+                        }
+
                         for rule_id in added_rule_ids {
                             if connected_nodes
                                 .values()
@@ -1024,6 +1078,16 @@ async fn run_session(
                             &node,
                             &allowed,
                         );
+                        if manual_pair_candidate_id
+                            .as_ref()
+                            .map(|candidate_id| candidate_id == &node.id)
+                            .unwrap_or(false)
+                        {
+                            manual_pair_candidate_id = None;
+                            manual_scan_deadline = None;
+                            manual_candidates.clear();
+                            emit_manual_scan_state(&writer, "idle", None, None).await?;
+                        }
                         reconnect_scan_burst = 0;
                         sync_scan_state(
                             &adapter,
@@ -1049,6 +1113,22 @@ async fn run_session(
                         let key = node_key(&node);
                         connected_nodes.remove(&key);
                         let allowed = allowed_nodes.read().await.clone();
+                        let was_manual_pair = manual_pair_candidate_id
+                            .as_ref()
+                            .map(|candidate_id| candidate_id == &node.id)
+                            .unwrap_or(false);
+
+                        if was_manual_pair {
+                            manual_pair_candidate_id = None;
+                            emit_manual_scan_state(
+                                &writer,
+                                "failed",
+                                Some(node.id.clone()),
+                                Some(reason.clone()),
+                            )
+                            .await?;
+                        }
+
                         let reconnect = approved_rule_id_for_node(&node, &allowed).map(|rule_id| {
                             let state = reconnect_states.entry(rule_id).or_default();
                             ReconnectStatus {
@@ -1058,19 +1138,21 @@ async fn run_session(
                                 awaiting_user_decision: state.awaiting_user_decision,
                             }
                         });
-                        writer.send(&Event::Log {
-                            level: "info".to_string(),
-                            message: format!(
-                                "Approved-node disconnect for {}; resuming silent reconnect scan.",
-                                node.label
-                            ),
-                            details: Some(json!({
-                                "peripheralId": node.peripheral_id,
-                                "knownDeviceId": node.known_device_id,
-                                "reason": reason,
-                                "reconnect": reconnect,
-                            })),
-                        }).await?;
+                        if !was_manual_pair {
+                            writer.send(&Event::Log {
+                                level: "info".to_string(),
+                                message: format!(
+                                    "Approved-node disconnect for {}; resuming silent reconnect scan.",
+                                    node.label
+                                ),
+                                details: Some(json!({
+                                    "peripheralId": node.peripheral_id,
+                                    "knownDeviceId": node.known_device_id,
+                                    "reason": reason,
+                                    "reconnect": reconnect,
+                                })),
+                            }).await?;
+                        }
                         writer.send(&Event::NodeConnectionState {
                             node,
                             gateway_connection_state: "disconnected".to_string(),
@@ -1129,6 +1211,10 @@ async fn run_session(
             } => {
                 manual_scan_deadline = None;
                 manual_recover_rule_id = None;
+                if manual_pair_candidate_id.is_none() {
+                    manual_candidates.clear();
+                    emit_manual_scan_state(&writer, "idle", None, None).await?;
+                }
                 let allowed = allowed_nodes.read().await.clone();
                 sync_scan_state(
                     &adapter,
@@ -1376,6 +1462,9 @@ async fn run_session(
                                 last_scan_progress_at = Some(Instant::now());
                             }
                             last_advertisement_at = node.last_seen_at.clone();
+                            if discovery_scan_reason == Some("manual") {
+                                manual_candidates.insert(node.id.clone(), node.clone());
+                            }
                             writer.send(&Event::NodeDiscovered {
                                 node: node.clone(),
                                 scan_reason: discovery_scan_reason.map(str::to_string),
@@ -1937,6 +2026,141 @@ async fn spawn_reconnect_for_discovered_node(
                             "peripheralId": node_for_task.peripheral_id,
                             "knownDeviceId": node_for_task.known_device_id,
                             "address": node_for_task.address,
+                        })),
+                    })
+                    .await;
+                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                    node: node_for_task,
+                    reason: error.to_string(),
+                });
+            }
+        }
+
+        active_connections_clone.lock().await.remove(
+            &node
+                .peripheral_id
+                .clone()
+                .unwrap_or_else(|| node.id.clone()),
+        );
+    });
+
+    Ok(true)
+}
+
+async fn spawn_manual_pair_for_candidate(
+    adapter: &Adapter,
+    writer: &EventWriter,
+    config: &Config,
+    selected_adapter_id: &str,
+    allowed_nodes: &Arc<RwLock<Vec<ApprovedNodeRule>>>,
+    active_connections: &Arc<Mutex<HashMap<String, DiscoveredNode>>>,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    scanning: &mut bool,
+    current_scan_reason: &mut Option<String>,
+    last_advertisement_at: &Option<String>,
+    last_scan_progress_at: &mut Option<Instant>,
+    startup_burst_deadline: &mut Option<Instant>,
+    command_sender: &mpsc::UnboundedSender<SessionCommand>,
+    shutdown: &watch::Receiver<bool>,
+    peripheral: Peripheral,
+    node: DiscoveredNode,
+) -> Result<bool> {
+    let key = node
+        .peripheral_id
+        .clone()
+        .unwrap_or_else(|| node.id.clone());
+    let mut active = active_connections.lock().await;
+
+    if active.contains_key(&key) {
+        return Ok(false);
+    }
+
+    writer
+        .send(&Event::Log {
+            level: "info".to_string(),
+            message: format!("Starting manual pair-and-connect for {}.", node.label),
+            details: Some(json!({
+                "peripheralId": node.peripheral_id,
+                "knownDeviceId": node.known_device_id,
+                "address": node.address,
+                "manualPair": true,
+            })),
+        })
+        .await?;
+
+    if *scanning {
+        let _ = adapter.stop_scan().await;
+        *scanning = false;
+        *current_scan_reason = None;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Pausing BLE scan while manual pairing is in flight.".to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "manualPair": true,
+                })),
+            })
+            .await?;
+        emit_gateway_state(
+            writer,
+            adapter,
+            selected_adapter_id,
+            "stopped",
+            None,
+            last_advertisement_at,
+        )
+        .await?;
+        *last_scan_progress_at = None;
+        *startup_burst_deadline = None;
+    }
+
+    active.insert(key.clone(), node.clone());
+    drop(active);
+
+    let writer_clone = writer.clone();
+    let config_clone = config.clone();
+    let allowed_nodes_clone = allowed_nodes.clone();
+    let active_connections_clone = active_connections.clone();
+    let known_device_ids_clone = known_device_ids.clone();
+    let command_tx_clone = command_sender.clone();
+    let shutdown_clone = shutdown.clone();
+    let node_for_task = node.clone();
+
+    tokio::spawn(async move {
+        let result = connect_and_stream(
+            peripheral,
+            node_for_task.clone(),
+            writer_clone.clone(),
+            config_clone,
+            allowed_nodes_clone,
+            known_device_ids_clone,
+            None,
+            shutdown_clone,
+            command_tx_clone.clone(),
+        )
+        .await;
+
+        match result {
+            Ok(Some(reason)) => {
+                let _ = command_tx_clone.send(SessionCommand::ConnectionEnded {
+                    node: node_for_task,
+                    reason,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = writer_clone
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: format!("Manual pair connect failed: {error}"),
+                        details: Some(json!({
+                            "peripheralId": node.peripheral_id,
+                            "knownDeviceId": node.known_device_id,
+                            "address": node.address,
+                            "manualPair": true,
                         })),
                     })
                     .await;
@@ -3373,7 +3597,10 @@ mod tests {
             },
         ];
 
-        assert_eq!(added_allowed_rule_ids(&previous, &next), vec!["node-2".to_string()]);
+        assert_eq!(
+            added_allowed_rule_ids(&previous, &next),
+            vec!["node-2".to_string()]
+        );
     }
 
     #[test]
@@ -4039,8 +4266,16 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert!(explicit_connect_candidate_ready(&classification, true, true));
-        assert!(!explicit_connect_candidate_ready(&classification, true, false));
+        assert!(explicit_connect_candidate_ready(
+            &classification,
+            true,
+            true
+        ));
+        assert!(!explicit_connect_candidate_ready(
+            &classification,
+            true,
+            false
+        ));
     }
 
     #[test]

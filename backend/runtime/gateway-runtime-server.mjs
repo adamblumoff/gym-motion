@@ -117,6 +117,7 @@ export function createGatewayRuntimeServer({
   const suppressedDeviceIds = new Set();
   const deviceIdByPeripheralId = new Map();
   const discoveriesById = new Map();
+  const manualScanCandidatesById = new Map();
   const streamClients = new Set();
   let availableAdapters = [];
   let metadataLoadedAt = 0;
@@ -124,6 +125,9 @@ export function createGatewayRuntimeServer({
   let knownNodesPersistPromise = null;
   let runtimeIssue = null;
   let server = null;
+  let manualScanState = "idle";
+  let pairingCandidateId = null;
+  let manualScanError = null;
 
   const gatewayState = {
     hostname: os.hostname(),
@@ -181,6 +185,23 @@ export function createGatewayRuntimeServer({
       gateway: gatewayState,
       error: runtimeIssue ?? undefined,
     });
+  }
+
+  function sortManualScanCandidates() {
+    return Array.from(manualScanCandidatesById.values()).toSorted(
+      (left, right) =>
+        new Date(right.lastSeenAt ?? 0).getTime() -
+        new Date(left.lastSeenAt ?? 0).getTime(),
+    );
+  }
+
+  function getManualScanPayload() {
+    return {
+      state: manualScanState,
+      pairingCandidateId,
+      error: manualScanError,
+      candidates: sortManualScanCandidates(),
+    };
   }
 
   async function persistKnownNodes() {
@@ -681,6 +702,11 @@ export function createGatewayRuntimeServer({
             new Date(left.lastSeenAt ?? 0).getTime(),
         ),
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/manual-scan") {
+      jsonResponse(response, 200, getManualScanPayload());
       return;
     }
 
@@ -1306,6 +1332,42 @@ export function createGatewayRuntimeServer({
       emitDevice(deviceId);
       broadcastGatewayStatus();
     },
+
+    setManualScanState({
+      state,
+      pairingCandidateId: nextPairingCandidateId = null,
+      error = null,
+      clearCandidates = false,
+    }) {
+      manualScanState = state;
+      pairingCandidateId = nextPairingCandidateId;
+      manualScanError = error;
+
+      if (clearCandidates) {
+        manualScanCandidatesById.clear();
+      }
+    },
+
+    upsertManualScanCandidate(candidate) {
+      if (!candidate?.id) {
+        return;
+      }
+
+      manualScanCandidatesById.set(candidate.id, {
+        id: candidate.id,
+        label: candidate.label ?? candidate.localName ?? candidate.peripheralId ?? candidate.id,
+        peripheralId: candidate.peripheralId ?? null,
+        address: candidate.address ?? null,
+        localName: candidate.localName ?? null,
+        knownDeviceId: candidate.knownDeviceId ?? null,
+        machineLabel: candidate.machineLabel ?? null,
+        siteId: candidate.siteId ?? null,
+        lastRssi: candidate.lastRssi ?? null,
+        lastSeenAt: candidate.lastSeenAt ?? null,
+      });
+    },
+
+    getManualScanPayload,
 
     resolveKnownDeviceId(input) {
       return resolveKnownDeviceIdByDiscovery(input);

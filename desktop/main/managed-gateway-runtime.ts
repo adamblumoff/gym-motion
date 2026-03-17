@@ -31,9 +31,6 @@ import {
 } from "./gateway-runtime-target";
 import type { PreferencesStore } from "./preferences-store";
 import {
-  createApprovedNodeRule,
-  createNodeIdentity,
-  matchesApprovedNodeRule,
   reconcileApprovedNodeRule,
 } from "./setup-selection";
 import {
@@ -48,11 +45,9 @@ import {
   liveStatusFor,
   normalizeGatewayHealth,
 } from "./managed-gateway-runtime/snapshot";
-import { windowsRescanMode } from "./managed-gateway-runtime/scan-mode";
 import { pruneForgottenDevicesFromSnapshot } from "./managed-gateway-runtime/approved-node-prune";
 import {
   dedupeApprovedNodes,
-  mergeSetupNodes,
   normalizeApprovedNodes,
 } from "./managed-gateway-runtime/setup-state";
 import {
@@ -67,9 +62,8 @@ type ManagedGatewayRuntime = {
   restart: () => Promise<DesktopSnapshot>;
   getSnapshot: () => Promise<DesktopSnapshot>;
   getSetupState: () => Promise<DesktopSetupState>;
-  rescanAdapters: () => Promise<DesktopSetupState>;
-  requestSilentReconnect: () => Promise<void>;
-  connectApprovedNode: (ruleId: string) => Promise<void>;
+  startManualScan: () => Promise<DesktopSetupState>;
+  pairManualCandidate: (candidateId: string) => Promise<DesktopSetupState>;
   recoverApprovedNode: (ruleId: string) => Promise<void>;
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
@@ -77,6 +71,13 @@ type ManagedGatewayRuntime = {
 };
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
+
+type ManualScanPayload = {
+  state?: DesktopSetupState["manualScanState"];
+  pairingCandidateId?: string | null;
+  error?: string | null;
+  candidates?: DesktopSetupState["manualCandidates"];
+};
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
@@ -191,6 +192,20 @@ export function createManagedGatewayRuntime(
     return discoveredAdapters.find((adapter) => adapter.id === autoSelectedAdapterId) ?? null;
   }
 
+  function applyManualScanPayload(payload: ManualScanPayload) {
+    const approvedNodes = reconcileApprovedNodesWithSnapshot();
+
+    setupState = {
+      ...setupState,
+      approvedNodes,
+      manualScanState: payload.state ?? "idle",
+      pairingCandidateId: payload.pairingCandidateId ?? null,
+      manualScanError: payload.error ?? null,
+      manualCandidates: Array.isArray(payload.candidates) ? payload.candidates : [],
+    };
+    emitSetup();
+  }
+
   async function refreshAdapters() {
     const usingWindowsGateway = usesWindowsNativeGateway(process.platform);
     const adapterPayload =
@@ -243,17 +258,6 @@ export function createManagedGatewayRuntime(
     }
   }
 
-  function applySetupNodes(nodes: Array<DesktopSetupState["nodes"][number]>) {
-    const approvedNodes = reconcileApprovedNodesWithSnapshot();
-    setupState = mergeSetupNodes({
-      nodes,
-      approvedNodes,
-      devices: snapshot.devices,
-      adapterIssue: setupState.adapterIssue,
-    });
-    emitSetup();
-  }
-
   function pruneSnapshotToApprovedNodes(approvedNodes = readApprovedNodes()) {
     const nextSnapshot = pruneForgottenDevicesFromSnapshot(snapshot, approvedNodes);
 
@@ -265,72 +269,22 @@ export function createManagedGatewayRuntime(
     return true;
   }
 
-  async function refreshSetupNodes() {
+  async function refreshManualScanState() {
     if (!child) {
-      applySetupNodes([]);
+      applyManualScanPayload({
+        state: "idle",
+        pairingCandidateId: null,
+        error: null,
+        candidates: [],
+      });
       return;
     }
 
-    const discoveriesPayload = await fetchJson<{
-      discoveries: Array<{
-        id: string;
-        peripheralId: string | null;
-        address: string | null;
-        localName: string | null;
-        knownDeviceId: string | null;
-        lastSeenAt: string | null;
-        lastRssi: number | null;
-      }>;
-    }>(`http://127.0.0.1:${runtimePort}/discoveries`);
+    const manualScanPayload = await fetchJson<ManualScanPayload>(
+      `http://127.0.0.1:${runtimePort}/manual-scan`,
+    );
 
-    const approvedNodes = readApprovedNodes();
-    const nodes = discoveriesPayload.discoveries.map((node) => {
-      const matchingDevice =
-        (node.knownDeviceId
-          ? snapshot.devices.find((device) => device.id === node.knownDeviceId)
-          : null) ??
-        snapshot.devices.find((device) =>
-          matchesApprovedNodeRule(
-            createApprovedNodeRule({
-              label: node.localName ?? node.peripheralId ?? "Visible node",
-              peripheralId: node.peripheralId,
-              address: node.address,
-              localName: node.localName,
-              knownDeviceId: node.knownDeviceId,
-            }),
-            {
-              ...createNodeIdentity(device),
-              knownDeviceId: device.id,
-            },
-            approvedNodes,
-          ),
-        );
-      const isApproved = approvedNodes.some((approvedNode) =>
-        matchesApprovedNodeRule(approvedNode, node, approvedNodes),
-      );
-
-      return {
-        id: node.id,
-        label:
-          matchingDevice?.machineLabel ??
-          node.localName ??
-          node.knownDeviceId ??
-          node.peripheralId ??
-          "Visible node",
-        peripheralId: node.peripheralId,
-        address: node.address,
-        localName: node.localName,
-        knownDeviceId: node.knownDeviceId ?? matchingDevice?.id ?? null,
-        machineLabel: matchingDevice?.machineLabel ?? null,
-        siteId: matchingDevice?.siteId ?? null,
-        lastRssi: node.lastRssi,
-        lastSeenAt: node.lastSeenAt,
-        gatewayConnectionState: matchingDevice?.gatewayConnectionState ?? "visible",
-        isApproved,
-      } satisfies DesktopSetupState["nodes"][number];
-    });
-
-    applySetupNodes(nodes);
+    applyManualScanPayload(manualScanPayload);
   }
 
   async function refreshHistory() {
@@ -361,7 +315,12 @@ export function createManagedGatewayRuntime(
 
   async function refreshGatewayState() {
     if (!child) {
-      applySetupNodes([]);
+      applyManualScanPayload({
+        state: "idle",
+        pairingCandidateId: null,
+        error: null,
+        candidates: [],
+      });
       return;
     }
 
@@ -400,7 +359,7 @@ export function createManagedGatewayRuntime(
         await refreshAdapters();
       }
 
-      await refreshSetupNodes();
+      await refreshManualScanState();
 
       if (
         previousIds.size !== devicesPayload.devices.length ||
@@ -616,7 +575,7 @@ export function createManagedGatewayRuntime(
           };
           emit({ type: "activity-recorded", activity });
         }
-        void refreshSetupNodes();
+        void refreshManualScanState();
         break;
       }
       case "device-log": {
@@ -667,7 +626,12 @@ export function createManagedGatewayRuntime(
     if (!preserveSnapshot) {
       snapshot = createEmptySnapshot();
       emit({ type: "snapshot", snapshot });
-      applySetupNodes([]);
+      applyManualScanPayload({
+        state: "idle",
+        pairingCandidateId: null,
+        error: null,
+        candidates: [],
+      });
     } else {
       snapshot = {
         ...snapshot,
@@ -739,6 +703,10 @@ export function createManagedGatewayRuntime(
     return snapshot;
   }
 
+  function manualCandidateById(candidateId: string) {
+    return setupState.manualCandidates.find((candidate) => candidate.id === candidateId) ?? null;
+  }
+
   return {
     async start() {
       if (startingPromise) {
@@ -770,14 +738,25 @@ export function createManagedGatewayRuntime(
     async getSetupState() {
       await refreshAdapters();
       if (child) {
-        await refreshSetupNodes();
+        await refreshManualScanState();
       }
       return setupState;
     },
-    async rescanAdapters() {
+    async startManualScan() {
       if (usesWindowsNativeGateway(process.platform)) {
-        windowsScanRequested =
-          windowsRescanMode(readApprovedNodes().length) === "manual";
+        applyManualScanPayload({
+          state: "scanning",
+          pairingCandidateId: null,
+          error: null,
+          candidates: [],
+        });
+
+        if (child) {
+          sendGatewayCommand({ type: "start_manual_scan" });
+          return setupState;
+        }
+
+        windowsScanRequested = true;
         await restartRuntime();
         return setupState;
       }
@@ -785,35 +764,61 @@ export function createManagedGatewayRuntime(
       await refreshAdapters();
       return setupState;
     },
-    async requestSilentReconnect() {
+    async pairManualCandidate(candidateId) {
+      if (!candidateId) {
+        return setupState;
+      }
+
+      const candidate = manualCandidateById(candidateId);
+
+      if (!candidate) {
+        throw new Error("That scan result is no longer available. Start a new manual scan.");
+      }
+
+      const nextApprovedNodes = dedupeApprovedNodes([
+        ...setupState.approvedNodes,
+        {
+          id: candidate.id,
+          label: candidate.label,
+          peripheralId: candidate.peripheralId,
+          address: candidate.address,
+          localName: candidate.localName,
+          knownDeviceId: candidate.knownDeviceId,
+        },
+      ]);
+
+      store.setJson(APPROVED_NODES_KEY, nextApprovedNodes);
+      setupState = {
+        ...setupState,
+        approvedNodes: nextApprovedNodes,
+        manualScanState: "pairing",
+        pairingCandidateId: candidateId,
+        manualScanError: null,
+      };
+      emitSetup();
+
+      if (pruneSnapshotToApprovedNodes(nextApprovedNodes)) {
+        emit({ type: "snapshot", snapshot });
+      }
+
       if (usesWindowsNativeGateway(process.platform)) {
-        if (child) {
-          sendGatewayCommand({ type: "request_silent_reconnect" });
-          return;
+        if (!child) {
+          throw new Error("Windows BLE runtime is not running.");
         }
 
-        await restartRuntime();
-        return;
+        sendGatewayCommand({
+          type: "set_allowed_nodes",
+          nodes: nextApprovedNodes,
+        });
+        sendGatewayCommand({
+          type: "pair_manual_candidate",
+          candidateId,
+        });
+        return setupState;
       }
 
       await refreshAdapters();
-    },
-    async connectApprovedNode(ruleId) {
-      if (!ruleId) {
-        return;
-      }
-
-      if (usesWindowsNativeGateway(process.platform)) {
-        if (child) {
-          sendGatewayCommand({ type: "connect_approved_node", ruleId });
-          return;
-        }
-
-        await restartRuntime();
-        return;
-      }
-
-      await refreshAdapters();
+      return setupState;
     },
     async recoverApprovedNode(ruleId) {
       if (!ruleId) {
@@ -852,6 +857,11 @@ export function createManagedGatewayRuntime(
     async setAllowedNodes(nodes) {
       const nextNodes = dedupeApprovedNodes(nodes);
       store.setJson(APPROVED_NODES_KEY, nextNodes);
+      setupState = {
+        ...setupState,
+        approvedNodes: nextNodes,
+      };
+      emitSetup();
       if (pruneSnapshotToApprovedNodes(nextNodes)) {
         emit({ type: "snapshot", snapshot });
       }
@@ -862,8 +872,6 @@ export function createManagedGatewayRuntime(
           type: "set_allowed_nodes",
           nodes: nextNodes,
         });
-        sendGatewayCommand({ type: "request_silent_reconnect" });
-        applySetupNodes(setupState.nodes);
         return setupState;
       }
 

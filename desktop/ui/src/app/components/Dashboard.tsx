@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast, Toaster } from 'sonner';
 
-import { buildBluetoothNodes } from '../data';
+import { buildBluetoothNodes, buildDashboardRuntimeStatus } from '../data';
 import { useDesktopRuntime } from '../runtime-context';
 import {
   forgetApprovedNodeRules,
@@ -34,7 +34,7 @@ export function Dashboard() {
   const {
     snapshot,
     setup,
-    rescanAdapters,
+    startManualScan,
     resumeApprovedNodeReconnect,
     setAllowedNodes,
   } = useDesktopRuntime();
@@ -179,7 +179,7 @@ export function Dashboard() {
       />
       <CommandPalette
         nodes={nodes}
-        onScan={() => void rescanAdapters()}
+        onScan={() => void startManualScan()}
         onSelectNode={handleSelectNode}
       />
       <NodeDetailModal node={selectedNode} open={modalOpen} onOpenChange={setModalOpen} />
@@ -201,7 +201,7 @@ export function Dashboard() {
         totalNodes={nodes.length}
         activeNodes={activeNodes}
         movingNodes={movingNodes}
-        runtimeStatus={snapshot?.liveStatus ?? 'Starting gateway runtime…'}
+        runtimeStatus={buildDashboardRuntimeStatus(nodes.length)}
       />
 
       <div className="flex-1 overflow-auto p-6">

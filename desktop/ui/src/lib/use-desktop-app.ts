@@ -253,19 +253,21 @@ export function useDesktopApp() {
         snapshot,
       }));
     },
-    async rescanAdapters() {
-      const setup = await window.gymMotionDesktop.rescanAdapters();
+    async startManualScan() {
+      const setup = await window.gymMotionDesktop.startManualScan();
       setState((current) => ({
         ...current,
         snapshot: filterSnapshotToApprovedNodes(current.snapshot, setup.approvedNodes),
         setup,
       }));
     },
-    async requestSilentReconnect() {
-      await window.gymMotionDesktop.requestSilentReconnect();
-    },
-    async connectApprovedNode(ruleId: string) {
-      await window.gymMotionDesktop.connectApprovedNode(ruleId);
+    async pairManualCandidate(candidateId: string) {
+      const setup = await window.gymMotionDesktop.pairManualCandidate(candidateId);
+      setState((current) => ({
+        ...current,
+        snapshot: filterSnapshotToApprovedNodes(current.snapshot, setup.approvedNodes),
+        setup,
+      }));
     },
     async recoverApprovedNode(ruleId: string) {
       await window.gymMotionDesktop.recoverApprovedNode(ruleId);
