@@ -343,26 +343,6 @@ export function createE2eRuntimeStore() {
         .map(clone);
     },
 
-    async listDeviceMotionEvents(args: {
-      deviceId: string;
-      startTimestamp: number;
-      endTimestamp?: number;
-    }) {
-      const end = args.endTimestamp ?? Date.now();
-      return (motionEvents.get(args.deviceId) ?? [])
-        .filter(
-          (event) =>
-            event.eventTimestamp >= args.startTimestamp &&
-            event.eventTimestamp < end,
-        )
-        .sort(
-          (left, right) =>
-            left.eventTimestamp - right.eventTimestamp ||
-            left.id - right.id,
-        )
-        .map(clone);
-    },
-
     async findLatestDeviceMotionEventBeforeReceivedAt(args: {
       deviceId: string;
       beforeReceivedAt: string;
@@ -372,20 +352,6 @@ export function createE2eRuntimeStore() {
         (event) => Date.parse(event.receivedAt) < cutoff,
       );
       return matches.length > 0 ? clone(matches.at(-1) ?? null) : null;
-    },
-
-    async findLatestDeviceMotionEventBefore(args: {
-      deviceId: string;
-      beforeTimestamp: number;
-    }) {
-      const matches = (motionEvents.get(args.deviceId) ?? [])
-        .filter((event) => event.eventTimestamp < args.beforeTimestamp)
-        .sort(
-          (left, right) =>
-            right.eventTimestamp - left.eventTimestamp ||
-            right.id - left.id,
-        );
-      return matches.length > 0 ? clone(matches[0]) : null;
     },
 
     async getDeviceSyncState(deviceId: string) {

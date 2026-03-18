@@ -94,9 +94,10 @@ export function createManagedGatewayRuntime(
         analytics,
       });
     },
-    listDeviceMotionEvents: e2eRuntimeStore?.listDeviceMotionEvents,
-    findLatestDeviceMotionEventBefore:
-      e2eRuntimeStore?.findLatestDeviceMotionEventBefore,
+    listDeviceMotionEventsByReceivedAt:
+      e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
+    findLatestDeviceMotionEventBeforeReceivedAt:
+      e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
     getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
 
