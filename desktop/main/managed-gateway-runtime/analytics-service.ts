@@ -278,7 +278,7 @@ async function buildAnalyticsSnapshot(args: {
 
 export type AnalyticsService = {
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
-  scheduleRefresh: (deviceId: string) => void;
+  scheduleRefresh: (deviceId: string, delayMs?: number) => void;
   markSyncFailure: (deviceId: string, detail: string) => void;
   clearSyncFailure: (deviceId: string) => void;
 };
@@ -357,7 +357,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     writeCache(nextCache);
   }
 
-  function scheduleRefresh(deviceId: string) {
+  function scheduleRefresh(deviceId: string, delayMs = 150) {
     const existing = refreshTimers.get(deviceId);
     if (existing) {
       clearTimeout(existing);
@@ -370,7 +370,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         syncFailures.set(deviceId, detail);
         void emitCachedSnapshots(deviceId);
       });
-    }, 150);
+    }, delayMs);
     timer.unref?.();
     refreshTimers.set(deviceId, timer);
   }

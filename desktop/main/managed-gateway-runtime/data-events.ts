@@ -22,6 +22,7 @@ type DataEventHandlerDeps = {
   pruneSnapshot: (snapshot: DesktopSnapshot) => DesktopSnapshot;
   emit: (event: DesktopRuntimeEvent) => void;
   refreshHistory: () => Promise<void>;
+  refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
 };
 
@@ -56,7 +57,7 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             events: mergeEventUpdate(deps.getSnapshot().events, payload.event, 14),
           });
           deps.emit({ type: "event-recorded", event: payload.event });
-          deps.scheduleAnalyticsRefresh(payload.event.deviceId);
+          deps.refreshAnalyticsNow(payload.event.deviceId);
 
           const activity: DeviceActivitySummary = {
             id: `motion-${payload.event.id}`,

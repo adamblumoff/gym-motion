@@ -338,6 +338,7 @@ export function createManagedGatewayRuntime(
       pruneForgottenDevicesFromSnapshot(nextSnapshot, readApprovedNodes()),
     emit,
     refreshHistory: () => runtimeSync.refreshHistory(),
+    refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
   });
 

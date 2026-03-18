@@ -25,6 +25,7 @@ import { PageHeader } from "./PageHeader";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
+import { ScrollArea } from "./ui/scroll-area";
 
 function analyticsKey(deviceId: string, window: AnalyticsWindow) {
   return `${deviceId}::${window}`;
@@ -99,6 +100,10 @@ function signalLabel(signalStrength: number | null) {
   return `Signal ${signalStrength}%`;
 }
 
+function motionLabel(isMoving: boolean) {
+  return isMoving ? "Moving now" : "Still";
+}
+
 type SummaryMetricCardProps = {
   icon: LucideIcon;
   iconClassName: string;
@@ -158,23 +163,25 @@ export function AnalyticsPage() {
   const currentAnalytics = selectedNodeId
     ? analyticsByKey[analyticsKey(selectedNodeId, selectedWindow)] ?? null
     : null;
+  const hasAnalytics = currentAnalytics !== null;
   const loadAnalytics = useEffectEvent((deviceId: string, window: AnalyticsWindow) =>
     getDeviceAnalytics({
       deviceId,
       window,
     }),
   );
-  const readCachedAnalytics = useEffectEvent((deviceId: string, window: AnalyticsWindow) =>
-    analyticsByKey[analyticsKey(deviceId, window)] ?? null,
-  );
 
   useEffect(() => {
     if (!selectedNodeId) {
       return;
     }
+    if (hasAnalytics) {
+      setIsLoadingAnalytics(false);
+      return;
+    }
 
     let cancelled = false;
-    setIsLoadingAnalytics(readCachedAnalytics(selectedNodeId, selectedWindow) === null);
+    setIsLoadingAnalytics(true);
 
     void loadAnalytics(selectedNodeId, selectedWindow).finally(() => {
       if (!cancelled) {
@@ -185,7 +192,7 @@ export function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadAnalytics, readCachedAnalytics, selectedNodeId, selectedWindow]);
+  }, [hasAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -417,6 +424,12 @@ export function AnalyticsPage() {
                   variant="outline"
                   className="border-zinc-800 bg-zinc-950 text-zinc-300"
                 >
+                  {motionLabel(selectedNode.isMoving)}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
+                >
                   {syncStateLabel(currentAnalytics?.sync.state ?? "idle")}
                 </Badge>
                 <Badge
@@ -512,6 +525,52 @@ export function AnalyticsPage() {
               )}
             </Card>
           </div>
+
+          <Card className="border-zinc-800 bg-zinc-950/80 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-sm font-medium text-zinc-100">Live Activity</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Recent runtime events for this machine, shared with the dashboard feed.
+                </p>
+              </div>
+              <Badge
+                variant="outline"
+                className="border-zinc-800 bg-zinc-950 text-zinc-300"
+              >
+                {selectedNode.logs.length} recent events
+              </Badge>
+            </div>
+
+            <ScrollArea className="mt-5 h-56">
+              <div className="space-y-2 pr-4">
+                {selectedNode.logs.length > 0 ? (
+                  selectedNode.logs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="flex items-start gap-3 rounded-lg border border-zinc-900 bg-zinc-950/70 px-3 py-2"
+                    >
+                      <span className="shrink-0 font-mono text-[11px] text-zinc-500">
+                        {log.timestamp.toLocaleTimeString("en-US", {
+                          hour12: false,
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })}
+                      </span>
+                      <span className={log.isMoving ? "text-blue-300" : "text-zinc-400"}>
+                        {log.message}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex h-full min-h-40 items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
+                    Live activity will appear here as the runtime reports motion and device events.
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </Card>
         </div>
       </div>
     </div>
