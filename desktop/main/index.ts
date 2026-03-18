@@ -23,6 +23,11 @@ let isQuitting = false;
 let isDisposingRuntime = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
 let themeBridgeDisposer: (() => void) | null = null;
+const isE2E = process.env.GYM_MOTION_E2E === "1";
+
+if (isE2E && process.env.GYM_MOTION_E2E_USER_DATA_DIR) {
+  app.setPath("userData", path.resolve(process.env.GYM_MOTION_E2E_USER_DATA_DIR));
+}
 
 function createTrayImage() {
   const svg = `
@@ -132,7 +137,7 @@ function createTray() {
   return nextTray;
 }
 
-const singleInstance = app.requestSingleInstanceLock();
+const singleInstance = isE2E ? true : app.requestSingleInstanceLock();
 
 try {
   const envResult = loadDesktopEnv();
@@ -181,7 +186,7 @@ if (!singleInstance) {
     themeController.getState();
 
     mainWindow = createWindow();
-    tray = createTray();
+    tray = isE2E ? null : createTray();
     runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []), preferences);
 
     app.on("activate", () => {

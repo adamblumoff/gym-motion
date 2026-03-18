@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 
 import { app } from "electron";
 
@@ -209,16 +210,19 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       resourcesPath: process.resourcesPath,
     });
 
+    const gatewayScriptPath =
+      process.env.GYM_MOTION_GATEWAY_CHILD_SCRIPT
+        ? path.resolve(process.env.GYM_MOTION_GATEWAY_CHILD_SCRIPT)
+        : resolveGatewayScriptPath({
+            platform: process.platform,
+            isPackaged: app.isPackaged,
+            cwd: process.cwd(),
+            resourcesPath: process.resourcesPath,
+          });
+
     const spawnedChild = spawn(
       process.execPath,
-      [
-        resolveGatewayScriptPath({
-          platform: process.platform,
-          isPackaged: app.isPackaged,
-          cwd: process.cwd(),
-          resourcesPath: process.resourcesPath,
-        }),
-      ],
+      [gatewayScriptPath],
       {
         cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
         env,

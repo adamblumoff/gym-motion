@@ -36,6 +36,26 @@ export const DESKTOP_THEME_CHANNELS = {
   updated: "theme:updated",
 } as const;
 
+export const DESKTOP_TEST_CHANNELS = {
+  step: "desktop-test:step",
+} as const;
+
+export type DesktopTestStepName =
+  | "announceCandidate"
+  | "connectApprovedNode"
+  | "disconnectLinkLost"
+  | "beginReconnectAttempt"
+  | "completeReconnect"
+  | "exhaustReconnect"
+  | "adapterOff"
+  | "adapterOn"
+  | "lateDiscovery"
+  | "telemetryWhileDisconnected";
+
+export type DesktopTestApi = {
+  step: (name: DesktopTestStepName, payload?: unknown) => Promise<unknown>;
+};
+
 export type DesktopRuntimeEvent =
   | {
       type: "snapshot";

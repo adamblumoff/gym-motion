@@ -44,12 +44,15 @@ import { createRuntimeSync } from "./managed-gateway-runtime/runtime-sync";
 import { createDataEventHandler } from "./managed-gateway-runtime/data-events";
 import { createDataIngestController } from "./managed-gateway-runtime/data-ingest";
 import { createAnalyticsService } from "./managed-gateway-runtime/analytics-service";
+import { createE2eRuntimeStore } from "./managed-gateway-runtime/e2e-runtime-store";
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
 export function createManagedGatewayRuntime(
   store: PreferencesStore,
 ): ManagedGatewayRuntime {
+  const isE2E = process.env.GYM_MOTION_E2E === "1";
+  const e2eRuntimeStore = isE2E ? createE2eRuntimeStore() : null;
   const listeners = new Set<(event: DesktopRuntimeEvent) => void>();
   const apiServer = createDesktopApiServer();
   let child: ChildProcess | null = null;
@@ -95,6 +98,11 @@ export function createManagedGatewayRuntime(
         analytics,
       });
     },
+    listDeviceMotionEventsByReceivedAt:
+      e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
+    findLatestDeviceMotionEventBeforeReceivedAt:
+      e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
+    getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
 
   function emitSetup() {
@@ -331,6 +339,10 @@ export function createManagedGatewayRuntime(
     setSnapshot: (nextSnapshot) => {
       snapshot = nextSnapshot;
     },
+    listDevices: e2eRuntimeStore?.listDevices,
+    listRecentEvents: e2eRuntimeStore?.listRecentEvents,
+    listDeviceLogs: e2eRuntimeStore?.listDeviceLogs,
+    listDeviceActivity: e2eRuntimeStore?.listDeviceActivity,
   });
 
   const applyDataEvent = createDataEventHandler({
@@ -348,6 +360,10 @@ export function createManagedGatewayRuntime(
 
   const dataIngest = createDataIngestController({
     applyDataEvent,
+    recordMotion: e2eRuntimeStore?.recordMotion,
+    recordHeartbeat: e2eRuntimeStore?.recordHeartbeat,
+    recordLog: e2eRuntimeStore?.recordLog,
+    recordBackfill: e2eRuntimeStore?.recordBackfill,
   });
 
   async function refreshHistory() {
@@ -500,6 +516,17 @@ export function createManagedGatewayRuntime(
     },
     async getDeviceAnalytics(input) {
       return analyticsService.getDeviceAnalytics(input);
+    },
+    async runE2eStep(name, payload) {
+      if (!isE2E) {
+        throw new Error("Desktop E2E test driver is disabled.");
+      }
+
+      return sendGatewayCommand({
+        type: "e2e_step",
+        name,
+        payload,
+      });
     },
     onEvent(listener) {
       listeners.add(listener);

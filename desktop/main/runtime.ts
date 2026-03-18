@@ -1,8 +1,10 @@
 import { BrowserWindow, ipcMain } from "electron";
 
 import {
+  DESKTOP_TEST_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
   type DesktopRuntimeEvent,
+  type DesktopTestStepName,
 } from "@core/services";
 import { createManagedGatewayRuntime } from "./managed-gateway-runtime";
 import type { PreferencesStore } from "./preferences-store";
@@ -24,6 +26,7 @@ export function registerRuntimeBridge(
   const unsubscribe = runtime.onEvent((event) => {
     broadcast(event);
   });
+  const isE2E = process.env.GYM_MOTION_E2E === "1";
 
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSnapshot, () => runtime.getSnapshot());
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getSetupState, () => runtime.getSetupState());
@@ -55,6 +58,11 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, (_event, input) =>
     runtime.getDeviceAnalytics(input),
   );
+  if (isE2E) {
+    ipcMain.handle(DESKTOP_TEST_CHANNELS.step, (_event, name: DesktopTestStepName, payload) =>
+      runtime.runE2eStep(name, payload),
+    );
+  }
 
   void runtime.start().catch((error) => {
     console.error("[runtime] failed to start managed gateway runtime", error);
@@ -76,6 +84,9 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics);
+      if (isE2E) {
+        ipcMain.removeHandler(DESKTOP_TEST_CHANNELS.step);
+      }
     },
   };
 }

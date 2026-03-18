@@ -6,9 +6,11 @@ import type {
   ThemePreference,
 } from "@core/contracts";
 import {
+  DESKTOP_TEST_CHANNELS,
   DESKTOP_THEME_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
   type DesktopApi,
+  type DesktopTestApi,
 } from "@core/services";
 
 const desktopApi: DesktopApi = {
@@ -79,3 +81,13 @@ const desktopApi: DesktopApi = {
 };
 
 contextBridge.exposeInMainWorld("gymMotionDesktop", desktopApi);
+
+if (process.env.GYM_MOTION_E2E === "1") {
+  const desktopTestApi: DesktopTestApi = {
+    async step(name, payload) {
+      return ipcRenderer.invoke(DESKTOP_TEST_CHANNELS.step, name, payload);
+    },
+  };
+
+  contextBridge.exposeInMainWorld("gymMotionDesktopTest", desktopTestApi);
+}

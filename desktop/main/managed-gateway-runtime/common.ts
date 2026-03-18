@@ -5,7 +5,10 @@ import type {
   DeviceAnalyticsSnapshot,
   GetDeviceAnalyticsInput,
 } from "@core/contracts";
-import type { DesktopRuntimeEvent } from "@core/services";
+import type {
+  DesktopRuntimeEvent,
+  DesktopTestStepName,
+} from "@core/services";
 
 export type ManagedGatewayRuntime = {
   start: () => Promise<void>;
@@ -22,6 +25,7 @@ export type ManagedGatewayRuntime = {
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
+  runE2eStep: (name: DesktopTestStepName, payload?: unknown) => Promise<unknown>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
 

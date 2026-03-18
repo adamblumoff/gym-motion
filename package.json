@@ -9,6 +9,7 @@
     "db:setup": "bun run ./scripts/setup-db.ts",
     "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
     "dev": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
+    "build:desktop:test": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build",
     "build": "electron-vite build && electron-builder --config electron-builder.config.mjs --dir",
     "build:win": "bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
     "preview": "electron-vite preview",
@@ -20,8 +21,10 @@
     "lint": "eslint desktop --ext .ts,.tsx",
     "test:boundaries": "node ./scripts/check-no-archive-imports.mjs && node ./scripts/check-file-sizes.mjs && node ./scripts/check-no-legacy-desktop-imports.mjs",
     "test": "bun run test:boundaries && bun test ./desktop/main ./shared ./desktop/ui ./desktop/scripts",
+    "test:e2e:desktop": "bun run build:desktop:test && playwright test -c playwright.desktop.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:windows-desktop": "./scripts/test-windows-desktop.sh"
+    "smoke:windows-desktop": "./scripts/test-windows-desktop.sh",
+    "test:windows-desktop": "bun run test:e2e:desktop"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1003.0",
@@ -45,6 +48,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.1",
     "@eslint/js": "^9.23.0",
     "@tailwindcss/vite": "^4.2.1",
     "@types/node": "^24.5.2",
