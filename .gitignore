@@ -25,6 +25,8 @@
 /dist
 /release
 /bin/arduino-cli
+/playwright-results/
+/firmware/.gitignore
 
 # misc
 .DS_Store
