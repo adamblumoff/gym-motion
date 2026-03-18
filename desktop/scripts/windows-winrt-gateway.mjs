@@ -249,7 +249,7 @@ async function handleDesktopControlCommand(command) {
     });
     log("Manual scan requested from desktop runtime.");
     syncAllowedNodes();
-    sendCommand("rescan");
+    sendCommand("start_manual_scan");
     return { state: "scanning" };
   }
 

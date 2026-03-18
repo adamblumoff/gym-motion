@@ -496,3 +496,54 @@ pub(super) async fn recover_visible_approved_node(
 
     Ok(false)
 }
+
+pub(super) async fn emit_visible_manual_candidates(
+    context: &SessionContext,
+    state: &mut SessionState,
+) -> Result<()> {
+    let allowed = context.allowed_nodes.read().await.clone();
+    let allow_identity_fallback = allow_approved_identity_fallback(
+        &allowed,
+        &state.connected_nodes,
+        &state.reconnect_states,
+        state.manual_scan_deadline,
+        Instant::now(),
+    );
+    let peripherals = context.adapter.peripherals().await.unwrap_or_default();
+
+    for peripheral in peripherals {
+        let Some(candidate) = discovery_candidate_for_event(
+            context,
+            "manual_scan_visible",
+            &peripheral,
+            &allowed,
+            allow_identity_fallback,
+        )
+        .await
+        else {
+            continue;
+        };
+
+        let node = candidate.node;
+        if state.manual_candidates.contains_key(&node.id) {
+            continue;
+        }
+
+        state.classified_candidates_this_burst =
+            state.classified_candidates_this_burst.saturating_add(1);
+        state.last_scan_progress_at = Some(Instant::now());
+        state.last_advertisement_at = node.last_seen_at.clone();
+        state
+            .manual_candidates
+            .insert(node.id.clone(), node.clone());
+        context
+            .writer
+            .send(&Event::NodeDiscovered {
+                node,
+                scan_reason: Some("manual".to_string()),
+            })
+            .await?;
+    }
+
+    Ok(())
+}

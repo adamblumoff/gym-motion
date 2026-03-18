@@ -14,7 +14,8 @@ use super::{
     },
     session::{sync_current_scan_state, SessionContext, SessionState, SCAN_WINDOW_SECS},
     session_connection::{
-        peripheral_for_node, recover_visible_approved_node, spawn_manual_pair_for_candidate,
+        emit_visible_manual_candidates, peripheral_for_node, recover_visible_approved_node,
+        spawn_manual_pair_for_candidate,
     },
     session_scan::emit_manual_scan_state,
     session_types::SessionCommand,
@@ -33,6 +34,9 @@ pub(super) async fn handle_session_command(
             state.manual_pair_candidate_id = None;
             state.manual_candidates.clear();
             emit_manual_scan_state(&context.writer, "scanning", None, None).await?;
+            sync_current_scan_state(context, state).await?;
+            emit_visible_manual_candidates(context, state).await?;
+            return Ok(());
         }
         SessionCommand::RefreshScanPolicy => {
             let allowed = context.allowed_nodes.read().await.clone();

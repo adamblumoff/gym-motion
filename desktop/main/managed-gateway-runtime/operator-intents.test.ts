@@ -215,6 +215,89 @@ describe("operator-intents", () => {
     expect(nextSetup.manualScanState).toBe("scanning");
   });
 
+  it("waits for child-confirmed scan state when the sidecar is running", async () => {
+    let setupState = createSetupState();
+    const manualScanPayloads: Array<Partial<DesktopSetupState>> = [];
+    const commands: Record<string, unknown>[] = [];
+
+    const intents = createOperatorIntents({
+      getSetupState: () => setupState,
+      setSetupState: (nextSetup) => {
+        setupState = nextSetup;
+      },
+      emitSetup: () => {},
+      getChild: () => ({}),
+      refreshAdapters: async () => {},
+      sendGatewayCommand: async (command) => {
+        commands.push(command);
+      },
+      restartRuntime: async () => {},
+      manualCandidateById: () => null,
+      persistApprovedNodes: (nextNodes) => nextNodes,
+      runtimeDeviceById: () => null,
+      resolveApprovedRuleIdForNode: () => null,
+      applyManualScanPayload: (payload) => {
+        manualScanPayloads.push(payload);
+      },
+      setWindowsScanRequested: () => {},
+    });
+
+    const nextSetup = await intents.startManualScan();
+
+    expect(commands).toEqual([{ type: "start_manual_scan" }]);
+    expect(manualScanPayloads).toEqual([]);
+    expect(nextSetup.manualScanState).toBe("idle");
+  });
+
+  it("clears scan state when a child-backed manual scan command fails", async () => {
+    let setupState = createSetupState();
+    const manualScanPayloads: Array<Partial<DesktopSetupState>> = [];
+
+    const intents = createOperatorIntents({
+      getSetupState: () => setupState,
+      setSetupState: (nextSetup) => {
+        setupState = nextSetup;
+      },
+      emitSetup: () => {},
+      getChild: () => ({}),
+      refreshAdapters: async () => {},
+      sendGatewayCommand: async () => {
+        throw new Error("Gateway command timed out: start_manual_scan.");
+      },
+      restartRuntime: async () => {},
+      manualCandidateById: () => null,
+      persistApprovedNodes: (nextNodes) => nextNodes,
+      runtimeDeviceById: () => null,
+      resolveApprovedRuleIdForNode: () => null,
+      applyManualScanPayload: (payload) => {
+        manualScanPayloads.push(payload);
+        setupState = {
+          ...setupState,
+          manualScanState: payload.state ?? setupState.manualScanState,
+          pairingCandidateId: payload.pairingCandidateId ?? null,
+          manualScanError: payload.error ?? null,
+          manualCandidates: payload.candidates ?? setupState.manualCandidates,
+        };
+      },
+      setWindowsScanRequested: () => {},
+    });
+
+    await expect(intents.startManualScan()).rejects.toThrow(
+      "Gateway command timed out: start_manual_scan.",
+    );
+    expect(manualScanPayloads).toEqual([
+      {
+        state: "failed",
+        pairingCandidateId: null,
+        error: null,
+        candidates: [],
+      },
+    ]);
+    expect(setupState.manualScanState).toBe("failed");
+    expect(setupState.pairingCandidateId).toBeNull();
+    expect(setupState.manualCandidates).toEqual([]);
+  });
+
   it("forgets a runtime-backed node, syncs the remaining approved set, and clears stale scan state", async () => {
     let setupState = createSetupState({
       approvedNodes: [

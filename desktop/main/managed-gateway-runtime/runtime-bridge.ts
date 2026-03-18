@@ -39,6 +39,7 @@ type RuntimeBridgeDeps = {
   getApiBaseUrl: () => string;
   onChildPersistMessage: (message: GatewayChildPersistMessage) => Promise<void>;
   onChildRuntimeMessage: (message: GatewayChildRuntimeMessage) => void;
+  commandTimeoutMs?: number;
 };
 
 type PendingCommand = {
@@ -62,6 +63,7 @@ function isControlResponse(
 
 export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   const pendingCommands = new Map<string, PendingCommand>();
+  const commandTimeoutMs = deps.commandTimeoutMs ?? 5_000;
   let readyResolver: (() => void) | null = null;
   let readyRejecter: ((error: Error) => void) | null = null;
 
@@ -93,15 +95,35 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     }
 
     const commandId = randomUUID();
+    const commandType =
+      typeof command.type === "string" && command.type.length > 0
+        ? command.type
+        : "unknown";
 
     return await new Promise<unknown>((resolve, reject) => {
-      pendingCommands.set(commandId, { resolve, reject });
+      const timeout = setTimeout(() => {
+        pendingCommands.delete(commandId);
+        reject(new Error(`Gateway command timed out: ${commandType}.`));
+      }, commandTimeoutMs);
+      timeout.unref?.();
+
+      pendingCommands.set(commandId, {
+        resolve(value) {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject(error) {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
 
       child.stdin!.write(`${JSON.stringify({ commandId, ...command })}\n`, (error) => {
         if (!error) {
           return;
         }
 
+        clearTimeout(timeout);
         pendingCommands.delete(commandId);
         reject(error);
       });

@@ -42,18 +42,27 @@ export function createOperatorIntents(
   deps: OperatorIntentDeps,
 ): OperatorIntents {
   async function startManualScan() {
+    if (deps.getChild()) {
+      try {
+        await deps.sendGatewayCommand({ type: "start_manual_scan" });
+        return deps.getSetupState();
+      } catch (error) {
+        deps.applyManualScanPayload({
+          state: "failed",
+          pairingCandidateId: null,
+          error: null,
+          candidates: [],
+        });
+        throw error;
+      }
+    }
+
     deps.applyManualScanPayload({
       state: "scanning",
       pairingCandidateId: null,
       error: null,
       candidates: [],
     });
-
-    if (deps.getChild()) {
-      await deps.sendGatewayCommand({ type: "start_manual_scan" });
-      return deps.getSetupState();
-    }
-
     deps.setWindowsScanRequested(true);
     await deps.restartRuntime();
     return deps.getSetupState();
