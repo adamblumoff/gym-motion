@@ -241,6 +241,35 @@ export async function listDeviceMotionEvents(args: {
   return result.rows.map(mapMotionEventRow);
 }
 
+export async function listDeviceMotionEventsByReceivedAt(args: {
+  deviceId: string;
+  startReceivedAt: string;
+  endReceivedAt?: string;
+}): Promise<MotionEventSummary[]> {
+  const endReceivedAt = args.endReceivedAt ?? new Date().toISOString();
+  const result = await getDb().query<MotionEventRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       state,
+       delta,
+       event_timestamp,
+       received_at,
+       boot_id,
+       firmware_version,
+       hardware_id
+     from motion_events
+     where device_id = $1
+       and received_at >= $2::timestamptz
+       and received_at < $3::timestamptz
+     order by received_at asc, event_timestamp asc, id asc`,
+    [args.deviceId, args.startReceivedAt, endReceivedAt],
+  );
+
+  return result.rows.map(mapMotionEventRow);
+}
+
 export async function findLatestDeviceMotionEventBefore(args: {
   deviceId: string;
   beforeTimestamp: number;
@@ -263,6 +292,33 @@ export async function findLatestDeviceMotionEventBefore(args: {
      order by event_timestamp desc, id desc
      limit 1`,
     [args.deviceId, args.beforeTimestamp],
+  );
+
+  return result.rows[0] ? mapMotionEventRow(result.rows[0]) : null;
+}
+
+export async function findLatestDeviceMotionEventBeforeReceivedAt(args: {
+  deviceId: string;
+  beforeReceivedAt: string;
+}): Promise<MotionEventSummary | null> {
+  const result = await getDb().query<MotionEventRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       state,
+       delta,
+       event_timestamp,
+       received_at,
+       boot_id,
+       firmware_version,
+       hardware_id
+     from motion_events
+     where device_id = $1
+       and received_at < $2::timestamptz
+     order by received_at desc, event_timestamp desc, id desc
+     limit 1`,
+    [args.deviceId, args.beforeReceivedAt],
   );
 
   return result.rows[0] ? mapMotionEventRow(result.rows[0]) : null;

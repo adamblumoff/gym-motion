@@ -1,7 +1,7 @@
 import {
-  findLatestDeviceMotionEventBefore,
+  findLatestDeviceMotionEventBeforeReceivedAt,
   getDeviceSyncState,
-  listDeviceMotionEvents,
+  listDeviceMotionEventsByReceivedAt,
 } from "../../../backend/data";
 import type { PreferencesStore } from "../preferences-store";
 import type {
@@ -11,6 +11,7 @@ import type {
   DeviceAnalyticsSyncState,
   GatewayRuntimeDeviceSummary,
   GetDeviceAnalyticsInput,
+  MotionEventSummary,
 } from "@core/contracts";
 
 const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v1";
@@ -131,6 +132,21 @@ function countMovementStart(
   }
 }
 
+function eventTimelineTimestamp(event: MotionEventSummary) {
+  return Date.parse(event.receivedAt);
+}
+
+function baseWarningFlags(
+  warningFlags: DeviceAnalyticsSnapshot["warningFlags"],
+) {
+  return warningFlags.filter(
+    (warningFlag) =>
+      warningFlag !== "sync-delayed" &&
+      warningFlag !== "sync-failed" &&
+      warningFlag !== "stale-cache",
+  );
+}
+
 function hydrateSyncState(
   deviceId: string,
   runtimeDevice: GatewayRuntimeDeviceSummary | null,
@@ -147,7 +163,8 @@ function hydrateSyncState(
   const shouldSync =
     runtimeDevice?.gatewayConnectionState === "connected" &&
     !!lastConnectedAt &&
-    (!lastSyncCompletedAt || Date.parse(lastSyncCompletedAt) < Date.parse(lastConnectedAt));
+    !!lastSyncCompletedAt &&
+    Date.parse(lastSyncCompletedAt) < Date.parse(lastConnectedAt);
 
   return {
     deviceId,
@@ -169,15 +186,17 @@ async function buildAnalyticsSnapshot(args: {
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
   const { start, end, buckets } = createBuckets(definition, Date.now());
+  const windowStartAt = new Date(start).toISOString();
+  const windowEndAt = new Date(end).toISOString();
   const [events, precedingEvent, syncSummary] = await Promise.all([
-    listDeviceMotionEvents({
+    listDeviceMotionEventsByReceivedAt({
       deviceId: args.deviceId,
-      startTimestamp: start,
-      endTimestamp: end,
+      startReceivedAt: windowStartAt,
+      endReceivedAt: windowEndAt,
     }),
-    findLatestDeviceMotionEventBefore({
+    findLatestDeviceMotionEventBeforeReceivedAt({
       deviceId: args.deviceId,
-      beforeTimestamp: start,
+      beforeReceivedAt: windowStartAt,
     }),
     getDeviceSyncState(args.deviceId),
   ]);
@@ -186,6 +205,12 @@ async function buildAnalyticsSnapshot(args: {
   let currentSegmentStart = start;
 
   for (const event of events) {
+    const timelineTimestamp = eventTimelineTimestamp(event);
+
+    if (!Number.isFinite(timelineTimestamp)) {
+      continue;
+    }
+
     if (currentState === "moving") {
       addMovingDuration(
         buckets,
@@ -193,16 +218,16 @@ async function buildAnalyticsSnapshot(args: {
         start,
         end,
         currentSegmentStart,
-        event.eventTimestamp,
+        timelineTimestamp,
       );
     }
 
     if (event.state === "moving") {
-      countMovementStart(buckets, definition.bucketMs, start, event.eventTimestamp);
+      countMovementStart(buckets, definition.bucketMs, start, timelineTimestamp);
     }
 
     currentState = event.state;
-    currentSegmentStart = event.eventTimestamp;
+    currentSegmentStart = timelineTimestamp;
   }
 
   if (currentState === "moving") {
@@ -287,13 +312,16 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         syncSummary,
         syncFailures.get(deviceId) ?? null,
       );
-      const warningFlags = new Set(cached.warningFlags);
+      const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
+        baseWarningFlags(cached.warningFlags),
+      );
 
       if (sync.state === "syncing") {
         warningFlags.add("sync-delayed");
       }
       if (sync.state === "failed") {
         warningFlags.add("sync-failed");
+        warningFlags.add("stale-cache");
       }
       if (sync.lastOverflowDetectedAt) {
         warningFlags.add("history-overflow");
@@ -301,9 +329,9 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
       deps.onUpdated({
         ...cached,
-        source: "cache",
+        source: sync.state === "idle" ? "canonical" : "cache",
         sync,
-        warningFlags: [...warningFlags, "stale-cache"],
+        warningFlags: [...warningFlags],
       });
     }
   }
@@ -362,14 +390,17 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
           syncSummary,
           syncFailures.get(input.deviceId) ?? null,
         );
-        const warningFlags = new Set(cached.warningFlags);
+        const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
+          baseWarningFlags(cached.warningFlags),
+        );
 
-        warningFlags.add("stale-cache");
         if (sync.state === "syncing") {
           warningFlags.add("sync-delayed");
+          warningFlags.add("stale-cache");
         }
         if (sync.state === "failed") {
           warningFlags.add("sync-failed");
+          warningFlags.add("stale-cache");
         }
         if (sync.lastOverflowDetectedAt) {
           warningFlags.add("history-overflow");
@@ -377,7 +408,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
         return {
           ...cached,
-          source: "cache",
+          source: sync.state === "idle" ? "canonical" : "cache",
           sync,
           warningFlags: [...warningFlags],
         };

@@ -265,7 +265,6 @@ export function createManagedGatewayRuntime(
     );
     snapshot = nextSnapshot;
     emit({ type: "device-upserted", device: nextDevice });
-    analyticsService.scheduleRefresh(runtimeDevice.deviceId);
   }
 
   function handleChildRuntimeMessage(message: GatewayChildRuntimeMessage) {

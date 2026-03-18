@@ -114,6 +114,9 @@ export function AnalyticsPage() {
       window,
     }),
   );
+  const readCachedAnalytics = useEffectEvent((deviceId: string, window: AnalyticsWindow) =>
+    analyticsByKey[analyticsKey(deviceId, window)] ?? null,
+  );
 
   useEffect(() => {
     if (!selectedNodeId) {
@@ -121,7 +124,7 @@ export function AnalyticsPage() {
     }
 
     let cancelled = false;
-    setIsLoadingAnalytics(currentAnalytics === null);
+    setIsLoadingAnalytics(readCachedAnalytics(selectedNodeId, selectedWindow) === null);
 
     void loadAnalytics(selectedNodeId, selectedWindow).finally(() => {
       if (!cancelled) {
@@ -132,7 +135,7 @@ export function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
+  }, [loadAnalytics, readCachedAnalytics, selectedNodeId, selectedWindow]);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const chartData = useMemo(
