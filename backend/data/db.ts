@@ -19,7 +19,7 @@ function configurePgTypes() {
 
   // The database stores server-received times in UTC.
   types.setTypeParser(PG_TIMESTAMP_OID, parseTimestampWithoutTimezone);
-  types.setTypeParser(PG_TIMESTAMPTZ_OID, (value) => new Date(value));
+  types.setTypeParser(PG_TIMESTAMPTZ_OID, (value: string) => new Date(value));
 
   globalThis.pgTypesConfigured = true;
 }

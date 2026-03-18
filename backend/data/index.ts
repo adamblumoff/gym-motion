@@ -12,9 +12,11 @@ export {
 export {
   checkForFirmwareUpdate,
   createOrUpdateDeviceRegistration,
+  findLatestDeviceMotionEventBefore,
   getDeviceSyncState,
   listDeviceActivity,
   listDeviceLogs,
+  listDeviceMotionEvents,
   listDevices,
   listRecentEvents,
   purgeDeviceData,

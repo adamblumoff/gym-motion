@@ -1,6 +1,7 @@
 import type {
   DesktopSnapshot,
   DeviceActivitySummary,
+  DeviceSummary,
   DeviceLogSummary,
   MotionStreamPayload,
 } from "@core/contracts";
@@ -20,9 +21,8 @@ type DataEventHandlerDeps = {
   setSnapshot: (snapshot: DesktopSnapshot) => void;
   pruneSnapshot: (snapshot: DesktopSnapshot) => DesktopSnapshot;
   emit: (event: DesktopRuntimeEvent) => void;
-  refreshManualScanState: () => Promise<void>;
-  refreshGatewayState: () => Promise<void>;
   refreshHistory: () => Promise<void>;
+  scheduleAnalyticsRefresh: (deviceId: string) => void;
 };
 
 export function createDataEventHandler(deps: DataEventHandlerDeps) {
@@ -56,6 +56,7 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             events: mergeEventUpdate(deps.getSnapshot().events, payload.event, 14),
           });
           deps.emit({ type: "event-recorded", event: payload.event });
+          deps.scheduleAnalyticsRefresh(payload.event.deviceId);
 
           const activity: DeviceActivitySummary = {
             id: `motion-${payload.event.id}`,
@@ -83,7 +84,6 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
           deps.emit({ type: "activity-recorded", activity });
         }
 
-        void deps.refreshManualScanState();
         break;
       }
       case "device-log": {
@@ -116,11 +116,23 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         break;
       }
       case "device-updated":
-        void deps.refreshGatewayState().then(() => {
-          deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
-        });
+        {
+          const payload = event.payload as DeviceSummary;
+          const snapshot = deps.getSnapshot();
+          const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+            snapshot.devices,
+            payload,
+          );
+          const nextSnapshot = deps.pruneSnapshot({
+            ...snapshot,
+            devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
+          });
+          deps.setSnapshot(nextSnapshot);
+          deps.emit({ type: "device-upserted", device });
+        }
         break;
       case "backfill-recorded":
+        deps.scheduleAnalyticsRefresh(event.deviceId);
         void deps.refreshHistory().then(() => {
           deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
         });

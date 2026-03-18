@@ -211,3 +211,59 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
 
   return result.rows.map(mapMotionEventRow);
 }
+
+export async function listDeviceMotionEvents(args: {
+  deviceId: string;
+  startTimestamp: number;
+  endTimestamp?: number;
+}): Promise<MotionEventSummary[]> {
+  const endTimestamp = args.endTimestamp ?? Date.now();
+  const result = await getDb().query<MotionEventRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       state,
+       delta,
+       event_timestamp,
+       received_at,
+       boot_id,
+       firmware_version,
+       hardware_id
+     from motion_events
+     where device_id = $1
+       and event_timestamp >= $2
+       and event_timestamp < $3
+     order by event_timestamp asc, id asc`,
+    [args.deviceId, args.startTimestamp, endTimestamp],
+  );
+
+  return result.rows.map(mapMotionEventRow);
+}
+
+export async function findLatestDeviceMotionEventBefore(args: {
+  deviceId: string;
+  beforeTimestamp: number;
+}): Promise<MotionEventSummary | null> {
+  const result = await getDb().query<MotionEventRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       state,
+       delta,
+       event_timestamp,
+       received_at,
+       boot_id,
+       firmware_version,
+       hardware_id
+     from motion_events
+     where device_id = $1
+       and event_timestamp < $2
+     order by event_timestamp desc, id desc
+     limit 1`,
+    [args.deviceId, args.beforeTimestamp],
+  );
+
+  return result.rows[0] ? mapMotionEventRow(result.rows[0]) : null;
+}

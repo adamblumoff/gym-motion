@@ -1,4 +1,5 @@
 import type { GatewayRuntimeDeviceSummary } from "@core/contracts";
+import type { GatewayChildRuntimeDeviceMessage } from "./managed-gateway-runtime/gateway-child-ipc";
 
 type PartialRepositoryDevice = {
   id: string;
@@ -67,5 +68,62 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     reconnectAttemptLimit: existing?.reconnectAttemptLimit ?? 20,
     reconnectRetryExhausted: existing?.reconnectRetryExhausted ?? false,
     ...partialDevice,
+  };
+}
+
+export function mergeRuntimeDeviceIntoGatewaySnapshot(
+  currentDevices: GatewayRuntimeDeviceSummary[],
+  runtimeDevice: GatewayChildRuntimeDeviceMessage["device"],
+): GatewayRuntimeDeviceSummary {
+  const existing = currentDevices.find((device) => device.id === runtimeDevice.deviceId) ?? null;
+  const telemetryFreshness =
+    runtimeDevice.gatewayLastTelemetryAt !== null
+      ? "fresh"
+      : existing?.telemetryFreshness ?? "missing";
+
+  return {
+    id: runtimeDevice.deviceId,
+    lastState: runtimeDevice.lastState ?? existing?.lastState ?? "still",
+    lastSeenAt: runtimeDevice.lastSeenAt ?? existing?.lastSeenAt ?? 0,
+    lastDelta: runtimeDevice.lastDelta ?? existing?.lastDelta ?? null,
+    updatedAt: runtimeDevice.updatedAt,
+    hardwareId: runtimeDevice.hardwareId ?? existing?.hardwareId ?? null,
+    bootId: runtimeDevice.bootId ?? existing?.bootId ?? null,
+    firmwareVersion: runtimeDevice.firmwareVersion ?? existing?.firmwareVersion ?? "unknown",
+    machineLabel: existing?.machineLabel ?? null,
+    siteId: existing?.siteId ?? null,
+    provisioningState: existing?.provisioningState ?? "assigned",
+    updateStatus: existing?.updateStatus ?? "idle",
+    updateTargetVersion: existing?.updateTargetVersion ?? null,
+    updateDetail: existing?.updateDetail ?? null,
+    updateUpdatedAt: existing?.updateUpdatedAt ?? null,
+    lastHeartbeatAt: existing?.lastHeartbeatAt ?? null,
+    lastEventReceivedAt: existing?.lastEventReceivedAt ?? null,
+    healthStatus:
+      existing?.healthStatus ??
+      (runtimeDevice.gatewayConnectionState === "connected" ? "online" : "offline"),
+    gatewayConnectionState: runtimeDevice.gatewayConnectionState,
+    telemetryFreshness,
+    peripheralId: runtimeDevice.peripheralId,
+    address: runtimeDevice.address,
+    gatewayLastAdvertisementAt: runtimeDevice.gatewayLastAdvertisementAt,
+    gatewayLastConnectedAt: runtimeDevice.gatewayLastConnectedAt,
+    gatewayLastDisconnectedAt: runtimeDevice.gatewayLastDisconnectedAt,
+    gatewayLastTelemetryAt: runtimeDevice.gatewayLastTelemetryAt,
+    gatewayDisconnectReason: runtimeDevice.gatewayDisconnectReason,
+    advertisedName: runtimeDevice.advertisedName,
+    lastRssi: runtimeDevice.lastRssi,
+    otaStatus: runtimeDevice.otaStatus,
+    otaTargetVersion: runtimeDevice.otaTargetVersion,
+    otaProgressBytesSent: runtimeDevice.otaProgressBytesSent,
+    otaTotalBytes: runtimeDevice.otaTotalBytes,
+    otaLastPhase: runtimeDevice.otaLastPhase,
+    otaFailureDetail: runtimeDevice.otaFailureDetail,
+    otaLastStatusMessage: runtimeDevice.otaLastStatusMessage,
+    otaUpdatedAt: runtimeDevice.otaUpdatedAt,
+    reconnectAttempt: runtimeDevice.reconnectAttempt,
+    reconnectAttemptLimit: runtimeDevice.reconnectAttemptLimit,
+    reconnectRetryExhausted: runtimeDevice.reconnectRetryExhausted,
+    reconnectAwaitingDecision: runtimeDevice.reconnectAwaitingDecision,
   };
 }

@@ -1,7 +1,9 @@
 import type {
+  AnalyticsWindow,
   ApprovedNodeRule,
   DesktopSetupState,
   DesktopSnapshot,
+  DeviceAnalyticsSnapshot,
 } from "@core/contracts";
 import { matchesApprovedNodeIdentity } from "@core/approved-node-runtime-match";
 import { liveStatusLabelForScan } from "@core/gateway-scan";
@@ -14,6 +16,10 @@ import {
 import type { DesktopRuntimeEvent, ThemeState } from "@core/services";
 
 import type { DesktopAppState } from "./state";
+
+function analyticsKey(deviceId: string, window: AnalyticsWindow) {
+  return `${deviceId}::${window}`;
+}
 
 function filterSnapshotToApprovedNodes(
   snapshot: DesktopSnapshot | null,
@@ -141,6 +147,19 @@ export function replaceThemeState(
   };
 }
 
+export function replaceDeviceAnalytics(
+  current: DesktopAppState,
+  analytics: DeviceAnalyticsSnapshot,
+): DesktopAppState {
+  return {
+    ...current,
+    analyticsByKey: {
+      ...current.analyticsByKey,
+      [analyticsKey(analytics.deviceId, analytics.window)]: analytics,
+    },
+  };
+}
+
 export function replaceSnapshot(
   current: DesktopAppState,
   snapshot: DesktopSnapshot,
@@ -166,6 +185,10 @@ export function applyRuntimeEventToState(
   current: DesktopAppState,
   event: DesktopRuntimeEvent,
 ): DesktopAppState {
+  if (event.type === "analytics-updated") {
+    return replaceDeviceAnalytics(current, event.analytics);
+  }
+
   return {
     ...current,
     snapshot: filterSnapshotToApprovedNodes(

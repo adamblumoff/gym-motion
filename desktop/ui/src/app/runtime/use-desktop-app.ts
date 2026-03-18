@@ -73,6 +73,7 @@ export function useDesktopApp() {
   return {
     snapshot: state.snapshot,
     setup: state.setup,
+    analyticsByKey: state.analyticsByKey,
     theme: state.theme,
     ...actions,
   };

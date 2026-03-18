@@ -15,7 +15,9 @@ import {
 import {
   approvedNodeRulesReferToSamePhysicalNode,
   normalizeAllowedNodesPayload,
+  describeNode,
 } from "./windows-winrt-gateway-node.mjs";
+import { sendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.mjs";
 
@@ -57,6 +59,54 @@ function debug(message, details) {
   log(message, details);
 }
 
+function emitDesktopMessage(message) {
+  sendToDesktop(message, debug);
+}
+
+function emitGatewayState() {
+  emitDesktopMessage({
+    type: "gateway-state",
+    gateway: runtimeServer.getGatewayState(),
+    issue: latestGatewayIssue,
+  });
+}
+
+function emitAdaptersUpdated() {
+  emitDesktopMessage({
+    type: "adapters-updated",
+    adapters: runtimeServer.getAvailableAdapters(),
+    issue: latestGatewayIssue,
+  });
+}
+
+function emitManualScanUpdated() {
+  emitDesktopMessage({
+    type: "manual-scan-updated",
+    payload: runtimeServer.getManualScanPayload(),
+  });
+}
+
+function emitRuntimeDeviceUpdated(deviceId) {
+  if (!deviceId) {
+    return;
+  }
+
+  const runtimeNode = runtimeServer.getRuntimeNode(deviceId);
+
+  if (!runtimeNode) {
+    return;
+  }
+
+  emitDesktopMessage({
+    type: "runtime-device-updated",
+    device: {
+      deviceId,
+      ...runtimeNode,
+      reconnectAwaitingDecision: runtimeNode.reconnectAwaitingDecision ?? false,
+    },
+  });
+}
+
 const runtimeBridge = createRuntimeBridge({
   config,
   runtimeServer,
@@ -66,6 +116,7 @@ const runtimeBridge = createRuntimeBridge({
 function setRuntimeIssue(issue) {
   latestGatewayIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
   runtimeServer.setGatewayIssue(latestGatewayIssue);
+  emitGatewayState();
 }
 
 function setManualScanState({
@@ -80,6 +131,7 @@ function setManualScanState({
     error,
     clearCandidates,
   });
+  emitManualScanUpdated();
 }
 
 function refreshSelectionIssue(adapters) {
@@ -179,6 +231,7 @@ async function handleDesktopControlCommand(command) {
       forgottenCount: forgottenRules.length,
     });
     syncAllowedNodes();
+    emitGatewayState();
     return {
       approvedCount: approvedNodeRules.length,
       removedCount: removedRules.length,
@@ -241,6 +294,7 @@ async function handleDesktopControlCommand(command) {
       address: rule?.address ?? null,
       localName: rule?.localName ?? null,
     });
+    emitRuntimeDeviceUpdated(rule?.knownDeviceId ?? null);
     sendCommand("resume_approved_node_reconnect", {
       rule_id: command.ruleId,
     });
@@ -270,10 +324,35 @@ function attachControlReader() {
       console.error("[gateway-winrt] failed to parse control command", error);
       return;
     }
+    const commandId = typeof command.commandId === "string" ? command.commandId : null;
 
-    void handleDesktopControlCommand(command).catch((error) => {
-      console.error("[gateway-winrt] failed to handle control command", error);
-    });
+    void handleDesktopControlCommand(command)
+      .then((result) => {
+        if (!commandId) {
+          return;
+        }
+
+        emitDesktopMessage({
+          type: "control-response",
+          commandId,
+          ok: true,
+          result,
+        });
+      })
+      .catch((error) => {
+        console.error("[gateway-winrt] failed to handle control command", error);
+
+        if (!commandId) {
+          return;
+        }
+
+        emitDesktopMessage({
+          type: "control-response",
+          commandId,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   });
 }
 
@@ -309,6 +388,8 @@ function handleSidecarEvent(event) {
 
       runtimeServer.setAvailableAdapters(adapters);
       refreshSelectionIssue(adapters);
+      emitAdaptersUpdated();
+      emitGatewayState();
 
       if (!sidecarSessionStarted && selectedAdapterId) {
         sidecarSessionStarted = true;
@@ -331,6 +412,7 @@ function handleSidecarEvent(event) {
         currentScanReason,
       );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
+      emitGatewayState();
       break;
     case "manual_scan_state":
       setManualScanState({
@@ -345,9 +427,14 @@ function handleSidecarEvent(event) {
         event.node ?? {},
         event.scan_reason ?? event.scanReason ?? null,
       );
+      emitManualScanUpdated();
+      emitGatewayState();
+      emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
     case "node_connection_state":
       runtimeBridge.handleNodeConnectionState(event);
+      emitGatewayState();
+      emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
     case "telemetry": {
       const payload = {
@@ -366,10 +453,16 @@ function handleSidecarEvent(event) {
         break;
       }
 
-      void runtimeBridge.forwardTelemetry(payload, event.node ?? {}).catch((error) => {
-        console.error("[gateway-winrt] failed to forward telemetry", error);
-        setRuntimeIssue(error instanceof Error ? error.message : "Telemetry forwarding failed.");
-      });
+      void runtimeBridge
+        .forwardTelemetry(payload, event.node ?? {})
+        .then(() => {
+          emitRuntimeDeviceUpdated(payload.deviceId);
+          emitGatewayState();
+        })
+        .catch((error) => {
+          console.error("[gateway-winrt] failed to forward telemetry", error);
+          setRuntimeIssue(error instanceof Error ? error.message : "Telemetry forwarding failed.");
+        });
       break;
     }
     case "log":
@@ -426,6 +519,9 @@ async function startSidecar() {
     if (!shuttingDown) {
       setRuntimeIssue(`Windows BLE sidecar exited (${signal ?? code ?? "unknown"}).`);
     }
+
+    emitAdaptersUpdated();
+    emitGatewayState();
   });
 
   if (selectedAdapterId) {
@@ -485,6 +581,13 @@ void runtimeServer
   .start()
   .then(async () => {
     runtimeServer.setGatewayIssue("Starting Windows BLE runtime…");
+    emitDesktopMessage({
+      type: "runtime-ready",
+      gateway: runtimeServer.getGatewayState(),
+      issue: latestGatewayIssue,
+      adapters: runtimeServer.getAvailableAdapters(),
+      manualScan: runtimeServer.getManualScanPayload(),
+    });
     await startSidecar();
   })
   .catch((error) => {

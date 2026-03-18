@@ -3,16 +3,16 @@ import { describe, expect, it } from "bun:test";
 import { shouldApplyBackfillMotionState } from "../../backend/data/repository/backfill";
 
 describe("backfill motion state updates", () => {
-  it("does not let older backfill overwrite newer device motion state", () => {
-    expect(shouldApplyBackfillMotionState(100, 99, true)).toBe(false);
+  it("does not let backfill overwrite a device that already has live contact", () => {
+    expect(shouldApplyBackfillMotionState(true, true)).toBe(false);
   });
 
-  it("allows newer backfill motion state to update the device summary", () => {
-    expect(shouldApplyBackfillMotionState(100, 100, true)).toBe(true);
-    expect(shouldApplyBackfillMotionState(100, 101, true)).toBe(true);
+  it("allows backfill to seed motion state before any live contact exists", () => {
+    expect(shouldApplyBackfillMotionState(false, true)).toBe(true);
   });
 
   it("never updates motion state from log-only backfill batches", () => {
-    expect(shouldApplyBackfillMotionState(100, 150, false)).toBe(false);
+    expect(shouldApplyBackfillMotionState(false, false)).toBe(false);
+    expect(shouldApplyBackfillMotionState(true, false)).toBe(false);
   });
 });

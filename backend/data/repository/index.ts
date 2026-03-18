@@ -3,6 +3,8 @@ export {
   recordHeartbeat,
   listDevices,
   listRecentEvents,
+  listDeviceMotionEvents,
+  findLatestDeviceMotionEventBefore,
   recordDeviceLog,
   listDeviceLogs,
   listDeviceActivity,

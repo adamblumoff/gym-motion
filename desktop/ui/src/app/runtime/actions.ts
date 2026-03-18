@@ -1,11 +1,12 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ApprovedNodeRule } from "@core/contracts";
+import type { ApprovedNodeRule, GetDeviceAnalyticsInput } from "@core/contracts";
 import type { ThemeState } from "@core/services";
 
 import { applyThemeState } from "../../lib/theme";
 import {
   applySetupState,
+  replaceDeviceAnalytics,
   replaceSnapshot,
   replaceThemeState,
 } from "./reducer";
@@ -57,6 +58,11 @@ export function createDesktopAppActions(
       const setup = await window.gymMotionDesktop.setAllowedNodes(nodes);
       setState((current) => applySetupState(current, setup));
       return setup;
+    },
+    async getDeviceAnalytics(input: GetDeviceAnalyticsInput) {
+      const analytics = await window.gymMotionDesktop.getDeviceAnalytics(input);
+      setState((current) => replaceDeviceAnalytics(current, analytics));
+      return analytics;
     },
   };
 }

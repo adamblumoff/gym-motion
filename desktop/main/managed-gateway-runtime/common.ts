@@ -1,4 +1,10 @@
-import type { ApprovedNodeRule, DesktopSetupState, DesktopSnapshot } from "@core/contracts";
+import type {
+  ApprovedNodeRule,
+  DesktopSetupState,
+  DesktopSnapshot,
+  DeviceAnalyticsSnapshot,
+  GetDeviceAnalyticsInput,
+} from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 export type ManagedGatewayRuntime = {
@@ -15,6 +21,7 @@ export type ManagedGatewayRuntime = {
   resumeReconnectForNode: (nodeId: string) => Promise<void>;
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
+  getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
   onEvent: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
 };
 

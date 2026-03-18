@@ -228,6 +228,46 @@ export type DeviceActivitySummary = {
   metadata: Record<string, string | number | boolean | null> | null;
 };
 
+export type AnalyticsWindow = "24h" | "7d";
+
+export type AnalyticsWarningFlag =
+  | "history-overflow"
+  | "sync-delayed"
+  | "sync-failed"
+  | "stale-cache";
+
+export type DeviceAnalyticsBucket = {
+  key: string;
+  label: string;
+  startAt: string;
+  endAt: string;
+  movementCount: number;
+  movingSeconds: number;
+};
+
+export type DeviceAnalyticsSyncState = {
+  deviceId: string;
+  state: "idle" | "syncing" | "failed";
+  detail: string | null;
+  lastCanonicalAt: string | null;
+  lastSyncCompletedAt: string | null;
+  lastAckedSequence: number;
+  lastAckedBootId: string | null;
+  lastOverflowDetectedAt: string | null;
+};
+
+export type DeviceAnalyticsSnapshot = {
+  deviceId: string;
+  window: AnalyticsWindow;
+  generatedAt: string;
+  source: "cache" | "canonical";
+  buckets: DeviceAnalyticsBucket[];
+  totalMovementCount: number;
+  totalMovingSeconds: number;
+  warningFlags: AnalyticsWarningFlag[];
+  sync: DeviceAnalyticsSyncState;
+};
+
 export type DesktopSnapshot = {
   liveStatus: string;
   trayHint: string;
@@ -271,6 +311,11 @@ export type BackfillBatchResult = {
   insertedEvents: MotionEventSummary[];
   insertedLogs: DeviceLogSummary[];
   syncState: DeviceSyncStateSummary;
+};
+
+export type GetDeviceAnalyticsInput = {
+  deviceId: string;
+  window: AnalyticsWindow;
 };
 
 export type FirmwareReleaseSummary = {

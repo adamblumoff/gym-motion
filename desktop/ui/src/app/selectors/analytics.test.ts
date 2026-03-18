@@ -1,307 +1,106 @@
 import { describe, expect, it } from "bun:test";
 
-import { buildSignalHistory, calculateAverageSignal, buildMovementData } from "./analytics";
+import {
+  buildAnalyticsChartData,
+  formatMovingDuration,
+  sortAnalyticsNodes,
+} from "./analytics";
 
-describe("buildMovementData", () => {
-  it("buckets motion by device event time instead of receipt time", () => {
-    const eventTimestamp = Date.parse("2026-03-14T09:15:00.000Z");
-    const expectedHour = `${new Date(eventTimestamp).toLocaleTimeString("en-US", {
-      hour12: false,
-      hour: "2-digit",
-    })}:00`;
-    const chart = buildMovementData([
-      {
-        id: 1,
-        deviceId: "stack-001",
-        sequence: 1,
-        state: "moving",
-        delta: 22,
-        eventTimestamp,
-        receivedAt: new Date("2026-03-14T14:45:00.000Z").toISOString(),
-        bootId: "boot-1",
-        firmwareVersion: "0.5.1",
-        hardwareId: "hw-1",
-      },
-    ]);
-
-    expect(chart).toEqual([{ hour: expectedHour, movements: 1 }]);
-  });
-});
-
-describe("calculateAverageSignal", () => {
-  it("averages only populated signal slots", () => {
-    const series = [
-      {
-        id: "device:stack-001",
-        deviceId: "stack-001",
-        name: "Leg Press",
-        color: "#3b82f6",
-      },
-    ];
-
-    expect(
-      calculateAverageSignal(
+describe("buildAnalyticsChartData", () => {
+  it("maps canonical analytics buckets into chart points", () => {
+    const chart = buildAnalyticsChartData({
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+      source: "canonical",
+      buckets: [
         {
-          time: "09:15",
-          "device:stack-001": 80,
+          key: "24h-1",
+          label: "09",
+          startAt: new Date("2026-03-18T09:00:00.000Z").toISOString(),
+          endAt: new Date("2026-03-18T10:00:00.000Z").toISOString(),
+          movementCount: 3,
+          movingSeconds: 900,
         },
-        series,
-      ),
-    ).toBe(80);
-  });
-});
-
-describe("buildSignalHistory", () => {
-  it("uses event time for chart labels", () => {
-    const eventTimestamp = Date.parse("2026-03-14T09:15:00.000Z");
-    const expectedTime = new Date(eventTimestamp).toLocaleTimeString("en-US", {
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
+      ],
+      totalMovementCount: 3,
+      totalMovingSeconds: 900,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
+        lastAckedSequence: 12,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
     });
 
-    const history = buildSignalHistory(
-      [
-        {
-          id: 1,
-          deviceId: "stack-001",
-          sequence: 1,
-          state: "moving",
-          delta: 15,
-          eventTimestamp,
-          receivedAt: new Date("2026-03-14T14:45:00.000Z").toISOString(),
-          bootId: "boot-1",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-1",
-        },
-      ],
-      [
-        {
-          id: "stack-001",
-          name: "Leg Press",
-          macAddress: "peripheral-1",
-          isConnected: true,
-          connectionState: "connected",
-          healthStatus: "online",
-          telemetryFreshness: "fresh",
-          isMoving: true,
-          signalStrength: 60,
-          batteryLevel: null,
-          reconnectAttempt: 0,
-          reconnectAttemptLimit: 20,
-          reconnectRetryExhausted: false,
-          logs: [],
-        },
-      ],
-    );
-
-    expect(history.points[0]?.time).toBe(expectedTime);
-  });
-
-  it("keeps per-event signal levels for a single active node", () => {
-    const history = buildSignalHistory(
-      [
-        {
-          id: 1,
-          deviceId: "stack-001",
-          sequence: 1,
-          state: "moving",
-          delta: 10,
-          eventTimestamp: Date.parse("2026-03-14T09:15:00.000Z"),
-          receivedAt: new Date("2026-03-14T09:15:01.000Z").toISOString(),
-          bootId: "boot-1",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-1",
-        },
-        {
-          id: 2,
-          deviceId: "stack-001",
-          sequence: 2,
-          state: "moving",
-          delta: 40,
-          eventTimestamp: Date.parse("2026-03-14T09:16:00.000Z"),
-          receivedAt: new Date("2026-03-14T09:16:01.000Z").toISOString(),
-          bootId: "boot-1",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-1",
-        },
-      ],
-      [
-        {
-          id: "stack-001",
-          name: "Leg Press",
-          macAddress: "peripheral-1",
-          isConnected: true,
-          connectionState: "connected",
-          healthStatus: "online",
-          telemetryFreshness: "fresh",
-          isMoving: true,
-          signalStrength: 80,
-          batteryLevel: null,
-          reconnectAttempt: 0,
-          reconnectAttemptLimit: 20,
-          reconnectRetryExhausted: false,
-          logs: [],
-        },
-      ],
-    );
-
-    const signalKey = history.series[0]?.id;
-    expect(signalKey).toBe("device:stack-001");
-    expect(history.points[0]?.[signalKey ?? ""]).toBe(35);
-    expect(history.points[1]?.[signalKey ?? ""]).toBe(65);
-  });
-
-  it("does not project a later node sample backward into earlier buckets", () => {
-    const history = buildSignalHistory(
-      [
-        {
-          id: 1,
-          deviceId: "node-a",
-          sequence: 1,
-          state: "moving",
-          delta: 20,
-          eventTimestamp: Date.parse("2026-03-14T10:00:00.000Z"),
-          receivedAt: new Date("2026-03-14T10:00:01.000Z").toISOString(),
-          bootId: "boot-a",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-a",
-        },
-        {
-          id: 2,
-          deviceId: "node-a",
-          sequence: 2,
-          state: "moving",
-          delta: 30,
-          eventTimestamp: Date.parse("2026-03-14T10:01:00.000Z"),
-          receivedAt: new Date("2026-03-14T10:01:01.000Z").toISOString(),
-          bootId: "boot-a",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-a",
-        },
-        {
-          id: 3,
-          deviceId: "node-b",
-          sequence: 1,
-          state: "moving",
-          delta: 50,
-          eventTimestamp: Date.parse("2026-03-14T10:02:00.000Z"),
-          receivedAt: new Date("2026-03-14T10:02:01.000Z").toISOString(),
-          bootId: "boot-b",
-          firmwareVersion: "0.5.1",
-          hardwareId: "hw-b",
-        },
-      ],
-      [
-        {
-          id: "node-a",
-          name: "Node A",
-          macAddress: "peripheral-a",
-          isConnected: true,
-          connectionState: "connected",
-          healthStatus: "online",
-          telemetryFreshness: "fresh",
-          isMoving: true,
-          signalStrength: 70,
-          batteryLevel: null,
-          reconnectAttempt: 0,
-          reconnectAttemptLimit: 20,
-          reconnectRetryExhausted: false,
-          logs: [],
-        },
-        {
-          id: "node-b",
-          name: "Node B",
-          macAddress: "peripheral-b",
-          isConnected: true,
-          connectionState: "connected",
-          healthStatus: "online",
-          telemetryFreshness: "fresh",
-          isMoving: true,
-          signalStrength: 65,
-          batteryLevel: null,
-          reconnectAttempt: 0,
-          reconnectAttemptLimit: 20,
-          reconnectRetryExhausted: false,
-          logs: [],
-        },
-      ],
-    );
-
-    const nodeBSeries = history.series.find((entry) => entry.deviceId === "node-b");
-    expect(nodeBSeries?.id).toBe("device:node-b");
-    expect(history.points[0]?.[nodeBSeries?.id ?? ""]).toBe(65);
-    expect(history.points[1]?.[nodeBSeries?.id ?? ""]).toBe(65);
-    expect(history.points[2]?.[nodeBSeries?.id ?? ""]).toBe(75);
-  });
-
-  it("keeps signal series mapped to stable device ids when node order changes", () => {
-    const events = [
+    expect(chart).toEqual([
       {
-        id: 1,
-        deviceId: "node-a",
-        sequence: 1,
-        state: "moving" as const,
-        delta: 20,
-        eventTimestamp: Date.parse("2026-03-14T10:00:00.000Z"),
-        receivedAt: new Date("2026-03-14T10:00:01.000Z").toISOString(),
-        bootId: "boot-a",
-        firmwareVersion: "0.5.1",
-        hardwareId: "hw-a",
+        label: "09",
+        movements: 3,
+        movingMinutes: 15,
       },
+    ]);
+  });
+});
+
+describe("formatMovingDuration", () => {
+  it("formats mixed hour and minute durations", () => {
+    expect(formatMovingDuration(5_400)).toBe("1h 30m");
+  });
+});
+
+describe("sortAnalyticsNodes", () => {
+  it("sorts connected nodes ahead of reconnecting and disconnected nodes", () => {
+    const sorted = sortAnalyticsNodes([
       {
-        id: 2,
-        deviceId: "node-b",
-        sequence: 1,
-        state: "moving" as const,
-        delta: 50,
-        eventTimestamp: Date.parse("2026-03-14T10:01:00.000Z"),
-        receivedAt: new Date("2026-03-14T10:01:01.000Z").toISOString(),
-        bootId: "boot-b",
-        firmwareVersion: "0.5.1",
-        hardwareId: "hw-b",
-      },
-    ];
-    const nodesInFirstOrder = [
-      {
-        id: "node-a",
-        name: "Node A",
-        macAddress: "peripheral-a",
-        isConnected: true,
-        connectionState: "connected" as const,
-        healthStatus: "online" as const,
-        telemetryFreshness: "fresh" as const,
-        isMoving: true,
-        signalStrength: 70,
-        batteryLevel: null,
+        id: "node-c",
+        name: "Disconnected Node",
+        macAddress: null,
+        isConnected: false,
+        connectionState: "disconnected",
+        isMoving: false,
+        signalStrength: null,
         reconnectAttempt: 0,
         reconnectAttemptLimit: 20,
         reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: false,
+        logs: [],
+      },
+      {
+        id: "node-a",
+        name: "Connected Node",
+        macAddress: null,
+        isConnected: true,
+        connectionState: "connected",
+        isMoving: true,
+        signalStrength: 80,
+        reconnectAttempt: 0,
+        reconnectAttemptLimit: 20,
+        reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: false,
         logs: [],
       },
       {
         id: "node-b",
-        name: "Node B",
-        macAddress: "peripheral-b",
-        isConnected: true,
-        connectionState: "connected" as const,
-        healthStatus: "online" as const,
-        telemetryFreshness: "fresh" as const,
-        isMoving: true,
-        signalStrength: 65,
-        batteryLevel: null,
-        reconnectAttempt: 0,
+        name: "Reconnecting Node",
+        macAddress: null,
+        isConnected: false,
+        connectionState: "reconnecting",
+        isMoving: false,
+        signalStrength: null,
+        reconnectAttempt: 2,
         reconnectAttemptLimit: 20,
         reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: false,
         logs: [],
       },
-    ];
-    const nodesInSecondOrder = [...nodesInFirstOrder].reverse();
+    ]);
 
-    const firstHistory = buildSignalHistory(events, nodesInFirstOrder);
-    const secondHistory = buildSignalHistory(events, nodesInSecondOrder);
-
-    expect(secondHistory).toEqual(firstHistory);
+    expect(sorted.map((node) => node.id)).toEqual(["node-a", "node-b", "node-c"]);
   });
 });
-

@@ -8,15 +8,11 @@ type RuntimeState = "starting" | "running" | "degraded" | "restarting";
 type RuntimeLifecycleDeps = {
   getSnapshot: () => DesktopSnapshot;
   setSnapshot: (snapshot: DesktopSnapshot) => void;
-  getPollTimer: () => NodeJS.Timeout | null;
-  setPollTimer: (timer: NodeJS.Timeout | null) => void;
   setStopped: (stopped: boolean) => void;
   stopChild: () => void;
   apiServerStart: () => Promise<void>;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
-  refreshAdapters: () => Promise<void>;
-  refreshGatewayState: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   applyManualScanPayload: (payload: ManualScanPayload) => void;
   emitSnapshot: () => void;
@@ -30,7 +26,6 @@ type StartRuntimeOptions = {
 export type RuntimeLifecycle = {
   startRuntime: (options?: StartRuntimeOptions) => Promise<void>;
   restartRuntime: () => Promise<DesktopSnapshot>;
-  restartPolling: () => void;
 };
 
 export function createRuntimeLifecycle(
@@ -53,19 +48,6 @@ export function createRuntimeLifecycle(
     };
     deps.setSnapshot(nextSnapshot);
     deps.emitSnapshot();
-  }
-
-  function restartPolling() {
-    const pollTimer = deps.getPollTimer();
-    if (pollTimer) {
-      clearInterval(pollTimer);
-    }
-
-    const nextTimer = setInterval(() => {
-      void deps.refreshGatewayState();
-    }, 1000);
-    nextTimer.unref?.();
-    deps.setPollTimer(nextTimer);
   }
 
   async function startRuntime(options?: StartRuntimeOptions) {
@@ -94,11 +76,8 @@ export function createRuntimeLifecycle(
     try {
       await deps.apiServerStart();
       await deps.startChild();
-      await deps.refreshAdapters();
-      await deps.refreshGatewayState();
       await deps.refreshHistory();
       deps.emitSnapshot();
-      restartPolling();
       deps.setWindowsScanRequested(false);
     } catch (error) {
       deps.setWindowsScanRequested(false);
@@ -114,12 +93,6 @@ export function createRuntimeLifecycle(
 
   async function restartRuntime() {
     deps.setStopped(false);
-    const pollTimer = deps.getPollTimer();
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      deps.setPollTimer(null);
-    }
-
     deps.stopChild();
     setRuntimeState("restarting", null);
     await startRuntime({ preserveSnapshot: true });
@@ -129,6 +102,5 @@ export function createRuntimeLifecycle(
   return {
     startRuntime,
     restartRuntime,
-    restartPolling,
   };
 }

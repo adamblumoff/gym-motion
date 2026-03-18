@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { app } from "electron";
 
@@ -12,11 +12,13 @@ import type {
 import { resolveGatewayScriptPath, resolveWindowsSidecarPath } from "../gateway-runtime-target";
 import { buildGatewayChildEnv } from "./gateway-child-env";
 import {
-  parseGatewayChildPersistMessage,
+  parseGatewayChildMessage,
+  type GatewayChildControlResponseMessage,
+  type GatewayChildMessage,
   type GatewayChildPersistMessage,
+  type GatewayChildRuntimeMessage,
 } from "./gateway-child-ipc";
 import { EMPTY_GATEWAY } from "./snapshot";
-import { fetchJson } from "./common";
 
 type RuntimeBridgeDeps = {
   getChild: () => ChildProcess | null;
@@ -36,39 +38,74 @@ type RuntimeBridgeDeps = {
   ) => void;
   getApiBaseUrl: () => string;
   onChildPersistMessage: (message: GatewayChildPersistMessage) => Promise<void>;
+  onChildRuntimeMessage: (message: GatewayChildRuntimeMessage) => void;
+};
+
+type PendingCommand = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
 };
 
 export type RuntimeBridge = {
-  sendGatewayCommand: (command: Record<string, unknown>) => Promise<void>;
+  sendGatewayCommand: (command: Record<string, unknown>) => Promise<unknown>;
   sendGatewayCommandInBackground: (command: Record<string, unknown>, context: string) => void;
   stopChild: () => void;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
 };
 
+function isControlResponse(
+  message: GatewayChildMessage,
+): message is GatewayChildControlResponseMessage {
+  return message.type === "control-response";
+}
+
 export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
+  const pendingCommands = new Map<string, PendingCommand>();
+  let readyResolver: (() => void) | null = null;
+  let readyRejecter: ((error: Error) => void) | null = null;
+
+  function rejectPendingCommands(error: Error) {
+    for (const pending of pendingCommands.values()) {
+      pending.reject(error);
+    }
+
+    pendingCommands.clear();
+  }
+
+  function resolveReady() {
+    readyResolver?.();
+    readyResolver = null;
+    readyRejecter = null;
+  }
+
+  function rejectReady(error: Error) {
+    readyRejecter?.(error);
+    readyResolver = null;
+    readyRejecter = null;
+  }
+
   async function sendGatewayCommand(command: Record<string, unknown>) {
     const child = deps.getChild();
-    const runtimePort = deps.getRuntimePort();
 
-    if (!child || child.killed) {
+    if (!child || child.killed || !child.stdin) {
       throw new Error("Gateway runtime is not running.");
     }
 
-    const response = await fetch(`http://127.0.0.1:${runtimePort}/control`, {
-      method: "POST",
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(command),
-    });
+    const commandId = randomUUID();
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`gateway control -> ${response.status}: ${text}`);
-    }
+    return await new Promise<unknown>((resolve, reject) => {
+      pendingCommands.set(commandId, { resolve, reject });
+
+      child.stdin!.write(`${JSON.stringify({ commandId, ...command })}\n`, (error) => {
+        if (!error) {
+          return;
+        }
+
+        pendingCommands.delete(commandId);
+        reject(error);
+      });
+    });
   }
 
   function sendGatewayCommandInBackground(
@@ -87,6 +124,8 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     }
 
     deps.clearWindowsAdapterRetryTimer();
+    rejectPendingCommands(new Error("Gateway runtime stopped."));
+    rejectReady(new Error("Gateway runtime stopped before becoming ready."));
 
     deps.intentionalChildExits.add(child);
     deps.setChild(null);
@@ -135,6 +174,15 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     );
     deps.setChild(spawnedChild);
 
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      readyResolver = resolve;
+      readyRejecter = reject;
+    });
+    const readyTimeout = setTimeout(() => {
+      rejectReady(new Error("Gateway runtime did not become ready."));
+    }, 15_000);
+    readyTimeout.unref?.();
+
     spawnedChild.stdout?.on("data", (chunk) => {
       process.stdout.write(`[gateway] ${chunk}`);
     });
@@ -142,10 +190,44 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       process.stderr.write(`[gateway] ${chunk}`);
     });
     spawnedChild.on("message", (message) => {
-      const parsedMessage = parseGatewayChildPersistMessage(message);
+      const parsedMessage = parseGatewayChildMessage(message);
 
       if (!parsedMessage) {
         console.error("[runtime] ignored invalid gateway child IPC message", message);
+        return;
+      }
+
+      if (isControlResponse(parsedMessage)) {
+        const pending = pendingCommands.get(parsedMessage.commandId);
+
+        if (!pending) {
+          return;
+        }
+
+        pendingCommands.delete(parsedMessage.commandId);
+
+        if (parsedMessage.ok) {
+          pending.resolve(parsedMessage.result);
+        } else {
+          pending.reject(new Error(parsedMessage.error ?? "Gateway command failed."));
+        }
+
+        return;
+      }
+
+      if (parsedMessage.type === "runtime-ready") {
+        deps.onChildRuntimeMessage(parsedMessage);
+        resolveReady();
+        return;
+      }
+
+      if (
+        parsedMessage.type === "gateway-state" ||
+        parsedMessage.type === "adapters-updated" ||
+        parsedMessage.type === "manual-scan-updated" ||
+        parsedMessage.type === "runtime-device-updated"
+      ) {
+        deps.onChildRuntimeMessage(parsedMessage);
         return;
       }
 
@@ -163,6 +245,11 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         deps.setChild(null);
       }
 
+      rejectPendingCommands(
+        new Error(`Gateway exited (${signal ?? code ?? "unknown"}).`),
+      );
+      rejectReady(new Error(`Gateway exited (${signal ?? code ?? "unknown"}).`));
+
       if (deps.getStopped() || wasIntentional) {
         return;
       }
@@ -174,16 +261,11 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       );
     });
 
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      try {
-        await fetchJson(`${`http://127.0.0.1:${runtimePort}`}/health`);
-        return;
-      } catch {
-        await delay(500);
-      }
+    try {
+      await readyPromise;
+    } finally {
+      clearTimeout(readyTimeout);
     }
-
-    throw new Error("Gateway runtime did not become healthy.");
   }
 
   return {

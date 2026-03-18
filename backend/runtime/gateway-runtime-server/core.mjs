@@ -335,6 +335,20 @@ export function createGatewayRuntimeServer({
 
     getManualScanPayload,
 
+    getGatewayState() {
+      touchGatewayState();
+      return { ...gatewayState };
+    },
+
+    getAvailableAdapters() {
+      return [...availableAdapters];
+    },
+
+    getRuntimeNode(deviceId) {
+      const runtime = runtimeByDeviceId.get(deviceId);
+      return runtime ? { ...runtime } : null;
+    },
+
     resolveKnownDeviceId(input) {
       return resolveKnownDeviceIdByDiscovery(input);
     },

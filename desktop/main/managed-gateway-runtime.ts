@@ -5,9 +5,13 @@ import type {
   DesktopSnapshot,
   GatewayStatusSummary,
 } from "@core/contracts";
+import { mergeGatewayDeviceUpdate } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import { createDesktopApiServer } from "./desktop-api-server";
+import {
+  mergeRuntimeDeviceIntoGatewaySnapshot,
+} from "./gateway-snapshot";
 import type { PreferencesStore } from "./preferences-store";
 import {
   matchesApprovedNodeRule,
@@ -29,16 +33,17 @@ import {
   normalizeApprovedNodes,
 } from "./managed-gateway-runtime/setup-state";
 import {
-  fetchJson,
   type ManagedGatewayRuntime,
   type ManualScanPayload,
 } from "./managed-gateway-runtime/common";
+import type { GatewayChildRuntimeMessage } from "./managed-gateway-runtime/gateway-child-ipc";
 import { createRuntimeBridge } from "./managed-gateway-runtime/runtime-bridge";
 import { createRuntimeLifecycle } from "./managed-gateway-runtime/lifecycle";
 import { createOperatorIntents } from "./managed-gateway-runtime/operator-intents";
 import { createRuntimeSync } from "./managed-gateway-runtime/runtime-sync";
 import { createDataEventHandler } from "./managed-gateway-runtime/data-events";
 import { createDataIngestController } from "./managed-gateway-runtime/data-ingest";
+import { createAnalyticsService } from "./managed-gateway-runtime/analytics-service";
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
 
@@ -49,7 +54,6 @@ export function createManagedGatewayRuntime(
   const apiServer = createDesktopApiServer();
   let child: ChildProcess | null = null;
   let runtimePort = 4010;
-  let pollTimer: NodeJS.Timeout | null = null;
   let snapshot = createEmptySnapshot();
   let setupState = createEmptySetupState();
   let startingPromise: Promise<void> | null = null;
@@ -76,6 +80,18 @@ export function createManagedGatewayRuntime(
       listener(event);
     }
   }
+
+  const analyticsService = createAnalyticsService({
+    store,
+    getRuntimeDevice: (deviceId) =>
+      snapshot.devices.find((device) => device.id === deviceId) ?? null,
+    onUpdated: (analytics) => {
+      emit({
+        type: "analytics-updated",
+        analytics,
+      });
+    },
+  });
 
   function emitSetup() {
     emit({
@@ -198,23 +214,16 @@ export function createManagedGatewayRuntime(
     emitSetup();
   }
 
-  async function refreshAdapters() {
-    const adapterPayload =
-      child
-        ? await fetchJson<{ adapters: BleAdapterSummary[]; error?: string }>(
-            `http://127.0.0.1:${runtimePort}/adapters`,
-          )
-        : {
-            adapters: discoveredAdapters,
-            error: undefined,
-          };
-    const adapters = adapterPayload.adapters;
+  function applyAdapterSnapshot(
+    adapters: BleAdapterSummary[],
+    runtimeError: string | null = null,
+  ) {
     const selectedAdapterId = applyAutoAdapterSelection(adapters, true);
     const adapterIssue = deriveAdapterIssue({
       adapters,
       selectedAdapterId,
       usesWindowsNativeGateway: true,
-      runtimeError: adapterPayload.error,
+      runtimeError: runtimeError ?? undefined,
     });
 
     discoveredAdapters = adapters;
@@ -235,11 +244,59 @@ export function createManagedGatewayRuntime(
     ) {
       windowsAdapterRetryTimer = setTimeout(() => {
         windowsAdapterRetryTimer = null;
-        void refreshAdapters().catch((error) => {
-          console.error("[runtime] failed to retry Windows adapter refresh", error);
-        });
+        applyAdapterSnapshot(discoveredAdapters, runtimeError);
       }, 1500);
       windowsAdapterRetryTimer.unref?.();
+    }
+  }
+
+  function applyRuntimeDevicePatch(
+    runtimeDevice: GatewayChildRuntimeMessage extends never
+      ? never
+      : Extract<GatewayChildRuntimeMessage, { type: "runtime-device-updated" }>["device"],
+  ) {
+    const nextDevice = mergeRuntimeDeviceIntoGatewaySnapshot(snapshot.devices, runtimeDevice);
+    const nextSnapshot = pruneForgottenDevicesFromSnapshot(
+      {
+        ...snapshot,
+        devices: mergeGatewayDeviceUpdate(snapshot.devices, nextDevice),
+      },
+      readApprovedNodes(),
+    );
+    snapshot = nextSnapshot;
+    emit({ type: "device-upserted", device: nextDevice });
+    analyticsService.scheduleRefresh(runtimeDevice.deviceId);
+  }
+
+  function handleChildRuntimeMessage(message: GatewayChildRuntimeMessage) {
+    switch (message.type) {
+      case "runtime-ready":
+        applyAdapterSnapshot(message.adapters, message.issue);
+        applyManualScanPayload(message.manualScan);
+        updateGatewayStatus(
+          message.gateway,
+          message.issue ? "degraded" : "running",
+          message.issue,
+        );
+        break;
+      case "gateway-state":
+        updateGatewayStatus(
+          message.gateway,
+          message.issue ? "degraded" : "running",
+          message.issue,
+        );
+        break;
+      case "adapters-updated":
+        applyAdapterSnapshot(message.adapters, message.issue);
+        break;
+      case "manual-scan-updated":
+        applyManualScanPayload(message.payload);
+        break;
+      case "runtime-device-updated":
+        applyRuntimeDevicePatch(message.device);
+        break;
+      case "control-response":
+        break;
     }
   }
 
@@ -267,19 +324,10 @@ export function createManagedGatewayRuntime(
   }
 
   const runtimeSync = createRuntimeSync({
-    getChild: () => child,
-    getRuntimePort: () => runtimePort,
     getSnapshot: () => snapshot,
     setSnapshot: (nextSnapshot) => {
       snapshot = nextSnapshot;
     },
-    getSetupState: () => setupState,
-    updateGatewayStatus,
-    refreshAdapters,
-    applyManualScanPayload,
-    pruneSnapshot: (nextSnapshot) =>
-      pruneForgottenDevicesFromSnapshot(nextSnapshot, readApprovedNodes()),
-    emit,
   });
 
   const applyDataEvent = createDataEventHandler({
@@ -290,25 +338,16 @@ export function createManagedGatewayRuntime(
     pruneSnapshot: (nextSnapshot) =>
       pruneForgottenDevicesFromSnapshot(nextSnapshot, readApprovedNodes()),
     emit,
-    refreshManualScanState: () => runtimeSync.refreshManualScanState(),
-    refreshGatewayState: () => runtimeSync.refreshGatewayState(),
     refreshHistory: () => runtimeSync.refreshHistory(),
+    scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
   });
 
   const dataIngest = createDataIngestController({
     applyDataEvent,
   });
 
-  async function refreshManualScanState() {
-    await runtimeSync.refreshManualScanState();
-  }
-
   async function refreshHistory() {
     await runtimeSync.refreshHistory();
-  }
-
-  async function refreshGatewayState() {
-    await runtimeSync.refreshGatewayState();
   }
 
   async function startRuntime(options?: { preserveSnapshot?: boolean }) {
@@ -350,16 +389,13 @@ export function createManagedGatewayRuntime(
     updateGatewayStatus,
     getApiBaseUrl: () => apiServer.apiBaseUrl,
     onChildPersistMessage: (message) => dataIngest.handleMessage(message),
+    onChildRuntimeMessage: handleChildRuntimeMessage,
   });
 
   const runtimeLifecycle = createRuntimeLifecycle({
     getSnapshot: () => snapshot,
     setSnapshot: (nextSnapshot) => {
       snapshot = nextSnapshot;
-    },
-    getPollTimer: () => pollTimer,
-    setPollTimer: (nextTimer) => {
-      pollTimer = nextTimer;
     },
     setStopped: (nextStopped) => {
       stopped = nextStopped;
@@ -368,8 +404,6 @@ export function createManagedGatewayRuntime(
     apiServerStart: () => apiServer.start(),
     runtimeStartIssue,
     startChild,
-    refreshAdapters,
-    refreshGatewayState,
     refreshHistory,
     applyManualScanPayload,
     emitSnapshot: () => {
@@ -387,7 +421,9 @@ export function createManagedGatewayRuntime(
     },
     emitSetup,
     getChild: () => child,
-    refreshAdapters,
+    refreshAdapters: async () => {
+      applyAdapterSnapshot(discoveredAdapters);
+    },
     sendGatewayCommand,
     restartRuntime,
     manualCandidateById,
@@ -427,11 +463,6 @@ export function createManagedGatewayRuntime(
     async stop() {
       stopped = true;
 
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-
       stopChild();
       emitSetup();
       await apiServer.stop();
@@ -441,10 +472,7 @@ export function createManagedGatewayRuntime(
       return snapshot;
     },
     async getSetupState() {
-      await refreshAdapters();
-      if (child) {
-        await refreshManualScanState();
-      }
+      applyAdapterSnapshot(discoveredAdapters);
       return setupState;
     },
     startManualScan,
@@ -464,6 +492,9 @@ export function createManagedGatewayRuntime(
     resumeApprovedNodeReconnect,
     async setAllowedNodes(nodes) {
       return runtimeIntents.setAllowedNodes(nodes);
+    },
+    async getDeviceAnalytics(input) {
+      return analyticsService.getDeviceAnalytics(input);
     },
     onEvent(listener) {
       listeners.add(listener);

@@ -16,11 +16,10 @@ import {
 } from "./shared";
 
 export function shouldApplyBackfillMotionState(
-  currentLastSeenAt: number,
-  batchLastSeenAt: number,
+  hasLiveContact: boolean,
   hasMotionRecord: boolean,
 ) {
-  return hasMotionRecord && batchLastSeenAt >= currentLastSeenAt;
+  return !hasLiveContact && hasMotionRecord;
 }
 
 export async function getDeviceSyncState(deviceId: string): Promise<DeviceSyncStateSummary> {
@@ -66,6 +65,26 @@ export async function recordBackfillBatch(
       .find((record) => record.kind === "motion");
     const lastState = lastMotionRecord?.state ?? null;
     const lastDelta = lastMotionRecord?.delta ?? null;
+    const existingDeviceResult = await client.query<{
+      last_event_received_at: Date | null;
+      last_heartbeat_at: Date | null;
+    }>(
+      `select
+         last_event_received_at,
+         last_heartbeat_at
+       from devices
+       where id = $1
+       limit 1`,
+      [input.deviceId],
+    );
+    const existingDevice = existingDeviceResult.rows[0] ?? null;
+    const hasLiveContact = Boolean(
+      existingDevice?.last_event_received_at ?? existingDevice?.last_heartbeat_at,
+    );
+    const shouldSeedMotionState = shouldApplyBackfillMotionState(
+      hasLiveContact,
+      Boolean(lastMotionRecord),
+    );
 
     await client.query<DeviceRow>(
       `insert into devices (
@@ -81,17 +100,18 @@ export async function recordBackfillBatch(
          update_status,
          last_event_received_at
        )
-       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+       values ($1, coalesce($2::text, 'still'), $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', $8)
        on conflict (id) do update
        set last_state = case
-             when $2::text is null then devices.last_state
-             when $3 >= devices.last_seen_at then $2::text
+             when $9::boolean then coalesce($2::text, devices.last_state)
              else devices.last_state
            end,
-           last_seen_at = greatest(devices.last_seen_at, excluded.last_seen_at),
+           last_seen_at = case
+             when $9::boolean then greatest(devices.last_seen_at, excluded.last_seen_at)
+             else devices.last_seen_at
+           end,
            last_delta = case
-             when $2::text is null then devices.last_delta
-             when $3 >= devices.last_seen_at then coalesce($4::int, devices.last_delta)
+             when $9::boolean then coalesce($4::int, devices.last_delta)
              else devices.last_delta
            end,
            updated_at = now(),
@@ -101,18 +121,19 @@ export async function recordBackfillBatch(
            provisioning_state = case
              when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
              else devices.provisioning_state
-           end,
-           last_event_received_at = now()
+           end
        returning
          ${DEVICE_SELECT_COLUMNS}`,
       [
         input.deviceId,
-        lastState,
-        maxTimestamp,
-        lastDelta,
+        shouldSeedMotionState ? lastState : null,
+        shouldSeedMotionState ? maxTimestamp : 0,
+        shouldSeedMotionState ? lastDelta : null,
         lastMotionRecord?.hardwareId ?? input.records.at(-1)?.hardwareId ?? null,
         input.bootId ?? input.records.at(-1)?.bootId ?? null,
         input.records.at(-1)?.firmwareVersion ?? "unknown",
+        null,
+        shouldSeedMotionState,
       ],
     );
 

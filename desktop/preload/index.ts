@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { ApprovedNodeRule, ThemePreference } from "@core/contracts";
+import type {
+  ApprovedNodeRule,
+  GetDeviceAnalyticsInput,
+  ThemePreference,
+} from "@core/contracts";
 import {
   DESKTOP_THEME_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
@@ -40,6 +44,9 @@ const desktopApi: DesktopApi = {
   },
   async setAllowedNodes(nodes: ApprovedNodeRule[]) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes, nodes);
+  },
+  async getDeviceAnalytics(input: GetDeviceAnalyticsInput) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, input);
   },
   subscribeRuntime(listener) {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
