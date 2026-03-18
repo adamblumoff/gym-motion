@@ -215,15 +215,20 @@ describe("operator-intents", () => {
     expect(nextSetup.manualScanState).toBe("scanning");
   });
 
-  it("forgets a runtime-backed node and syncs the remaining approved set", async () => {
+  it("forgets a runtime-backed node, syncs the remaining approved set, and clears stale scan state", async () => {
     let setupState = createSetupState({
       approvedNodes: [
         createApprovedNode({
           id: "rule-1",
         }),
       ],
+      manualScanState: "pairing",
+      pairingCandidateId: "candidate-1",
+      manualScanError: "Old error",
+      manualCandidates: [createCandidate()],
     });
     const commands: Record<string, unknown>[] = [];
+    const manualScanPayloads: Array<Partial<DesktopSetupState>> = [];
     let refreshAdaptersCount = 0;
 
     const intents = createOperatorIntents({
@@ -251,18 +256,39 @@ describe("operator-intents", () => {
       runtimeDeviceById: (nodeId) =>
         nodeId === "runtime-1" ? createRuntimeDevice({ id: "runtime-1" }) : null,
       resolveApprovedRuleIdForNode: () => null,
-      applyManualScanPayload: () => {},
+      applyManualScanPayload: (payload) => {
+        manualScanPayloads.push(payload);
+        setupState = {
+          ...setupState,
+          manualScanState: payload.state ?? setupState.manualScanState,
+          pairingCandidateId: payload.pairingCandidateId ?? null,
+          manualScanError: payload.error ?? null,
+          manualCandidates: payload.candidates ?? setupState.manualCandidates,
+        };
+      },
       setWindowsScanRequested: () => {},
     });
 
     const nextSetup = await intents.forgetNode("rule-1");
 
     expect(nextSetup.approvedNodes).toEqual([]);
+    expect(nextSetup.manualScanState).toBe("idle");
+    expect(nextSetup.pairingCandidateId).toBeNull();
+    expect(nextSetup.manualScanError).toBeNull();
+    expect(nextSetup.manualCandidates).toEqual([]);
     expect(refreshAdaptersCount).toBe(1);
     expect(commands).toEqual([
       {
         type: "set_allowed_nodes",
         nodes: [],
+      },
+    ]);
+    expect(manualScanPayloads).toEqual([
+      {
+        state: "idle",
+        pairingCandidateId: null,
+        error: null,
+        candidates: [],
       },
     ]);
   });

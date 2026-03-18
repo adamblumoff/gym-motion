@@ -248,6 +248,7 @@ async function handleDesktopControlCommand(command) {
       clearCandidates: true,
     });
     log("Manual scan requested from desktop runtime.");
+    syncAllowedNodes();
     sendCommand("rescan");
     return { state: "scanning" };
   }

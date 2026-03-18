@@ -148,6 +148,12 @@ export function createOperatorIntents(
       type: "set_allowed_nodes",
       nodes: persistedNodes,
     });
+    deps.applyManualScanPayload({
+      state: "idle",
+      pairingCandidateId: null,
+      error: null,
+      candidates: [],
+    });
     return deps.getSetupState();
   }
 
