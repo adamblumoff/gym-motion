@@ -68,6 +68,10 @@ export function createManagedGatewayRuntime(
     await runtimeBridge.sendGatewayCommand(command);
   }
 
+  async function dispatchGatewayCommand(command: Record<string, unknown>) {
+    await runtimeBridge.dispatchGatewayCommand(command);
+  }
+
   function sendGatewayCommandInBackground(
     command: Record<string, unknown>,
     context: string,
@@ -424,6 +428,7 @@ export function createManagedGatewayRuntime(
     refreshAdapters: async () => {
       applyAdapterSnapshot(discoveredAdapters);
     },
+    dispatchGatewayCommand,
     sendGatewayCommand,
     restartRuntime,
     manualCandidateById,

@@ -122,6 +122,7 @@ describe("operator-intents", () => {
       },
       getChild: () => ({}),
       refreshAdapters: async () => {},
+      dispatchGatewayCommand: async () => {},
       sendGatewayCommand: async (command) => {
         commands.push(command);
       },
@@ -177,6 +178,7 @@ describe("operator-intents", () => {
       emitSetup: () => {},
       getChild: () => null,
       refreshAdapters: async () => {},
+      dispatchGatewayCommand: async () => {},
       sendGatewayCommand: async () => {},
       restartRuntime: async () => {
         restartCount += 1;
@@ -215,7 +217,7 @@ describe("operator-intents", () => {
     expect(nextSetup.manualScanState).toBe("scanning");
   });
 
-  it("waits for child-confirmed scan state when the sidecar is running", async () => {
+  it("dispatches a child-backed manual scan without mutating setup state optimistically", async () => {
     let setupState = createSetupState();
     const manualScanPayloads: Array<Partial<DesktopSetupState>> = [];
     const commands: Record<string, unknown>[] = [];
@@ -228,9 +230,10 @@ describe("operator-intents", () => {
       emitSetup: () => {},
       getChild: () => ({}),
       refreshAdapters: async () => {},
-      sendGatewayCommand: async (command) => {
+      dispatchGatewayCommand: async (command) => {
         commands.push(command);
       },
+      sendGatewayCommand: async () => {},
       restartRuntime: async () => {},
       manualCandidateById: () => null,
       persistApprovedNodes: (nextNodes) => nextNodes,
@@ -249,7 +252,7 @@ describe("operator-intents", () => {
     expect(nextSetup.manualScanState).toBe("idle");
   });
 
-  it("clears scan state when a child-backed manual scan command fails", async () => {
+  it("surfaces immediate child-backed manual scan dispatch failures", async () => {
     let setupState = createSetupState();
     const manualScanPayloads: Array<Partial<DesktopSetupState>> = [];
 
@@ -261,9 +264,10 @@ describe("operator-intents", () => {
       emitSetup: () => {},
       getChild: () => ({}),
       refreshAdapters: async () => {},
-      sendGatewayCommand: async () => {
-        throw new Error("Gateway command timed out: start_manual_scan.");
+      dispatchGatewayCommand: async () => {
+        throw new Error("Gateway runtime is not running.");
       },
+      sendGatewayCommand: async () => {},
       restartRuntime: async () => {},
       manualCandidateById: () => null,
       persistApprovedNodes: (nextNodes) => nextNodes,
@@ -271,31 +275,13 @@ describe("operator-intents", () => {
       resolveApprovedRuleIdForNode: () => null,
       applyManualScanPayload: (payload) => {
         manualScanPayloads.push(payload);
-        setupState = {
-          ...setupState,
-          manualScanState: payload.state ?? setupState.manualScanState,
-          pairingCandidateId: payload.pairingCandidateId ?? null,
-          manualScanError: payload.error ?? null,
-          manualCandidates: payload.candidates ?? setupState.manualCandidates,
-        };
       },
       setWindowsScanRequested: () => {},
     });
 
-    await expect(intents.startManualScan()).rejects.toThrow(
-      "Gateway command timed out: start_manual_scan.",
-    );
-    expect(manualScanPayloads).toEqual([
-      {
-        state: "failed",
-        pairingCandidateId: null,
-        error: null,
-        candidates: [],
-      },
-    ]);
-    expect(setupState.manualScanState).toBe("failed");
-    expect(setupState.pairingCandidateId).toBeNull();
-    expect(setupState.manualCandidates).toEqual([]);
+    await expect(intents.startManualScan()).rejects.toThrow("Gateway runtime is not running.");
+    expect(manualScanPayloads).toEqual([]);
+    expect(setupState.manualScanState).toBe("idle");
   });
 
   it("forgets a runtime-backed node, syncs the remaining approved set, and clears stale scan state", async () => {
@@ -324,6 +310,7 @@ describe("operator-intents", () => {
       refreshAdapters: async () => {
         refreshAdaptersCount += 1;
       },
+      dispatchGatewayCommand: async () => {},
       sendGatewayCommand: async (command) => {
         commands.push(command);
       },

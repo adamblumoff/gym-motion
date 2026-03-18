@@ -48,6 +48,7 @@ type PendingCommand = {
 };
 
 export type RuntimeBridge = {
+  dispatchGatewayCommand: (command: Record<string, unknown>) => Promise<void>;
   sendGatewayCommand: (command: Record<string, unknown>) => Promise<unknown>;
   sendGatewayCommandInBackground: (command: Record<string, unknown>, context: string) => void;
   stopChild: () => void;
@@ -85,6 +86,25 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     readyRejecter?.(error);
     readyResolver = null;
     readyRejecter = null;
+  }
+
+  async function dispatchGatewayCommand(command: Record<string, unknown>) {
+    const child = deps.getChild();
+
+    if (!child || child.killed || !child.stdin) {
+      throw new Error("Gateway runtime is not running.");
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
   }
 
   async function sendGatewayCommand(command: Record<string, unknown>) {
@@ -291,6 +311,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   }
 
   return {
+    dispatchGatewayCommand,
     sendGatewayCommand,
     sendGatewayCommandInBackground,
     stopChild,
