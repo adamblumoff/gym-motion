@@ -136,6 +136,60 @@ function eventTimelineTimestamp(event: MotionEventSummary) {
   return Date.parse(event.receivedAt);
 }
 
+export function summarizeMotionEventsInBuckets(args: {
+  buckets: DeviceAnalyticsBucket[];
+  bucketMs: number;
+  windowStart: number;
+  windowEnd: number;
+  precedingState: MotionEventSummary["state"] | null;
+  events: MotionEventSummary[];
+}) {
+  const {
+    buckets,
+    bucketMs,
+    windowStart,
+    windowEnd,
+    precedingState,
+    events,
+  } = args;
+  let currentState = precedingState ?? "still";
+  let currentSegmentStart = windowStart;
+
+  for (const event of events) {
+    const timelineTimestamp = eventTimelineTimestamp(event);
+
+    if (!Number.isFinite(timelineTimestamp)) {
+      continue;
+    }
+
+    if (currentState === "moving") {
+      addMovingDuration(
+        buckets,
+        bucketMs,
+        windowStart,
+        windowEnd,
+        currentSegmentStart,
+        timelineTimestamp,
+      );
+    }
+
+    if (event.state === "moving") {
+      countMovementStart(buckets, bucketMs, windowStart, timelineTimestamp);
+    }
+
+    currentState = event.state;
+    currentSegmentStart = timelineTimestamp;
+  }
+
+  return {
+    buckets,
+    totalMovementCount: buckets.reduce((sum, bucket) => sum + bucket.movementCount, 0),
+    totalMovingSeconds: Math.round(
+      buckets.reduce((sum, bucket) => sum + bucket.movingSeconds, 0),
+    ),
+  };
+}
+
 function baseWarningFlags(
   warningFlags: DeviceAnalyticsSnapshot["warningFlags"],
 ) {
@@ -200,46 +254,14 @@ async function buildAnalyticsSnapshot(args: {
     }),
     getDeviceSyncState(args.deviceId),
   ]);
-
-  let currentState = precedingEvent?.state ?? "still";
-  let currentSegmentStart = start;
-
-  for (const event of events) {
-    const timelineTimestamp = eventTimelineTimestamp(event);
-
-    if (!Number.isFinite(timelineTimestamp)) {
-      continue;
-    }
-
-    if (currentState === "moving") {
-      addMovingDuration(
-        buckets,
-        definition.bucketMs,
-        start,
-        end,
-        currentSegmentStart,
-        timelineTimestamp,
-      );
-    }
-
-    if (event.state === "moving") {
-      countMovementStart(buckets, definition.bucketMs, start, timelineTimestamp);
-    }
-
-    currentState = event.state;
-    currentSegmentStart = timelineTimestamp;
-  }
-
-  if (currentState === "moving") {
-    addMovingDuration(
-      buckets,
-      definition.bucketMs,
-      start,
-      end,
-      currentSegmentStart,
-      end,
-    );
-  }
+  const summary = summarizeMotionEventsInBuckets({
+    buckets,
+    bucketMs: definition.bucketMs,
+    windowStart: start,
+    windowEnd: end,
+    precedingState: precedingEvent?.state ?? null,
+    events,
+  });
 
   const generatedAt = new Date().toISOString();
   const sync = hydrateSyncState(
@@ -266,11 +288,9 @@ async function buildAnalyticsSnapshot(args: {
     window: args.window,
     generatedAt,
     source: "canonical",
-    buckets,
-    totalMovementCount: buckets.reduce((sum, bucket) => sum + bucket.movementCount, 0),
-    totalMovingSeconds: Math.round(
-      buckets.reduce((sum, bucket) => sum + bucket.movingSeconds, 0),
-    ),
+    buckets: summary.buckets,
+    totalMovementCount: summary.totalMovementCount,
+    totalMovingSeconds: summary.totalMovingSeconds,
     warningFlags: [...warningFlags],
     sync,
   };
