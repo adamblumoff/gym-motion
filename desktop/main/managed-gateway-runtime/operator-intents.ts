@@ -12,7 +12,6 @@ type OperatorIntentDeps = {
   emitSetup: () => void;
   getChild: () => { killed?: boolean } | null;
   refreshAdapters: () => Promise<void>;
-  dispatchGatewayCommand: (command: Record<string, unknown>) => Promise<void>;
   sendGatewayCommand: (command: Record<string, unknown>) => Promise<void>;
   restartRuntime: () => Promise<unknown>;
   manualCandidateById: (candidateId: string) => DesktopSetupState["manualCandidates"][number] | null;
@@ -44,7 +43,7 @@ export function createOperatorIntents(
 ): OperatorIntents {
   async function startManualScan() {
     if (deps.getChild()) {
-      await deps.dispatchGatewayCommand({ type: "start_manual_scan" });
+      await deps.sendGatewayCommand({ type: "start_manual_scan" });
       return deps.getSetupState();
     }
 

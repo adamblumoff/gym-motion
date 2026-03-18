@@ -1,7 +1,7 @@
 import {
-  findLatestDeviceMotionEventBeforeReceivedAt,
+  findLatestDeviceMotionEventBefore,
   getDeviceSyncState,
-  listDeviceMotionEventsByReceivedAt,
+  listDeviceMotionEvents,
 } from "../../../backend/data";
 import type { PreferencesStore } from "../preferences-store";
 import type {
@@ -22,8 +22,8 @@ type AnalyticsServiceDeps = {
   store: PreferencesStore;
   getRuntimeDevice: (deviceId: string) => GatewayRuntimeDeviceSummary | null;
   onUpdated: (analytics: DeviceAnalyticsSnapshot) => void;
-  listDeviceMotionEventsByReceivedAt?: typeof listDeviceMotionEventsByReceivedAt;
-  findLatestDeviceMotionEventBeforeReceivedAt?: typeof findLatestDeviceMotionEventBeforeReceivedAt;
+  listDeviceMotionEvents?: typeof listDeviceMotionEvents;
+  findLatestDeviceMotionEventBefore?: typeof findLatestDeviceMotionEventBefore;
   getDeviceSyncState?: typeof getDeviceSyncState;
 };
 
@@ -136,7 +136,7 @@ function countMovementStart(
 }
 
 function eventTimelineTimestamp(event: MotionEventSummary) {
-  return Date.parse(event.receivedAt);
+  return event.eventTimestamp;
 }
 
 export function summarizeMotionEventsInBuckets(args: {
@@ -240,23 +240,21 @@ async function buildAnalyticsSnapshot(args: {
   window: AnalyticsWindow;
   runtimeDevice: GatewayRuntimeDeviceSummary | null;
   failureDetail: string | null;
-  listDeviceMotionEventsByReceivedAt: typeof listDeviceMotionEventsByReceivedAt;
-  findLatestDeviceMotionEventBeforeReceivedAt: typeof findLatestDeviceMotionEventBeforeReceivedAt;
+  listDeviceMotionEvents: typeof listDeviceMotionEvents;
+  findLatestDeviceMotionEventBefore: typeof findLatestDeviceMotionEventBefore;
   getDeviceSyncState: typeof getDeviceSyncState;
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
   const { start, end, buckets } = createBuckets(definition, Date.now());
-  const windowStartAt = new Date(start).toISOString();
-  const windowEndAt = new Date(end).toISOString();
   const [events, precedingEvent, syncSummary] = await Promise.all([
-    args.listDeviceMotionEventsByReceivedAt({
+    args.listDeviceMotionEvents({
       deviceId: args.deviceId,
-      startReceivedAt: windowStartAt,
-      endReceivedAt: windowEndAt,
+      startTimestamp: start,
+      endTimestamp: end,
     }),
-    args.findLatestDeviceMotionEventBeforeReceivedAt({
+    args.findLatestDeviceMotionEventBefore({
       deviceId: args.deviceId,
-      beforeReceivedAt: windowStartAt,
+      beforeTimestamp: start,
     }),
     args.getDeviceSyncState(args.deviceId),
   ]);
@@ -312,11 +310,10 @@ export type AnalyticsService = {
 export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsService {
   const refreshTimers = new Map<string, NodeJS.Timeout>();
   const syncFailures = new Map<string, string>();
-  const loadMotionEventsByReceivedAt =
-    deps.listDeviceMotionEventsByReceivedAt ?? listDeviceMotionEventsByReceivedAt;
-  const loadLatestMotionEventBeforeReceivedAt =
-    deps.findLatestDeviceMotionEventBeforeReceivedAt ??
-    findLatestDeviceMotionEventBeforeReceivedAt;
+  const loadMotionEvents = deps.listDeviceMotionEvents ?? listDeviceMotionEvents;
+  const loadLatestMotionEventBefore =
+    deps.findLatestDeviceMotionEventBefore ??
+    findLatestDeviceMotionEventBefore;
   const loadDeviceSyncState = deps.getDeviceSyncState ?? getDeviceSyncState;
 
   function readCache(): CachedAnalyticsMap {
@@ -381,9 +378,8 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window,
         runtimeDevice,
         failureDetail,
-        listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
-        findLatestDeviceMotionEventBeforeReceivedAt:
-          loadLatestMotionEventBeforeReceivedAt,
+        listDeviceMotionEvents: loadMotionEvents,
+        findLatestDeviceMotionEventBefore: loadLatestMotionEventBefore,
         getDeviceSyncState: loadDeviceSyncState,
       });
       nextCache[cacheKey(deviceId, window)] = analytics;
@@ -455,9 +451,8 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window: input.window,
         runtimeDevice: deps.getRuntimeDevice(input.deviceId),
         failureDetail: syncFailures.get(input.deviceId) ?? null,
-        listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
-        findLatestDeviceMotionEventBeforeReceivedAt:
-          loadLatestMotionEventBeforeReceivedAt,
+        listDeviceMotionEvents: loadMotionEvents,
+        findLatestDeviceMotionEventBefore: loadLatestMotionEventBefore,
         getDeviceSyncState: loadDeviceSyncState,
       });
 

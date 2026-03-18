@@ -106,6 +106,18 @@ function emitRuntimeDeviceUpdated(deviceId) {
   });
 }
 
+function emitCurrentRuntimeDevices() {
+  for (const runtimeNode of runtimeServer.getRuntimeNodes()) {
+    emitDesktopMessage({
+      type: "runtime-device-updated",
+      device: {
+        ...runtimeNode,
+        reconnectAwaitingDecision: runtimeNode.reconnectAwaitingDecision ?? false,
+      },
+    });
+  }
+}
+
 const runtimeBridge = createRuntimeBridge({
   config,
   runtimeServer,
@@ -575,6 +587,7 @@ void runtimeServer
       adapters: runtimeServer.getAvailableAdapters(),
       manualScan: runtimeServer.getManualScanPayload(),
     });
+    emitCurrentRuntimeDevices();
     await startSidecar();
   })
   .catch((error) => {

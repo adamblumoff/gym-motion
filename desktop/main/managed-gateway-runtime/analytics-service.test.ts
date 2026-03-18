@@ -26,7 +26,7 @@ function createMotionEvent(args: {
     sequence: args.id,
     state: args.state,
     delta: null,
-    eventTimestamp: args.id,
+    eventTimestamp: Date.parse(args.receivedAt),
     receivedAt: args.receivedAt,
     bootId: "boot-1",
     firmwareVersion: "1.0.0",

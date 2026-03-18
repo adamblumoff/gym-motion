@@ -349,6 +349,13 @@ export function createGatewayRuntimeServer({
       return runtime ? { ...runtime } : null;
     },
 
+    getRuntimeNodes() {
+      return Array.from(runtimeByDeviceId.entries()).map(([deviceId, runtime]) => ({
+        deviceId,
+        ...runtime,
+      }));
+    },
+
     resolveKnownDeviceId(input) {
       return resolveKnownDeviceIdByDiscovery(input);
     },

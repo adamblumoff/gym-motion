@@ -33,7 +33,6 @@ describe("operator-intents", () => {
       emitSetup: () => {},
       getChild: () => null,
       refreshAdapters: async () => {},
-      dispatchGatewayCommand: async () => {},
       sendGatewayCommand: async () => {},
       restartRuntime: async () => {
         restartCount += 1;
@@ -84,10 +83,9 @@ describe("operator-intents", () => {
       emitSetup: () => {},
       getChild: () => ({}),
       refreshAdapters: async () => {},
-      dispatchGatewayCommand: async () => {
+      sendGatewayCommand: async () => {
         throw new Error("Gateway runtime is not running.");
       },
-      sendGatewayCommand: async () => {},
       restartRuntime: async () => {},
       manualCandidateById: () => null,
       persistApprovedNodes: (nextNodes) => nextNodes,
