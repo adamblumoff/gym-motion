@@ -62,6 +62,17 @@ function isControlResponse(
   return message.type === "control-response";
 }
 
+function canSendGatewayCommand(
+  child: ChildProcess | null,
+): child is ChildProcess & { send: (message: unknown, callback?: (error: Error | null) => void) => boolean } {
+  return (
+    !!child &&
+    !child.killed &&
+    child.connected !== false &&
+    typeof child.send === "function"
+  );
+}
+
 export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   const pendingCommands = new Map<string, PendingCommand>();
   const commandTimeoutMs = deps.commandTimeoutMs ?? 5_000;
@@ -91,12 +102,12 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   async function dispatchGatewayCommand(command: Record<string, unknown>) {
     const child = deps.getChild();
 
-    if (!child || child.killed || !child.stdin) {
+    if (!canSendGatewayCommand(child)) {
       throw new Error("Gateway runtime is not running.");
     }
 
     await new Promise<void>((resolve, reject) => {
-      child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
+      child.send(command, (error) => {
         if (error) {
           reject(error);
           return;
@@ -110,7 +121,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   async function sendGatewayCommand(command: Record<string, unknown>) {
     const child = deps.getChild();
 
-    if (!child || child.killed || !child.stdin) {
+    if (!canSendGatewayCommand(child)) {
       throw new Error("Gateway runtime is not running.");
     }
 
@@ -138,7 +149,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         },
       });
 
-      child.stdin!.write(`${JSON.stringify({ commandId, ...command })}\n`, (error) => {
+      child.send({ commandId, ...command }, (error) => {
         if (!error) {
           return;
         }
@@ -211,7 +222,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       {
         cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
         env,
-        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
     );
     deps.setChild(spawnedChild);

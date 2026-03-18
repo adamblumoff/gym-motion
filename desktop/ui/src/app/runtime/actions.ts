@@ -26,9 +26,7 @@ export function createDesktopAppActions(
       setState((current) => replaceSnapshot(current, snapshot));
     },
     async startManualScan() {
-      const setup = await window.gymMotionDesktop.startManualScan();
-      setState((current) => applySetupState(current, setup));
-      return setup;
+      await window.gymMotionDesktop.startManualScan();
     },
     async pairDiscoveredNode(candidateId: string) {
       const setup = await window.gymMotionDesktop.pairDiscoveredNode(candidateId);

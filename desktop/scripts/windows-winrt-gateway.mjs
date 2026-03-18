@@ -2,7 +2,6 @@
 
 import process from "node:process";
 import { spawn } from "node:child_process";
-import readline from "node:readline";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 import { shouldWriteSidecarLog } from "./windows-winrt-gateway-logging.mjs";
@@ -306,25 +305,12 @@ async function handleDesktopControlCommand(command) {
 }
 
 function attachControlReader() {
-  const controlReader = readline.createInterface({
-    input: process.stdin,
-    crlfDelay: Infinity,
-  });
-
-  controlReader.on("line", (line) => {
-    const trimmed = line.trim();
-
-    if (!trimmed) {
+  process.on("message", (command) => {
+    if (!command || typeof command !== "object") {
+      console.error("[gateway-winrt] ignored invalid control command", command);
       return;
     }
 
-    let command;
-    try {
-      command = JSON.parse(trimmed);
-    } catch (error) {
-      console.error("[gateway-winrt] failed to parse control command", error);
-      return;
-    }
     const commandId = typeof command.commandId === "string" ? command.commandId : null;
 
     void handleDesktopControlCommand(command)

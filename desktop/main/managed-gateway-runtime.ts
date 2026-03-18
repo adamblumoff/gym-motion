@@ -442,7 +442,7 @@ export function createManagedGatewayRuntime(
   });
 
   async function startManualScan() {
-    return runtimeIntents.startManualScan();
+    await runtimeIntents.startManualScan();
   }
 
   async function pairDiscoveredNode(candidateId: string) {
