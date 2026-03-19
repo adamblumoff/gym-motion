@@ -51,6 +51,14 @@ function deserializeRow(row: IngestSpoolRow): ValidatedGatewayChildPersistMessag
   });
 }
 
+function hasColumn(database: DatabaseSync, tableName: string, columnName: string) {
+  const rows = database
+    .prepare(`pragma table_info(${tableName})`)
+    .all() as Array<{ name?: string }>;
+
+  return rows.some((row) => row.name === columnName);
+}
+
 export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpool {
   const dbDirectory = path.dirname(deps.dbPath);
   fs.mkdirSync(dbDirectory, { recursive: true });
@@ -75,6 +83,25 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     create index if not exists ingest_spool_device_idx
       on ingest_spool (device_id, id);
   `);
+
+  if (!hasColumn(database, "ingest_spool", "message_id")) {
+    database.exec(`
+      alter table ingest_spool add column message_id text;
+      update ingest_spool
+      set message_id = 'legacy-ingest-' || id
+      where message_id is null or length(message_id) = 0;
+      create unique index if not exists ingest_spool_message_id_idx
+        on ingest_spool (message_id);
+    `);
+  } else {
+    database.exec(`
+      update ingest_spool
+      set message_id = 'legacy-ingest-' || id
+      where message_id is null or length(message_id) = 0;
+      create unique index if not exists ingest_spool_message_id_idx
+        on ingest_spool (message_id);
+    `);
+  }
 
   const insertRow = database.prepare(`
     insert into ingest_spool (

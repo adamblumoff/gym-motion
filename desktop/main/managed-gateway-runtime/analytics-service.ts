@@ -1,9 +1,7 @@
 import {
-  findLatestDeviceMotionEventBefore,
+  findLatestDeviceMotionEventBeforeReceivedAt,
   getDeviceSyncState,
-  hasMotionRollupTables,
-  listDeviceMotionEvents,
-  listMotionRollupBuckets,
+  listDeviceMotionEventsByReceivedAt,
 } from "../../../backend/data";
 import type { PreferencesStore } from "../preferences-store";
 import type {
@@ -24,10 +22,8 @@ type AnalyticsServiceDeps = {
   store: PreferencesStore;
   getRuntimeDevice: (deviceId: string) => GatewayRuntimeDeviceSummary | null;
   onUpdated: (analytics: DeviceAnalyticsSnapshot) => void;
-  hasMotionRollupTables?: typeof hasMotionRollupTables;
-  listDeviceMotionEvents?: typeof listDeviceMotionEvents;
-  findLatestDeviceMotionEventBefore?: typeof findLatestDeviceMotionEventBefore;
-  listMotionRollupBuckets?: typeof listMotionRollupBuckets;
+  listDeviceMotionEventsByReceivedAt?: typeof listDeviceMotionEventsByReceivedAt;
+  findLatestDeviceMotionEventBeforeReceivedAt?: typeof findLatestDeviceMotionEventBeforeReceivedAt;
   getDeviceSyncState?: typeof getDeviceSyncState;
 };
 
@@ -140,7 +136,7 @@ function countMovementStart(
 }
 
 function eventTimelineTimestamp(event: MotionEventSummary) {
-  return event.eventTimestamp;
+  return Date.parse(event.receivedAt);
 }
 
 export function summarizeMotionEventsInBuckets(args: {
@@ -287,10 +283,8 @@ async function buildAnalyticsSnapshot(args: {
   window: AnalyticsWindow;
   runtimeDevice: GatewayRuntimeDeviceSummary | null;
   failureDetail: string | null;
-  hasMotionRollupTables: typeof hasMotionRollupTables;
-  listDeviceMotionEvents: typeof listDeviceMotionEvents;
-  findLatestDeviceMotionEventBefore: typeof findLatestDeviceMotionEventBefore;
-  listMotionRollupBuckets: typeof listMotionRollupBuckets;
+  listDeviceMotionEventsByReceivedAt: typeof listDeviceMotionEventsByReceivedAt;
+  findLatestDeviceMotionEventBeforeReceivedAt: typeof findLatestDeviceMotionEventBeforeReceivedAt;
   getDeviceSyncState: typeof getDeviceSyncState;
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
@@ -299,58 +293,30 @@ async function buildAnalyticsSnapshot(args: {
     args.deviceId,
     args.runtimeDevice?.bootId ?? null,
   );
-  let totalMovementCount = 0;
-  let totalMovingSeconds = 0;
-
-  if (await args.hasMotionRollupTables()) {
-    const rollupBuckets = await args.listMotionRollupBuckets({
+  const windowStartAt = new Date(start).toISOString();
+  const windowEndAt = new Date(end).toISOString();
+  const [events, precedingEvent] = await Promise.all([
+    args.listDeviceMotionEventsByReceivedAt({
       deviceId: args.deviceId,
-      window: args.window,
-      startBucket: start,
-      endBucketExclusive: end,
-    });
+      startReceivedAt: windowStartAt,
+      endReceivedAt: windowEndAt,
+    }),
+    args.findLatestDeviceMotionEventBeforeReceivedAt({
+      deviceId: args.deviceId,
+      beforeReceivedAt: windowStartAt,
+    }),
+  ]);
+  const summary = summarizeMotionEventsInBuckets({
+    buckets,
+    bucketMs: definition.bucketMs,
+    windowStart: start,
+    windowEnd: end,
+    precedingState: precedingEvent?.state ?? null,
+    events,
+  });
 
-    const bucketByStart = new Map(
-      buckets.map((bucket) => [Date.parse(bucket.startAt), bucket] as const),
-    );
-
-    for (const rollupBucket of rollupBuckets) {
-      const bucket = bucketByStart.get(rollupBucket.bucketStart);
-
-      if (!bucket) {
-        continue;
-      }
-
-      bucket.movementCount = rollupBucket.movementCount;
-      bucket.movingSeconds = rollupBucket.movingSeconds;
-    }
-
-    totalMovementCount = buckets.reduce((sum, bucket) => sum + bucket.movementCount, 0);
-    totalMovingSeconds = buckets.reduce((sum, bucket) => sum + bucket.movingSeconds, 0);
-  } else {
-    const [events, precedingEvent] = await Promise.all([
-      args.listDeviceMotionEvents({
-        deviceId: args.deviceId,
-        startTimestamp: start,
-        endTimestamp: end,
-      }),
-      args.findLatestDeviceMotionEventBefore({
-        deviceId: args.deviceId,
-        beforeTimestamp: start,
-      }),
-    ]);
-    const summary = summarizeMotionEventsInBuckets({
-      buckets,
-      bucketMs: definition.bucketMs,
-      windowStart: start,
-      windowEnd: end,
-      precedingState: precedingEvent?.state ?? null,
-      events,
-    });
-
-    totalMovementCount = summary.totalMovementCount;
-    totalMovingSeconds = summary.totalMovingSeconds;
-  }
+  const totalMovementCount = summary.totalMovementCount;
+  const totalMovingSeconds = summary.totalMovingSeconds;
 
   const generatedAt = new Date().toISOString();
   const sync = hydrateSyncState(
@@ -395,11 +361,11 @@ export type AnalyticsService = {
 export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsService {
   const refreshTimers = new Map<string, NodeJS.Timeout>();
   const syncFailures = new Map<string, string>();
-  const loadHasMotionRollupTables = deps.hasMotionRollupTables ?? hasMotionRollupTables;
-  const loadMotionEvents = deps.listDeviceMotionEvents ?? listDeviceMotionEvents;
-  const loadLatestMotionEventBefore =
-    deps.findLatestDeviceMotionEventBefore ?? findLatestDeviceMotionEventBefore;
-  const loadMotionRollupBuckets = deps.listMotionRollupBuckets ?? listMotionRollupBuckets;
+  const loadMotionEventsByReceivedAt =
+    deps.listDeviceMotionEventsByReceivedAt ?? listDeviceMotionEventsByReceivedAt;
+  const loadLatestMotionEventBeforeReceivedAt =
+    deps.findLatestDeviceMotionEventBeforeReceivedAt ??
+    findLatestDeviceMotionEventBeforeReceivedAt;
   const loadDeviceSyncState = deps.getDeviceSyncState ?? getDeviceSyncState;
 
   function readCache(): CachedAnalyticsMap {
@@ -469,10 +435,9 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window,
         runtimeDevice,
         failureDetail,
-        hasMotionRollupTables: loadHasMotionRollupTables,
-        listDeviceMotionEvents: loadMotionEvents,
-        findLatestDeviceMotionEventBefore: loadLatestMotionEventBefore,
-        listMotionRollupBuckets: loadMotionRollupBuckets,
+        listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
+        findLatestDeviceMotionEventBeforeReceivedAt:
+          loadLatestMotionEventBeforeReceivedAt,
         getDeviceSyncState: loadDeviceSyncState,
       });
       nextCache[cacheKey(deviceId, window)] = analytics;
@@ -539,10 +504,9 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window: input.window,
         runtimeDevice: deps.getRuntimeDevice(input.deviceId),
         failureDetail: syncFailures.get(input.deviceId) ?? null,
-        hasMotionRollupTables: loadHasMotionRollupTables,
-        listDeviceMotionEvents: loadMotionEvents,
-        findLatestDeviceMotionEventBefore: loadLatestMotionEventBefore,
-        listMotionRollupBuckets: loadMotionRollupBuckets,
+        listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
+        findLatestDeviceMotionEventBeforeReceivedAt:
+          loadLatestMotionEventBeforeReceivedAt,
         getDeviceSyncState: loadDeviceSyncState,
       });
 

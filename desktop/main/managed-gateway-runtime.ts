@@ -120,8 +120,9 @@ export function createManagedGatewayRuntime(
       });
     },
     hasMotionRollupTables: e2eRuntimeStore ? async () => true : undefined,
-    listDeviceMotionEvents: e2eRuntimeStore?.listDeviceMotionEvents,
-    findLatestDeviceMotionEventBefore: e2eRuntimeStore?.findLatestDeviceMotionEventBefore,
+    listDeviceMotionEventsByReceivedAt: e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
+    findLatestDeviceMotionEventBeforeReceivedAt:
+      e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
     listMotionRollupBuckets: e2eRuntimeStore?.listMotionRollupBuckets,
     getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });

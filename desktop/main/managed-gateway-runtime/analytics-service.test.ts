@@ -25,16 +25,33 @@ describe("createAnalyticsService", () => {
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated,
-      hasMotionRollupTables: async () => true,
-      listMotionRollupBuckets: async () => [
+      listDeviceMotionEventsByReceivedAt: async () => [
         {
           deviceId: "stack-001",
-          bucketStart: Date.parse("2026-03-18T12:00:00.000Z"),
-          movementCount: 1,
-          movingSeconds: 900,
-          updatedAt: "2026-03-18T12:30:00.000Z",
+          id: 1,
+          sequence: 10,
+          state: "moving",
+          delta: 2,
+          eventTimestamp: 1000,
+          receivedAt: "2026-03-18T12:10:00.000Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+        {
+          deviceId: "stack-001",
+          id: 2,
+          sequence: 11,
+          state: "still",
+          delta: 0,
+          eventTimestamp: 2000,
+          receivedAt: "2026-03-18T12:25:00.000Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
         },
       ],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
         lastAckedSequence: 10,
@@ -137,8 +154,8 @@ describe("createAnalyticsService", () => {
         reconnectRetryExhausted: false,
       }),
       onUpdated: vi.fn(),
-      hasMotionRollupTables: async () => true,
-      listMotionRollupBuckets: async () => [],
+      listDeviceMotionEventsByReceivedAt: async () => [],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
         lastAckedSequence: 10,
@@ -164,8 +181,7 @@ describe("createAnalyticsService", () => {
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated: vi.fn(),
-      hasMotionRollupTables: async () => false,
-      listDeviceMotionEvents: async () => [
+      listDeviceMotionEventsByReceivedAt: async () => [
         {
           id: 1,
           deviceId: "stack-001",
@@ -191,10 +207,7 @@ describe("createAnalyticsService", () => {
           hardwareId: "hw-1",
         },
       ],
-      findLatestDeviceMotionEventBefore: async () => null,
-      listMotionRollupBuckets: async () => {
-        throw new Error("should not use rollup buckets");
-      },
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
         lastAckedSequence: 2,
@@ -212,6 +225,58 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovementCount).toBe(1);
     expect(analytics.totalMovingSeconds).toBe(15 * 60);
     expect(analytics.buckets.some((bucket) => bucket.movingSeconds === 15 * 60)).toBe(true);
+    nowSpy.mockRestore();
+  });
+
+  it("uses received time windows even when event timestamps are boot-relative", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-19T16:00:00.000Z"));
+    const service = createAnalyticsService({
+      store: createStore(),
+      getRuntimeDevice: () => null,
+      onUpdated: vi.fn(),
+      listDeviceMotionEventsByReceivedAt: async () => [
+        {
+          id: 1,
+          deviceId: "stack-001",
+          sequence: 1448,
+          state: "moving",
+          delta: 3,
+          eventTimestamp: 40_750_267,
+          receivedAt: "2026-03-19T15:51:41.666Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+        {
+          id: 2,
+          deviceId: "stack-001",
+          sequence: 1449,
+          state: "still",
+          delta: 0,
+          eventTimestamp: 40_809_018,
+          receivedAt: "2026-03-19T15:52:40.409Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+      ],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      getDeviceSyncState: async () => ({
+        deviceId: "stack-001",
+        lastAckedSequence: 1449,
+        lastAckedBootId: "boot-1",
+        lastSyncCompletedAt: "2026-03-19T15:52:41.000Z",
+        lastOverflowDetectedAt: null,
+      }),
+    });
+
+    const analytics = await service.getDeviceAnalytics({
+      deviceId: "stack-001",
+      window: "24h",
+    });
+
+    expect(analytics.totalMovementCount).toBe(1);
+    expect(analytics.totalMovingSeconds).toBeGreaterThan(0);
     nowSpy.mockRestore();
   });
 

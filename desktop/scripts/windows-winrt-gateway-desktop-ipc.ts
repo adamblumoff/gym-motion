@@ -34,6 +34,11 @@ function outboxPath() {
   );
 }
 
+function hasColumn(tableName, columnName) {
+  const rows = database.prepare(`pragma table_info(${tableName})`).all();
+  return rows.some((row) => row.name === columnName);
+}
+
 function ensureDatabase() {
   if (database) {
     return;
@@ -57,6 +62,24 @@ function ensureDatabase() {
     create index if not exists outbox_available_idx
       on outbox (available_at, id);
   `);
+  if (!hasColumn("outbox", "message_id")) {
+    database.exec(`
+      alter table outbox add column message_id text;
+      update outbox
+      set message_id = 'legacy-outbox-' || id
+      where message_id is null or length(message_id) = 0;
+      create unique index if not exists outbox_message_id_idx
+        on outbox (message_id);
+    `);
+  } else {
+    database.exec(`
+      update outbox
+      set message_id = 'legacy-outbox-' || id
+      where message_id is null or length(message_id) = 0;
+      create unique index if not exists outbox_message_id_idx
+        on outbox (message_id);
+    `);
+  }
   insertRow = database.prepare(`
     insert into outbox (
       message_id,
