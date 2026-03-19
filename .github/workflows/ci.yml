@@ -7,13 +7,23 @@ on:
       - main
       - chore/testing-foundation-vitest-ci
 
+env:
+  CI_NODE_VERSION: 25.8.0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   ts-fast:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -55,7 +65,13 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -73,7 +89,13 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -97,7 +119,13 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -125,7 +153,13 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
