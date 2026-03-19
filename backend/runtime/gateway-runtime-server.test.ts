@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,7 +12,7 @@ const runtimeServers: RuntimeServer[] = [];
 const tempDirs: string[] = [];
 
 async function createRuntimeServer(options: {
-  apiBaseUrl?: string;
+  loadDevicesMetadata?: () => unknown[] | Promise<unknown[]>;
   runtimeHost?: string;
   runtimePort: number;
   onControlCommand?: ((command: unknown) => unknown | Promise<unknown>) | null;
@@ -21,7 +20,7 @@ async function createRuntimeServer(options: {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-test-"));
   tempDirs.push(tempDir);
   const runtimeServer = createGatewayRuntimeServer({
-    apiBaseUrl: options.apiBaseUrl ?? "http://127.0.0.1:9",
+    loadDevicesMetadata: options.loadDevicesMetadata ?? (async () => []),
     runtimeHost: options.runtimeHost ?? "127.0.0.1",
     runtimePort: options.runtimePort,
     knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
@@ -186,7 +185,7 @@ describe("gateway runtime server", () => {
     );
 
     const runtimeServer = createGatewayRuntimeServer({
-      apiBaseUrl: "http://127.0.0.1:9",
+      loadDevicesMetadata: async () => [],
       runtimeHost: "127.0.0.1",
       runtimePort,
       knownNodesPath,
@@ -234,93 +233,57 @@ describe("gateway runtime server", () => {
   });
 
   it("accepts explicit known device ids on transport events and treats recent metadata heartbeats as fresh", async () => {
-    const metadataServer = http.createServer((_request, response) => {
-      response.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-      });
-      response.end(
-        JSON.stringify({
-          devices: [
-            {
-              id: "stack-001",
-              lastState: "still",
-              lastSeenAt: Date.now(),
-              lastDelta: null,
-              updatedAt: new Date().toISOString(),
-              hardwareId: "hw-1",
-              bootId: "boot-1",
-              firmwareVersion: "0.5.1",
-              machineLabel: "Leg Press",
-              siteId: "Dallas",
-              provisioningState: "provisioned",
-              updateStatus: "idle",
-              updateTargetVersion: null,
-              updateDetail: null,
-              updateUpdatedAt: null,
-              lastHeartbeatAt: new Date().toISOString(),
-              lastEventReceivedAt: new Date().toISOString(),
-              healthStatus: "online",
-            },
-          ],
-        }),
-      );
+    const runtimePort = 51400 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createRuntimeServer({
+      loadDevicesMetadata: async () => [
+        {
+          id: "stack-001",
+          lastState: "still",
+          lastSeenAt: Date.now(),
+          lastDelta: null,
+          updatedAt: new Date().toISOString(),
+          hardwareId: "hw-1",
+          bootId: "boot-1",
+          firmwareVersion: "0.5.1",
+          machineLabel: "Leg Press",
+          siteId: "Dallas",
+          provisioningState: "provisioned",
+          updateStatus: "idle",
+          updateTargetVersion: null,
+          updateDetail: null,
+          updateUpdatedAt: null,
+          lastHeartbeatAt: new Date().toISOString(),
+          lastEventReceivedAt: new Date().toISOString(),
+          healthStatus: "online",
+        },
+      ],
+      runtimePort,
     });
 
-    const metadataPort = 47110 + Math.floor(Math.random() * 1000);
-    await new Promise<void>((resolve, reject) => {
-      metadataServer.listen(metadataPort, "127.0.0.1", (error?: Error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.setScanState("stopped");
+    runtimeServer.noteDiscovery({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
+    });
+    runtimeServer.noteConnected({
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB:CC:DD",
+      localName: "GymMotion-f4e9d4",
+      rssi: -58,
     });
 
-    try {
-      const runtimePort = 51400 + Math.floor(Math.random() * 1000);
-      const runtimeServer = await createRuntimeServer({
-        apiBaseUrl: `http://127.0.0.1:${metadataPort}`,
-        runtimePort,
-      });
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+    const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
 
-      await runtimeServer.start();
-      runtimeServer.setAdapterState("poweredOn");
-      runtimeServer.setScanState("stopped");
-      runtimeServer.noteDiscovery({
-        knownDeviceId: "stack-001",
-        peripheralId: "peripheral-1",
-        address: "AA:BB:CC:DD",
-        localName: "GymMotion-f4e9d4",
-        rssi: -58,
-      });
-      runtimeServer.noteConnected({
-        knownDeviceId: "stack-001",
-        peripheralId: "peripheral-1",
-        address: "AA:BB:CC:DD",
-        localName: "GymMotion-f4e9d4",
-        rssi: -58,
-      });
-
-      const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
-      const payload = await response.json();
-      const device = payload.devices.find((item: { id: string }) => item.id === "stack-001");
-
-      expect(device?.gatewayConnectionState).toBe("connected");
-      expect(device?.telemetryFreshness).toBe("fresh");
-      expect(device?.healthStatus).toBe("online");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        metadataServer.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      });
-    }
+    expect(device?.gatewayConnectionState).toBe("connected");
+    expect(device?.telemetryFreshness).toBe("fresh");
+    expect(device?.healthStatus).toBe("online");
   });
 });

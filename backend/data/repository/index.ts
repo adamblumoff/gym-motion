@@ -10,8 +10,13 @@ export {
   recordDeviceLog,
   listDeviceLogs,
   listDeviceActivity,
+  listRecentActivity,
   getDeviceSyncState,
   recordBackfillBatch,
+  hasMotionRollupTables,
+  listMotionRollupBuckets,
+  rebuildMotionRollups,
+  refreshMotionRollupsForDeviceRange,
 } from "./telemetry";
 
 export {

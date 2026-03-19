@@ -196,3 +196,64 @@ export async function listDeviceActivity(options: {
     limit,
   );
 }
+
+export async function listRecentActivity(limit = 30): Promise<DeviceActivitySummary[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 250);
+  const result = await getDb().query<
+    | (MotionEventRow & { activity_kind: "motion" })
+    | (DeviceLogRow & { activity_kind: "lifecycle" })
+  >(
+    `select *
+     from (
+       select
+         'motion' as activity_kind,
+         id,
+         device_id,
+         sequence,
+         state,
+         delta,
+         event_timestamp,
+         received_at,
+         boot_id,
+         firmware_version,
+         hardware_id,
+         null::text as level,
+         null::text as code,
+         null::text as message,
+         null::bigint as device_timestamp,
+         null::jsonb as metadata
+       from motion_events
+       union all
+       select
+         'lifecycle' as activity_kind,
+         id,
+         device_id,
+         sequence,
+         null::text as state,
+         null::integer as delta,
+         device_timestamp as event_timestamp,
+         received_at,
+         boot_id,
+         firmware_version,
+         hardware_id,
+         level,
+         code,
+         message,
+         device_timestamp,
+         metadata
+       from device_logs
+     ) combined
+     order by received_at desc, id desc
+     limit $1`,
+    [cappedLimit],
+  );
+
+  return sortActivities(
+    result.rows.map((row) =>
+      row.activity_kind === "motion"
+        ? mapMotionEventToActivity(mapMotionEventRow(row as MotionEventRow))
+        : mapDeviceLogToActivity(mapDeviceLogRow(row as DeviceLogRow)),
+    ),
+    cappedLimit,
+  );
+}

@@ -58,6 +58,9 @@ export function registerRuntimeBridge(
   ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, (_event, input) =>
     runtime.getDeviceAnalytics(input),
   );
+  ipcMain.handle(DESKTOP_RUNTIME_CHANNELS.getDeviceActivity, (_event, deviceId, limit) =>
+    runtime.getDeviceActivity(deviceId, limit),
+  );
   if (isE2E) {
     ipcMain.handle(DESKTOP_TEST_CHANNELS.step, (_event, name: DesktopTestStepName, payload) =>
       runtime.runE2eStep(name, payload),
@@ -84,6 +87,7 @@ export function registerRuntimeBridge(
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.resumeApprovedNodeReconnect);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.setAllowedNodes);
       ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics);
+      ipcMain.removeHandler(DESKTOP_RUNTIME_CHANNELS.getDeviceActivity);
       if (isE2E) {
         ipcMain.removeHandler(DESKTOP_TEST_CHANNELS.step);
       }

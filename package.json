@@ -8,6 +8,7 @@
   "scripts": {
     "db:setup": "bun run ./scripts/setup-db.ts",
     "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
+    "db:rebuild:motion-rollups": "bun run ./scripts/rebuild-motion-rollups.ts",
     "build:runtime": "tsc -p tsconfig.runtime.json",
     "dev": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
     "build:desktop:test": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build",

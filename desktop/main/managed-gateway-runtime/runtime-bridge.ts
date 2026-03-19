@@ -37,7 +37,6 @@ type RuntimeBridgeDeps = {
     runtimeState: "starting" | "running" | "degraded" | "restarting",
     issue: string | null,
   ) => void;
-  getApiBaseUrl: () => string;
   onChildPersistMessage: (message: GatewayChildPersistMessage) => Promise<void>;
   onChildRuntimeMessage: (message: GatewayChildRuntimeMessage) => void;
   commandTimeoutMs?: number;
@@ -177,7 +176,6 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     deps.setRuntimePort(runtimePort);
     const env: Record<string, string | undefined> = buildGatewayChildEnv({
       processEnv: process.env,
-      getApiBaseUrl: deps.getApiBaseUrl,
       runtimePort,
       approvedNodes: deps.readApprovedNodes(),
     });

@@ -6,7 +6,9 @@ import {
   recordHeartbeat,
   recordMotionEvent,
 } from "./motion-events";
+import { listMotionRollupBuckets, rebuildMotionRollups } from "./rollups";
 import { closeDatabase, hasDatabaseTestEnv, resetDatabaseSchema } from "../test-helpers";
+import { getDb } from "../db";
 
 const describeDb = hasDatabaseTestEnv() ? describe : describe.skip;
 
@@ -50,6 +52,97 @@ describeDb("motion event repository", () => {
       eventTimestamp: 100,
     });
     expect(second.event?.id).toBe(first.event?.id);
+  });
+
+  it("records hourly rollups once per movement start and avoids double-counting duplicate sequences", async () => {
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 100_000,
+      delta: 9,
+      sequence: 4,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 110_000,
+      delta: 0,
+      sequence: 5,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 110_000,
+      delta: 0,
+      sequence: 5,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    const buckets = await listMotionRollupBuckets({
+      deviceId: "stack-001",
+      window: "24h",
+      startBucket: 0,
+      endBucketExclusive: 60 * 60 * 1000,
+    });
+
+    expect(buckets).toEqual([
+      expect.objectContaining({
+        bucketStart: 0,
+        movementCount: 1,
+        movingSeconds: 10,
+      }),
+    ]);
+  });
+
+  it("splits moving duration across hourly bucket boundaries", async () => {
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 55 * 60 * 1000,
+      delta: 3,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 65 * 60 * 1000,
+      delta: 0,
+      sequence: 2,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    const buckets = await listMotionRollupBuckets({
+      deviceId: "stack-001",
+      window: "24h",
+      startBucket: 0,
+      endBucketExclusive: 2 * 60 * 60 * 1000,
+    });
+
+    expect(buckets).toEqual([
+      expect.objectContaining({
+        bucketStart: 0,
+        movementCount: 1,
+        movingSeconds: 5 * 60,
+      }),
+      expect.objectContaining({
+        bucketStart: 60 * 60 * 1000,
+        movementCount: 0,
+        movingSeconds: 5 * 60,
+      }),
+    ]);
   });
 
   it("orders received-at queries by receipt time and preserves heartbeat upserts", async () => {
@@ -99,5 +192,54 @@ describeDb("motion event repository", () => {
       sequence: 1,
       eventTimestamp: 100,
     });
+  });
+
+  it("rebuilds rollups from raw motion history", async () => {
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 100_000,
+      delta: 1,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 130_000,
+      delta: 0,
+      sequence: 2,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    const db = getDb();
+    const client = await db.connect();
+
+    try {
+      await client.query("delete from motion_rollups_hourly where device_id = $1", ["stack-001"]);
+      await client.query("delete from motion_rollups_daily where device_id = $1", ["stack-001"]);
+      await rebuildMotionRollups(client, "stack-001");
+    } finally {
+      client.release();
+    }
+
+    const buckets = await listMotionRollupBuckets({
+      deviceId: "stack-001",
+      window: "24h",
+      startBucket: 0,
+      endBucketExclusive: 60 * 60 * 1000,
+    });
+
+    expect(buckets).toEqual([
+      expect.objectContaining({
+        bucketStart: 0,
+        movementCount: 1,
+        movingSeconds: 30,
+      }),
+    ]);
   });
 });
