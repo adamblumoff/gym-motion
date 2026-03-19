@@ -3,12 +3,9 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayChildEnv } from "./gateway-child-env";
 
 describe("buildGatewayChildEnv", () => {
-  it("reads the current desktop api url at child start time", () => {
-    let currentApiBaseUrl = "http://127.0.0.1:0";
-
+  it("passes runtime configuration without desktop loopback metadata wiring", () => {
     const env = buildGatewayChildEnv({
       processEnv: {},
-      getApiBaseUrl: () => currentApiBaseUrl,
       runtimePort: 4510,
       approvedNodes: [
         {
@@ -22,18 +19,15 @@ describe("buildGatewayChildEnv", () => {
       ],
     });
 
-    expect(env.API_URL).toBe("http://127.0.0.1:0");
-
-    currentApiBaseUrl = "http://127.0.0.1:48123";
-
     const nextEnv = buildGatewayChildEnv({
       processEnv: {},
-      getApiBaseUrl: () => currentApiBaseUrl,
       runtimePort: 4511,
       approvedNodes: [],
     });
 
-    expect(nextEnv.API_URL).toBe("http://127.0.0.1:48123");
+    expect(env.API_URL).toBeUndefined();
+    expect(env.GATEWAY_RUNTIME_PORT).toBe("4510");
+    expect(env.GATEWAY_APPROVED_NODE_RULES).toContain("esp32-001");
     expect(nextEnv.GATEWAY_RUNTIME_PORT).toBe("4511");
     expect(nextEnv.GATEWAY_APPROVED_NODE_RULES).toBe("[]");
   });

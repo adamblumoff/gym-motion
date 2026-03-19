@@ -50,6 +50,9 @@ const desktopApi: DesktopApi = {
   async getDeviceAnalytics(input: GetDeviceAnalyticsInput) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getDeviceAnalytics, input);
   },
+  async getDeviceActivity(deviceId: string, limit?: number) {
+    return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getDeviceActivity, deviceId, limit);
+  },
   subscribeRuntime(listener) {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       listener(payload as Parameters<typeof listener>[0]);

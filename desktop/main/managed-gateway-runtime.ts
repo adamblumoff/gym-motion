@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import path from "node:path";
 import type {
   ApprovedNodeRule,
   BleAdapterSummary,
@@ -7,6 +8,8 @@ import type {
 } from "@core/contracts";
 import { mergeGatewayDeviceUpdate } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
+import { app } from "electron";
+import { listDevices } from "../../backend/data";
 
 import { createDesktopApiServer } from "./desktop-api-server";
 import {
@@ -43,6 +46,7 @@ import { createOperatorIntents } from "./managed-gateway-runtime/operator-intent
 import { createRuntimeSync } from "./managed-gateway-runtime/runtime-sync";
 import { createDataEventHandler } from "./managed-gateway-runtime/data-events";
 import { createDataIngestController } from "./managed-gateway-runtime/data-ingest";
+import { createDataIngestSpool } from "./managed-gateway-runtime/data-ingest-spool";
 import { createAnalyticsService } from "./managed-gateway-runtime/analytics-service";
 import { createE2eRuntimeStore } from "./managed-gateway-runtime/e2e-runtime-store";
 
@@ -66,6 +70,7 @@ export function createManagedGatewayRuntime(
   let autoSelectedAdapterId: string | null = null;
   let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
+  const loadPersistedDevices = e2eRuntimeStore?.listDevices ?? listDevices;
 
   async function sendGatewayCommand(command: Record<string, unknown>) {
     await runtimeBridge.sendGatewayCommand(command);
@@ -82,6 +87,26 @@ export function createManagedGatewayRuntime(
     for (const listener of listeners) {
       listener(event);
     }
+  }
+
+  function syncDeviceMetadataInBackground() {
+    if (!child) {
+      return;
+    }
+
+    void loadPersistedDevices()
+      .then((devices) =>
+        sendGatewayCommandInBackground(
+          {
+            type: "set_devices_metadata",
+            devices,
+          },
+          "sync device metadata with gateway runtime",
+        ),
+      )
+      .catch((error) => {
+        console.error("[runtime] failed to load persisted device metadata", error);
+      });
   }
 
   const analyticsService = createAnalyticsService({
@@ -339,9 +364,10 @@ export function createManagedGatewayRuntime(
     listRecentEvents: e2eRuntimeStore?.listRecentEvents,
     listDeviceLogs: e2eRuntimeStore?.listDeviceLogs,
     listDeviceActivity: e2eRuntimeStore?.listDeviceActivity,
+    listRecentActivity: e2eRuntimeStore?.listRecentActivity,
   });
 
-  const applyDataEvent = createDataEventHandler({
+  const applyDataEventToSnapshot = createDataEventHandler({
     getSnapshot: () => snapshot,
     setSnapshot: (nextSnapshot) => {
       snapshot = nextSnapshot;
@@ -354,6 +380,14 @@ export function createManagedGatewayRuntime(
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
   });
 
+  function applyDataEvent(event: Parameters<typeof applyDataEventToSnapshot>[0]) {
+    applyDataEventToSnapshot(event);
+
+    if (event.type !== "device-log") {
+      syncDeviceMetadataInBackground();
+    }
+  }
+
   const dataIngest = createDataIngestController({
     applyDataEvent,
     recordMotion: e2eRuntimeStore?.recordMotion,
@@ -361,9 +395,17 @@ export function createManagedGatewayRuntime(
     recordLog: e2eRuntimeStore?.recordLog,
     recordBackfill: e2eRuntimeStore?.recordBackfill,
   });
+  const dataIngestSpool = createDataIngestSpool({
+    dbPath: path.join(app.getPath("userData"), "gateway-ingest-spool.sqlite"),
+    persistValidatedMessage: (message) => dataIngest.persistValidatedMessage(message),
+    onDrainError: (message, error) => {
+      console.error(message, error);
+    },
+  });
 
   async function refreshHistory() {
     await runtimeSync.refreshHistory();
+    syncDeviceMetadataInBackground();
   }
 
   async function startRuntime(options?: { preserveSnapshot?: boolean }) {
@@ -403,8 +445,7 @@ export function createManagedGatewayRuntime(
       }
     },
     updateGatewayStatus,
-    getApiBaseUrl: () => apiServer.apiBaseUrl,
-    onChildPersistMessage: (message) => dataIngest.handleMessage(message),
+    onChildPersistMessage: (message) => dataIngestSpool.enqueue(message),
     onChildRuntimeMessage: handleChildRuntimeMessage,
   });
 
@@ -471,7 +512,7 @@ export function createManagedGatewayRuntime(
       }
 
       stopped = false;
-      startingPromise = startRuntime().finally(() => {
+      startingPromise = dataIngestSpool.start().then(() => startRuntime()).finally(() => {
         startingPromise = null;
       });
       return startingPromise;
@@ -482,6 +523,7 @@ export function createManagedGatewayRuntime(
       stopChild();
       emitSetup();
       await apiServer.stop();
+      await dataIngestSpool.stop();
     },
     restart: restartRuntime,
     async getSnapshot() {
@@ -511,6 +553,9 @@ export function createManagedGatewayRuntime(
     },
     async getDeviceAnalytics(input) {
       return analyticsService.getDeviceAnalytics(input);
+    },
+    async getDeviceActivity(deviceId, limit) {
+      return runtimeSync.getDeviceActivity(deviceId, limit);
     },
     async runE2eStep(name, payload) {
       if (!isE2E) {

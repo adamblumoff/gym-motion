@@ -17,6 +17,7 @@ export {
   getDeviceSyncState,
   listDeviceActivity,
   listDeviceLogs,
+  listRecentActivity,
   listDeviceMotionEvents,
   listDeviceMotionEventsByReceivedAt,
   listDevices,

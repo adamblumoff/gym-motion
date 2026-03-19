@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { METADATA_REFRESH_MS } from "./utils.js";
 
-export function createMetadataManager({ apiBaseUrl, metadataByDeviceId, debug }) {
+export function createMetadataManager({ loadDevicesMetadata, metadataByDeviceId, debug }) {
   let metadataLoadedAt = 0;
 
   async function refreshMetadata(force = false) {
@@ -10,18 +10,7 @@ export function createMetadataManager({ apiBaseUrl, metadataByDeviceId, debug })
     }
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/devices`, {
-        headers: {
-          "Cache-Control": "no-store",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`/api/devices -> ${response.status}`);
-      }
-
-      const payload = await response.json();
-      const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+      const devices = await loadDevicesMetadata();
 
       metadataByDeviceId.clear();
 

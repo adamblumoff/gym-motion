@@ -25,9 +25,10 @@ const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
+let pushedMetadataDevices = [];
 
 const runtimeServer = createGatewayRuntimeServer({
-  apiBaseUrl: config.apiBaseUrl,
+  loadDevicesMetadata: async () => pushedMetadataDevices,
   runtimeHost: config.runtimeHost,
   runtimePort: config.runtimePort,
   onControlCommand: handleDesktopControlCommand,
@@ -249,6 +250,14 @@ async function handleDesktopControlCommand(command) {
       removedCount: removedRules.length,
       forgottenCount: forgottenRules.length,
     };
+  }
+
+  if (command.type === "set_devices_metadata" && Array.isArray(command.devices)) {
+    pushedMetadataDevices = command.devices.filter(
+      (device) => device && typeof device === "object" && typeof device.id === "string",
+    );
+    emitGatewayState();
+    return { deviceCount: pushedMetadataDevices.length };
   }
 
   if (command.type === "start_manual_scan") {

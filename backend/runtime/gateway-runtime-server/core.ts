@@ -25,7 +25,7 @@ import { createMetadataManager } from "./metadata-manager.js";
 import { createRuntimeDeviceEventController } from "./runtime-events.js";
 
 export function createGatewayRuntimeServer({
-  apiBaseUrl,
+  loadDevicesMetadata = async () => [],
   runtimeHost,
   runtimePort,
   knownNodesPath = path.join(DEFAULT_KNOWN_NODE_DIR, "gateway-known-nodes.json"),
@@ -120,7 +120,7 @@ export function createGatewayRuntimeServer({
   }
 
   const metadataManager = createMetadataManager({
-    apiBaseUrl,
+    loadDevicesMetadata,
     metadataByDeviceId,
     debug,
   });

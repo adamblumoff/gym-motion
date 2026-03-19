@@ -328,6 +328,16 @@ export function createE2eRuntimeStore() {
       );
     },
 
+    async listRecentActivity(limit = 30) {
+      return sortActivities(
+        [
+          ...[...motionEvents.values()].flat().map(motionToActivity),
+          ...[...deviceLogs.values()].flat().map(logToActivity),
+        ],
+        Math.min(Math.max(limit, 1), 250),
+      );
+    },
+
     async listDeviceMotionEventsByReceivedAt(args: {
       deviceId: string;
       startReceivedAt: string;

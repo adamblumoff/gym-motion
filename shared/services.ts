@@ -26,6 +26,7 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   resumeApprovedNodeReconnect: "runtime:resume-approved-node-reconnect",
   setAllowedNodes: "runtime:set-allowed-nodes",
   getDeviceAnalytics: "runtime:get-device-analytics",
+  getDeviceActivity: "runtime:get-device-activity",
   updated: "runtime:updated",
 } as const;
 
@@ -110,6 +111,7 @@ export type DesktopApi = {
   resumeApprovedNodeReconnect: (ruleId: string) => Promise<void>;
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
+  getDeviceActivity: (deviceId: string, limit?: number) => Promise<DeviceActivitySummary[]>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;
   setThemePreference: (preference: ThemePreference) => Promise<ThemeState>;

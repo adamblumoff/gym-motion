@@ -10,6 +10,7 @@ export {
   recordDeviceLog,
   listDeviceLogs,
   listDeviceActivity,
+  listRecentActivity,
   getDeviceSyncState,
   recordBackfillBatch,
 } from "./telemetry";

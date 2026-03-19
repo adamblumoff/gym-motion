@@ -8,5 +8,5 @@ export {
   listDevices,
   listRecentEvents,
 } from "./motion-events";
-export { recordDeviceLog, listDeviceLogs, listDeviceActivity } from "./logs";
+export { recordDeviceLog, listDeviceLogs, listDeviceActivity, listRecentActivity } from "./logs";
 export { getDeviceSyncState, recordBackfillBatch } from "./backfill";
