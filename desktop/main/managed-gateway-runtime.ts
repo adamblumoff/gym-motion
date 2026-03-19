@@ -119,6 +119,10 @@ export function createManagedGatewayRuntime(
         analytics,
       });
     },
+    hasMotionRollupTables: e2eRuntimeStore ? async () => true : undefined,
+    listDeviceMotionEventsByReceivedAt: e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
+    findLatestDeviceMotionEventBeforeReceivedAt:
+      e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
     listMotionRollupBuckets: e2eRuntimeStore?.listMotionRollupBuckets,
     getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
@@ -155,6 +159,17 @@ export function createManagedGatewayRuntime(
       runtimeState,
       gatewayIssue,
     });
+  }
+
+  function setGatewayIssue(issue: string | null) {
+    snapshot = {
+      ...snapshot,
+      gatewayIssue: issue,
+      liveStatus: liveStatusFor({
+        ...snapshot,
+        gatewayIssue: issue,
+      }),
+    };
   }
 
   function readApprovedNodes() {
@@ -459,6 +474,15 @@ export function createManagedGatewayRuntime(
     runtimeStartIssue,
     startChild,
     refreshHistory,
+    setGatewayIssue,
+    onHistoryRefreshError: (error) => {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "History refresh failed while starting the gateway runtime.";
+      setGatewayIssue(`History refresh unavailable: ${detail}`);
+      console.error("[runtime] history refresh failed during startup", error);
+    },
     applyManualScanPayload,
     emitSnapshot: () => {
       emit({ type: "snapshot", snapshot });
