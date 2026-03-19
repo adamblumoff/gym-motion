@@ -482,6 +482,16 @@ function applyStep(name) {
       sendPersistMotion("moving", 12);
       sendDeviceLog("info", "motion.telemetry", "Motion telemetry arrived while transport stayed disconnected.");
       return { ok: true };
+    case "emitMovingTelemetry":
+      syncRuntimeIdentityFromApprovedRules();
+      setConnected();
+      sendPersistMotion("moving", 12);
+      return { ok: true };
+    case "emitStillTelemetry":
+      syncRuntimeIdentityFromApprovedRules();
+      setConnected();
+      sendPersistMotion("still", 0);
+      return { ok: true };
     default:
       throw new Error(`Unsupported E2E step: ${name}`);
   }

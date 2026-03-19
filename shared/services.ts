@@ -50,7 +50,9 @@ export type DesktopTestStepName =
   | "adapterOff"
   | "adapterOn"
   | "lateDiscovery"
-  | "telemetryWhileDisconnected";
+  | "telemetryWhileDisconnected"
+  | "emitMovingTelemetry"
+  | "emitStillTelemetry";
 
 export type DesktopTestApi = {
   step: (name: DesktopTestStepName, payload?: unknown) => Promise<unknown>;
