@@ -26,10 +26,13 @@ function sequenceConflictClause() {
 
 function buildBackfillReceivedAtIso(args: {
   anchorReceivedAtMs: number;
-  anchorDeviceTimestamp: number | null;
-  recordTimestamp: number | null;
+  anchorDeviceTimestamp: number | string | null;
+  recordTimestamp: number | string | null;
 }) {
-  const { anchorReceivedAtMs, anchorDeviceTimestamp, recordTimestamp } = args;
+  const { anchorReceivedAtMs } = args;
+  const anchorDeviceTimestamp =
+    args.anchorDeviceTimestamp === null ? null : Number(args.anchorDeviceTimestamp);
+  const recordTimestamp = args.recordTimestamp === null ? null : Number(args.recordTimestamp);
 
   if (
     anchorDeviceTimestamp === null ||
@@ -192,7 +195,7 @@ export async function recordBackfillBatch(
     const normalizedMaxBatchTimestamp = Number.isFinite(maxBatchTimestamp) ? maxBatchTimestamp : null;
     const anchorDeviceTimestamp =
       existingDevice?.boot_id === normalizedActiveBootId && existingDevice.last_seen_at !== null
-        ? existingDevice.last_seen_at
+        ? Number(existingDevice.last_seen_at)
         : normalizedMaxBatchTimestamp;
     const motionRecords = input.records
       .filter((record): record is Extract<BackfillBatchInput["records"][number], { kind: "motion" }> =>
@@ -203,10 +206,10 @@ export async function recordBackfillBatch(
         state: record.state,
         delta: record.delta ?? null,
         timestamp: record.timestamp,
-        bootId: record.bootId ?? activeBootId ?? null,
-        firmwareVersion: record.firmwareVersion ?? null,
-        hardwareId: record.hardwareId ?? null,
-        receivedAt: buildBackfillReceivedAtIso({
+        boot_id: record.bootId ?? activeBootId ?? null,
+        firmware_version: record.firmwareVersion ?? null,
+        hardware_id: record.hardwareId ?? null,
+        received_at: buildBackfillReceivedAtIso({
           anchorReceivedAtMs,
           anchorDeviceTimestamp,
           recordTimestamp: record.timestamp,
@@ -222,11 +225,11 @@ export async function recordBackfillBatch(
         code: record.code,
         message: record.message,
         timestamp: record.timestamp ?? null,
-        bootId: record.bootId ?? activeBootId ?? null,
-        firmwareVersion: record.firmwareVersion ?? null,
-        hardwareId: record.hardwareId ?? null,
+        boot_id: record.bootId ?? activeBootId ?? null,
+        firmware_version: record.firmwareVersion ?? null,
+        hardware_id: record.hardwareId ?? null,
         metadata: record.metadata ?? null,
-        receivedAt: buildBackfillReceivedAtIso({
+        received_at: buildBackfillReceivedAtIso({
           anchorReceivedAtMs,
           anchorDeviceTimestamp,
           recordTimestamp: record.timestamp ?? null,

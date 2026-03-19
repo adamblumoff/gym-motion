@@ -270,8 +270,8 @@ describeDb("backfill repository", () => {
 
     const events = await listDeviceMotionEventsByReceivedAt({
       deviceId: "stack-001",
-      startTimestamp: Date.parse(result.insertedEvents[0]!.receivedAt) - 1,
-      endTimestamp: Date.parse(liveWrite.event!.receivedAt) + 1,
+      startReceivedAt: new Date(Date.parse(result.insertedEvents[0]!.receivedAt) - 1).toISOString(),
+      endReceivedAt: new Date(Date.parse(liveWrite.event!.receivedAt) + 1).toISOString(),
     });
 
     expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]);

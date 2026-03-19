@@ -135,7 +135,6 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     order by spool.id asc
   `);
   const deleteRow = database.prepare(`delete from ingest_spool where id = ?`);
-  const deleteRowByMessageId = database.prepare(`delete from ingest_spool where message_id = ?`);
   const markFailed = database.prepare(`
     update ingest_spool
     set attempt_count = attempt_count + 1,
