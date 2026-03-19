@@ -11,6 +11,7 @@ export {
 export { recordDeviceLog, listDeviceLogs, listDeviceActivity, listRecentActivity } from "./logs";
 export { getDeviceSyncState, recordBackfillBatch } from "./backfill";
 export {
+  hasMotionRollupTables,
   listMotionRollupBuckets,
   rebuildMotionRollups,
   refreshMotionRollupsForDeviceRange,

@@ -69,7 +69,7 @@ describeDb("backfill repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "moving",
-      timestamp: 100,
+      timestamp: 100_000,
       delta: 5,
       sequence: 1,
       bootId: "boot-1",
@@ -79,7 +79,7 @@ describeDb("backfill repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "still",
-      timestamp: 300,
+      timestamp: 300_000,
       delta: 0,
       sequence: 3,
       bootId: "boot-1",
@@ -112,7 +112,7 @@ describeDb("backfill repository", () => {
           sequence: 2,
           state: "still",
           delta: 0,
-          timestamp: 200,
+          timestamp: 200_000,
           bootId: "boot-1",
           firmwareVersion: "0.5.3",
           hardwareId: "hw-1",

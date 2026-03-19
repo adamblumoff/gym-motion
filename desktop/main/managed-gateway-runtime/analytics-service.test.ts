@@ -24,6 +24,7 @@ describe("createAnalyticsService", () => {
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated,
+      hasMotionRollupTables: async () => true,
       listMotionRollupBuckets: async () => [
         {
           deviceId: "stack-001",
@@ -134,6 +135,7 @@ describe("createAnalyticsService", () => {
         reconnectRetryExhausted: false,
       }),
       onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => true,
       listMotionRollupBuckets: async () => [],
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
@@ -152,5 +154,60 @@ describe("createAnalyticsService", () => {
     expect(analytics.source).toBe("cache");
     expect(analytics.warningFlags).toContain("sync-delayed");
     expect(analytics.warningFlags).toContain("stale-cache");
+  });
+
+  it("falls back to raw history when rollup tables are unavailable", async () => {
+    const service = createAnalyticsService({
+      store: createStore(),
+      getRuntimeDevice: () => null,
+      onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => false,
+      listDeviceMotionEventsByReceivedAt: async () => [
+        {
+          id: 1,
+          deviceId: "stack-001",
+          sequence: 1,
+          state: "moving",
+          delta: 3,
+          eventTimestamp: 1000,
+          receivedAt: "2026-03-18T12:10:00.000Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+        {
+          id: 2,
+          deviceId: "stack-001",
+          sequence: 2,
+          state: "still",
+          delta: 0,
+          eventTimestamp: 2000,
+          receivedAt: "2026-03-18T12:25:00.000Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+      ],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      listMotionRollupBuckets: async () => {
+        throw new Error("should not use rollup buckets");
+      },
+      getDeviceSyncState: async () => ({
+        deviceId: "stack-001",
+        lastAckedSequence: 2,
+        lastAckedBootId: "boot-1",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastOverflowDetectedAt: null,
+      }),
+    });
+
+    const analytics = await service.getDeviceAnalytics({
+      deviceId: "stack-001",
+      window: "24h",
+    });
+
+    expect(analytics.totalMovementCount).toBe(1);
+    expect(analytics.totalMovingSeconds).toBe(15 * 60);
+    expect(analytics.buckets.some((bucket) => bucket.movingSeconds === 15 * 60)).toBe(true);
   });
 });

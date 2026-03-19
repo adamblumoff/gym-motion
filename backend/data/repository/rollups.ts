@@ -6,6 +6,10 @@ import { type MotionEventRow, mapMotionEventRow } from "./shared";
 
 type Queryable = Pick<PoolClient, "query">;
 
+declare global {
+  var motionRollupTablesAvailable: boolean | undefined;
+}
+
 type RollupDefinition = {
   tableName: "motion_rollups_hourly" | "motion_rollups_daily";
   bucketMs: number;
@@ -40,6 +44,48 @@ const ROLLUP_DEFINITIONS: RollupDefinition[] = [
     bucketMs: DAILY_BUCKET_MS,
   },
 ];
+
+function isMissingRelationError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "42P01"
+  );
+}
+
+async function queryMotionRollupAvailability(client: Queryable) {
+  const result = await client.query<{
+    hourly_name: string | null;
+    daily_name: string | null;
+  }>(
+    `select
+       to_regclass('public.motion_rollups_hourly') as hourly_name,
+       to_regclass('public.motion_rollups_daily') as daily_name`,
+  );
+  const row = result.rows[0];
+
+  return Boolean(row?.hourly_name && row.daily_name);
+}
+
+export async function hasMotionRollupTables(client?: Queryable) {
+  if (globalThis.motionRollupTablesAvailable !== undefined) {
+    return globalThis.motionRollupTablesAvailable;
+  }
+
+  try {
+    const available = await queryMotionRollupAvailability(client ?? getDb());
+    globalThis.motionRollupTablesAvailable = available;
+    return available;
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      globalThis.motionRollupTablesAvailable = false;
+      return false;
+    }
+
+    throw error;
+  }
+}
 
 function toSafeNumber(value: string | number) {
   const numericValue = typeof value === "number" ? value : Number(value);
@@ -308,6 +354,10 @@ export async function refreshMotionRollupsForDeviceRange(args: {
   rangeStart: number;
   rangeEndExclusive: number;
 }) {
+  if (!(await hasMotionRollupTables(args.client))) {
+    return;
+  }
+
   for (const definition of ROLLUP_DEFINITIONS) {
     await replaceRollupBuckets({
       client: args.client,
@@ -382,6 +432,10 @@ async function insertContributionMap(args: {
 }
 
 export async function rebuildMotionRollups(client: Queryable, deviceId?: string) {
+  if (!(await hasMotionRollupTables(client))) {
+    throw new Error("Motion rollup tables are not available in the target database.");
+  }
+
   if (deviceId) {
     for (const definition of ROLLUP_DEFINITIONS) {
       await client.query(`delete from ${definition.tableName} where device_id = $1`, [deviceId]);
@@ -447,6 +501,10 @@ export async function listMotionRollupBuckets(args: {
   startBucket: number;
   endBucketExclusive: number;
 }) {
+  if (!(await hasMotionRollupTables())) {
+    return [];
+  }
+
   const definition =
     args.window === "24h"
       ? ROLLUP_DEFINITIONS[0]

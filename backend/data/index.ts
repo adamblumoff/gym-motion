@@ -15,6 +15,7 @@ export {
   findLatestDeviceMotionEventBefore,
   findLatestDeviceMotionEventBeforeReceivedAt,
   getDeviceSyncState,
+  hasMotionRollupTables,
   listDeviceActivity,
   listDeviceLogs,
   listRecentActivity,

@@ -13,6 +13,7 @@ export {
   listRecentActivity,
   getDeviceSyncState,
   recordBackfillBatch,
+  hasMotionRollupTables,
   listMotionRollupBuckets,
   rebuildMotionRollups,
   refreshMotionRollupsForDeviceRange,

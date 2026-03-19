@@ -58,7 +58,7 @@ describeDb("motion event repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "moving",
-      timestamp: 100,
+      timestamp: 100_000,
       delta: 9,
       sequence: 4,
       bootId: "boot-1",
@@ -68,7 +68,7 @@ describeDb("motion event repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "still",
-      timestamp: 110,
+      timestamp: 110_000,
       delta: 0,
       sequence: 5,
       bootId: "boot-1",
@@ -78,7 +78,7 @@ describeDb("motion event repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "still",
-      timestamp: 110,
+      timestamp: 110_000,
       delta: 0,
       sequence: 5,
       bootId: "boot-1",
@@ -198,7 +198,7 @@ describeDb("motion event repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "moving",
-      timestamp: 100,
+      timestamp: 100_000,
       delta: 1,
       sequence: 1,
       bootId: "boot-1",
@@ -208,7 +208,7 @@ describeDb("motion event repository", () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "still",
-      timestamp: 130,
+      timestamp: 130_000,
       delta: 0,
       sequence: 2,
       bootId: "boot-1",
