@@ -41,8 +41,8 @@ jobs:
             echo "ROLLOUT_STATE=active" >> "$GITHUB_ENV"
           fi
 
-      - name: Set up Arduino CLI
-        uses: arduino/setup-arduino-cli@v2
+      - name: Install Arduino CLI
+        run: ./scripts/install-arduino-cli.sh
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2

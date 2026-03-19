@@ -18,6 +18,9 @@ export default defineConfig({
     globals: true,
     include: ["backend/**/*.db.test.ts"],
     pool: "forks",
+    fileParallelism: false,
+    maxWorkers: 1,
+    minWorkers: 1,
     coverage: {
       enabled: false,
     },

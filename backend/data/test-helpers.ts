@@ -11,6 +11,10 @@ export function hasDatabaseTestEnv() {
 
 export async function resetDatabaseSchema() {
   const db = getDb();
+  await db.query("drop schema if exists public cascade;");
+  await db.query("create schema public;");
+  await db.query("grant all on schema public to current_user;");
+  await db.query("grant all on schema public to public;");
   const filenames = (await readdir(SQL_DIR))
     .filter((filename) => filename.endsWith(".sql"))
     .sort();
