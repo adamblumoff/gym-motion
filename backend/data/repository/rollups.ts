@@ -340,11 +340,9 @@ async function replaceRollupBuckets(args: {
     [args.deviceId, firstBucketStart, lastBucketStart],
   );
 
-  const [precedingEvent, inWindowEvents, trailingEvent] = await Promise.all([
-    findLatestEventBefore(args.client, args.deviceId, windowStart),
-    listEventsBetween(args.client, args.deviceId, windowStart, windowEnd),
-    findFirstEventAtOrAfter(args.client, args.deviceId, windowEnd),
-  ]);
+  const precedingEvent = await findLatestEventBefore(args.client, args.deviceId, windowStart);
+  const inWindowEvents = await listEventsBetween(args.client, args.deviceId, windowStart, windowEnd);
+  const trailingEvent = await findFirstEventAtOrAfter(args.client, args.deviceId, windowEnd);
 
   const events = trailingEvent ? [...inWindowEvents, trailingEvent] : inWindowEvents;
   const bucketMap = summarizeEventsWithinWindow({
