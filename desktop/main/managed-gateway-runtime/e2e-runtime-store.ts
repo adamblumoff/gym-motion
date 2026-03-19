@@ -284,6 +284,10 @@ export function createE2eRuntimeStore() {
     recordLog,
     recordBackfill,
 
+    async getDevice(deviceId: string) {
+      return getDevice(deviceId);
+    },
+
     async listDevices() {
       return [...devices.values()]
         .map(clone)
@@ -304,6 +308,17 @@ export function createE2eRuntimeStore() {
             right.id - left.id,
         )
         .slice(0, limit);
+    },
+
+    async listDeviceRecentEvents(args: { deviceId: string; limit?: number }) {
+      return [...(motionEvents.get(args.deviceId) ?? [])]
+        .map(clone)
+        .sort(
+          (left, right) =>
+            Date.parse(right.receivedAt) - Date.parse(left.receivedAt) ||
+            right.id - left.id,
+        )
+        .slice(0, Math.min(Math.max(args.limit ?? 12, 1), 250));
     },
 
     async listDeviceLogs(options?: { deviceId?: string | null; limit?: number }) {

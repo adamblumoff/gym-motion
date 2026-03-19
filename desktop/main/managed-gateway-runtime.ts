@@ -394,8 +394,10 @@ export function createManagedGatewayRuntime(
     setSnapshot: (nextSnapshot) => {
       snapshot = nextSnapshot;
     },
+    getDevice: e2eRuntimeStore?.getDevice,
     listDevices: e2eRuntimeStore?.listDevices,
     listRecentEvents: e2eRuntimeStore?.listRecentEvents,
+    listDeviceRecentEvents: e2eRuntimeStore?.listDeviceRecentEvents,
     listDeviceLogs: e2eRuntimeStore?.listDeviceLogs,
     listDeviceActivity: e2eRuntimeStore?.listDeviceActivity,
     listRecentActivity: e2eRuntimeStore?.listRecentActivity,
@@ -410,6 +412,7 @@ export function createManagedGatewayRuntime(
       pruneForgottenDevicesFromSnapshot(nextSnapshot, readApprovedNodes()),
     emit,
     refreshHistory: () => runtimeSync.refreshHistory(),
+    refreshDeviceHistory: (deviceId) => runtimeSync.refreshDeviceHistory(deviceId),
     refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
     reportHistoryRefreshFailure,

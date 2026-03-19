@@ -41,6 +41,7 @@ describe("createDataEventHandler", () => {
       pruneSnapshot: (nextSnapshot) => nextSnapshot,
       emit: (event) => emittedEvents.push(event.type),
       refreshHistory: async () => {},
+      refreshDeviceHistory: async () => {},
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
       reportHistoryRefreshFailure: () => {},
@@ -77,7 +78,7 @@ describe("createDataEventHandler", () => {
     const refreshAnalyticsNowCalls: string[] = [];
     const scheduleAnalyticsRefreshCalls: string[] = [];
     const emittedEvents: string[] = [];
-    let refreshHistoryCalls = 0;
+    const refreshedDevices: string[] = [];
     let snapshot = createEmptySnapshot();
 
     const applyDataEvent = createDataEventHandler({
@@ -88,7 +89,10 @@ describe("createDataEventHandler", () => {
       pruneSnapshot: (nextSnapshot) => nextSnapshot,
       emit: (event) => emittedEvents.push(event.type),
       refreshHistory: async () => {
-        refreshHistoryCalls += 1;
+        throw new Error("should not refresh full history");
+      },
+      refreshDeviceHistory: async (deviceId) => {
+        refreshedDevices.push(deviceId);
       },
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
@@ -107,7 +111,7 @@ describe("createDataEventHandler", () => {
 
     expect(refreshAnalyticsNowCalls).toEqual([]);
     expect(scheduleAnalyticsRefreshCalls).toEqual(["stack-001"]);
-    expect(refreshHistoryCalls).toBe(1);
+    expect(refreshedDevices).toEqual(["stack-001"]);
     expect(emittedEvents).toContain("snapshot");
   });
 });

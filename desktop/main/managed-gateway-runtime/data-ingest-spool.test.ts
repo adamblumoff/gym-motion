@@ -55,7 +55,7 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    const firstEnqueue = spool.enqueue({
+    await spool.enqueue({
       messageId: "msg-1",
       type: "persist-motion",
       deviceId: "stack-001",
@@ -68,7 +68,6 @@ describe("createDataIngestSpool", () => {
     });
 
     await waitFor(() => attemptedSequences.length === 1);
-    firstEnqueue.catch(() => {});
     await spool.stop();
 
     const database = new DatabaseSync(dbPath);
@@ -97,7 +96,7 @@ describe("createDataIngestSpool", () => {
     });
 
     await replaySpool.start();
-    const replayEnqueue = replaySpool.enqueue({
+    const replayEnqueue = replaySpool.enqueueAndDrain({
       messageId: "msg-1",
       type: "persist-motion",
       deviceId: "stack-001",
@@ -142,7 +141,7 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    const enqueuePromise = spool.enqueue({
+    const enqueuePromise = spool.enqueueAndDrain({
       messageId: "msg-2",
       type: "persist-motion",
       deviceId: "stack-001",
@@ -197,7 +196,7 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    const enqueuePromise = spool.enqueue({
+    const enqueuePromise = spool.enqueueAndDrain({
       messageId: "msg-3",
       type: "persist-motion",
       deviceId: "stack-001",
@@ -259,5 +258,49 @@ describe("createDataIngestSpool", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
     warnSpy.mockRestore();
+  });
+
+  it("acknowledges durable enqueue before the downstream drain finishes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-spool-"));
+    tempDirs.push(tempDir);
+    const dbPath = path.join(tempDir, "ingest-spool.sqlite");
+    let resolvePersist: (() => void) | null = null;
+    let persistStarted = false;
+
+    const spool = createDataIngestSpool({
+      dbPath,
+      persistValidatedMessage() {
+        persistStarted = true;
+        return new Promise<void>((resolve) => {
+          resolvePersist = resolve;
+        });
+      },
+    });
+
+    await spool.start();
+    await spool.enqueue({
+      messageId: "msg-5",
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 1,
+        sequence: 8,
+      },
+    });
+
+    const database = new DatabaseSync(dbPath);
+    const queuedRow = database.prepare(`
+      select count(*) as row_count
+      from ingest_spool
+      where message_id = ?
+    `).get("msg-5") as { row_count?: number } | undefined;
+    database.close();
+
+    expect(queuedRow?.row_count).toBe(1);
+    await waitFor(() => persistStarted);
+    resolvePersist?.();
+    await spool.stop();
   });
 });

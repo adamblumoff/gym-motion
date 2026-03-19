@@ -3,6 +3,7 @@ export {
   recordHeartbeat,
   listDevices,
   listRecentEvents,
+  listDeviceRecentEvents,
   listDeviceMotionEvents,
   listDeviceMotionEventsByReceivedAt,
   findLatestDeviceMotionEventBefore,
@@ -21,6 +22,7 @@ export {
 
 export {
   createOrUpdateDeviceRegistration,
+  getDevice,
   updateDeviceAssignment,
   purgeDeviceData,
 } from "./devices";

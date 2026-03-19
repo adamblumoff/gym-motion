@@ -29,6 +29,7 @@ export type DataIngestSpool = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   enqueue: (message: GatewayChildPersistMessage) => Promise<void>;
+  enqueueAndDrain: (message: GatewayChildPersistMessage) => Promise<void>;
 };
 
 const MAX_BACKOFF_MS = 30_000;
@@ -303,6 +304,46 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     }
   }
 
+  async function enqueueInternal(
+    message: GatewayChildPersistMessage,
+    options?: { waitForDrain?: boolean },
+  ) {
+    if (state !== "running") {
+      if (!didWarnOnRejectedEnqueue) {
+        didWarnOnRejectedEnqueue = true;
+        console.warn("[runtime] rejected ingest spool enqueue because the runtime is stopping.");
+      }
+
+      throw new Error(STOPPING_ERROR_MESSAGE);
+    }
+
+    const validated = validateGatewayChildPersistMessage(message);
+    const timestamp = nowIso();
+
+    insertRow.run(
+      validated.messageId,
+      validated.deviceId,
+      validated.type,
+      JSON.stringify(validated.payload),
+      timestamp,
+      timestamp,
+    );
+
+    const existingRow = selectRowByMessageId.get(validated.messageId) as
+      | IngestSpoolRow
+      | undefined;
+
+    if (!existingRow) {
+      return;
+    }
+
+    const completion = options?.waitForDrain ? awaitMessage(validated.messageId) : null;
+    scheduleDrain();
+    if (completion) {
+      return await completion;
+    }
+  }
+
   return {
     async start() {
       if (state === "stopped") {
@@ -331,38 +372,10 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       await stopPromise;
     },
     async enqueue(message) {
-      if (state !== "running") {
-        if (!didWarnOnRejectedEnqueue) {
-          didWarnOnRejectedEnqueue = true;
-          console.warn("[runtime] rejected ingest spool enqueue because the runtime is stopping.");
-        }
-
-        throw new Error(STOPPING_ERROR_MESSAGE);
-      }
-
-      const validated = validateGatewayChildPersistMessage(message);
-      const timestamp = nowIso();
-
-      insertRow.run(
-        validated.messageId,
-        validated.deviceId,
-        validated.type,
-        JSON.stringify(validated.payload),
-        timestamp,
-        timestamp,
-      );
-
-      const existingRow = selectRowByMessageId.get(validated.messageId) as
-        | IngestSpoolRow
-        | undefined;
-
-      if (!existingRow) {
-        return;
-      }
-
-      const completion = awaitMessage(validated.messageId);
-      scheduleDrain();
-      return await completion;
+      await enqueueInternal(message);
+    },
+    async enqueueAndDrain(message) {
+      await enqueueInternal(message, { waitForDrain: true });
     },
   };
 }

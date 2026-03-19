@@ -101,6 +101,19 @@ export async function updateDeviceAssignment(
   return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;
 }
 
+export async function getDevice(deviceId: string): Promise<DeviceSummary | null> {
+  const result = await getDb().query<DeviceRow>(
+    `select
+       ${DEVICE_SELECT_COLUMNS}
+     from devices
+     where id = $1
+     limit 1`,
+    [deviceId],
+  );
+
+  return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;
+}
+
 export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupResult> {
   const client = await getDb().connect();
 

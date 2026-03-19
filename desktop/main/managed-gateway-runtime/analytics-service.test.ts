@@ -21,37 +21,23 @@ describe("createAnalyticsService", () => {
   it("builds canonical snapshots from rollup buckets", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-18T12:30:00.000Z"));
     const onUpdated = vi.fn();
+    const listMotionRollupBuckets = vi.fn(async () => [
+      {
+        deviceId: "stack-001",
+        bucketStart: Date.parse("2026-03-18T12:00:00.000Z"),
+        movementCount: 1,
+        movingSeconds: 900,
+        updatedAt: "2026-03-18T12:30:00.000Z",
+      },
+    ]);
     const service = createAnalyticsService({
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated,
-      listDeviceMotionEventsByReceivedAt: async () => [
-        {
-          deviceId: "stack-001",
-          id: 1,
-          sequence: 10,
-          state: "moving",
-          delta: 2,
-          eventTimestamp: 1000,
-          receivedAt: "2026-03-18T12:10:00.000Z",
-          bootId: "boot-1",
-          firmwareVersion: "1.0.0",
-          hardwareId: "hw-1",
-        },
-        {
-          deviceId: "stack-001",
-          id: 2,
-          sequence: 11,
-          state: "still",
-          delta: 0,
-          eventTimestamp: 2000,
-          receivedAt: "2026-03-18T12:25:00.000Z",
-          bootId: "boot-1",
-          firmwareVersion: "1.0.0",
-          hardwareId: "hw-1",
-        },
-      ],
-      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets,
+      listDeviceMotionEventsByReceivedAt: vi.fn(async () => []),
+      findLatestDeviceMotionEventBeforeReceivedAt: vi.fn(async () => null),
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
         lastAckedSequence: 10,
@@ -70,6 +56,7 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovementCount).toBe(1);
     expect(analytics.totalMovingSeconds).toBe(900);
     expect(analytics.buckets.some((bucket) => bucket.movementCount === 1)).toBe(true);
+    expect(listMotionRollupBuckets).toHaveBeenCalledOnce();
     expect(onUpdated).not.toHaveBeenCalled();
     nowSpy.mockRestore();
   });
@@ -154,6 +141,8 @@ describe("createAnalyticsService", () => {
         reconnectRetryExhausted: false,
       }),
       onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets: async () => [],
       listDeviceMotionEventsByReceivedAt: async () => [],
       findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
       getDeviceSyncState: async () => ({
@@ -177,36 +166,39 @@ describe("createAnalyticsService", () => {
 
   it("falls back to raw history when rollup tables are unavailable", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-18T12:30:00.000Z"));
+    const listDeviceMotionEventsByReceivedAt = vi.fn(async () => [
+      {
+        id: 1,
+        deviceId: "stack-001",
+        sequence: 1,
+        state: "moving",
+        delta: 3,
+        eventTimestamp: Date.parse("2026-03-18T12:10:00.000Z"),
+        receivedAt: "2026-03-18T12:10:00.000Z",
+        bootId: "boot-1",
+        firmwareVersion: "1.0.0",
+        hardwareId: "hw-1",
+      },
+      {
+        id: 2,
+        deviceId: "stack-001",
+        sequence: 2,
+        state: "still",
+        delta: 0,
+        eventTimestamp: Date.parse("2026-03-18T12:25:00.000Z"),
+        receivedAt: "2026-03-18T12:25:00.000Z",
+        bootId: "boot-1",
+        firmwareVersion: "1.0.0",
+        hardwareId: "hw-1",
+      },
+    ]);
     const service = createAnalyticsService({
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated: vi.fn(),
-      listDeviceMotionEventsByReceivedAt: async () => [
-        {
-          id: 1,
-          deviceId: "stack-001",
-          sequence: 1,
-          state: "moving",
-          delta: 3,
-          eventTimestamp: Date.parse("2026-03-18T12:10:00.000Z"),
-          receivedAt: "2026-03-18T12:10:00.000Z",
-          bootId: "boot-1",
-          firmwareVersion: "1.0.0",
-          hardwareId: "hw-1",
-        },
-        {
-          id: 2,
-          deviceId: "stack-001",
-          sequence: 2,
-          state: "still",
-          delta: 0,
-          eventTimestamp: Date.parse("2026-03-18T12:25:00.000Z"),
-          receivedAt: "2026-03-18T12:25:00.000Z",
-          bootId: "boot-1",
-          firmwareVersion: "1.0.0",
-          hardwareId: "hw-1",
-        },
-      ],
+      hasMotionRollupTables: async () => false,
+      listMotionRollupBuckets: vi.fn(async () => []),
+      listDeviceMotionEventsByReceivedAt,
       findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
       getDeviceSyncState: async () => ({
         deviceId: "stack-001",
@@ -225,6 +217,7 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovementCount).toBe(1);
     expect(analytics.totalMovingSeconds).toBe(15 * 60);
     expect(analytics.buckets.some((bucket) => bucket.movingSeconds === 15 * 60)).toBe(true);
+    expect(listDeviceMotionEventsByReceivedAt).toHaveBeenCalledOnce();
     nowSpy.mockRestore();
   });
 
@@ -234,6 +227,8 @@ describe("createAnalyticsService", () => {
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => false,
+      listMotionRollupBuckets: async () => [],
       listDeviceMotionEventsByReceivedAt: async () => [
         {
           id: 1,
@@ -320,6 +315,8 @@ describe("createAnalyticsService", () => {
       }),
       getRuntimeDevice: () => null,
       onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets: async () => [],
       getDeviceSyncState: async () => {
         throw new Error("Connection terminated unexpectedly");
       },
@@ -382,6 +379,8 @@ describe("createAnalyticsService", () => {
       }),
       getRuntimeDevice: () => null,
       onUpdated,
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets: async () => [],
       getDeviceSyncState: async () => {
         throw new Error("Connection terminated unexpectedly");
       },

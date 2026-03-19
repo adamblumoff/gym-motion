@@ -1,6 +1,7 @@
 export {
   findLatestDeviceMotionEventBefore,
   findLatestDeviceMotionEventBeforeReceivedAt,
+  listDeviceRecentEvents,
   recordMotionEvent,
   recordHeartbeat,
   listDeviceMotionEvents,

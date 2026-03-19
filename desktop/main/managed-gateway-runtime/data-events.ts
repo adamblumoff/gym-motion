@@ -22,20 +22,21 @@ type DataEventHandlerDeps = {
   pruneSnapshot: (snapshot: DesktopSnapshot) => DesktopSnapshot;
   emit: (event: DesktopRuntimeEvent) => void;
   refreshHistory: () => Promise<void>;
+  refreshDeviceHistory: (deviceId: string) => Promise<void>;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
   reportHistoryRefreshFailure: (detail: string) => void;
   clearHistoryRefreshFailure: () => void;
 };
 
-async function refreshHistoryWithRetry(refreshHistory: () => Promise<void>) {
+async function refreshWithRetry(work: () => Promise<void>) {
   try {
-    await refreshHistory();
+    await work();
     return;
   } catch (firstError) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     try {
-      await refreshHistory();
+      await work();
     } catch {
       throw firstError;
     }
@@ -150,7 +151,7 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         break;
       case "backfill-recorded":
         deps.scheduleAnalyticsRefresh(event.deviceId);
-        void refreshHistoryWithRetry(deps.refreshHistory)
+        void refreshWithRetry(() => deps.refreshDeviceHistory(event.deviceId))
           .then(() => {
             deps.clearHistoryRefreshFailure();
             deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });

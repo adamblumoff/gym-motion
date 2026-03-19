@@ -273,6 +273,33 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
   return result.rows.map(mapMotionEventRow);
 }
 
+export async function listDeviceRecentEvents(args: {
+  deviceId: string;
+  limit?: number;
+}): Promise<MotionEventSummary[]> {
+  const limit = Math.min(Math.max(args.limit ?? 12, 1), 250);
+  const result = await getDb().query<MotionEventRow>(
+    `select
+       id,
+       device_id,
+       sequence,
+       state,
+       delta,
+       event_timestamp,
+       received_at,
+       boot_id,
+       firmware_version,
+       hardware_id
+     from motion_events
+     where device_id = $1
+     order by received_at desc, id desc
+     limit $2`,
+    [args.deviceId, limit],
+  );
+
+  return result.rows.map(mapMotionEventRow);
+}
+
 export async function listDeviceMotionEvents(args: {
   deviceId: string;
   startTimestamp: number;

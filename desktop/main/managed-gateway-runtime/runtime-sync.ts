@@ -1,20 +1,29 @@
 import type { DesktopSnapshot, DeviceActivitySummary } from "@core/contracts";
 
 import {
+  getDevice,
   listDeviceActivity,
   listDeviceLogs,
+  listDeviceRecentEvents,
   listDevices,
   listRecentActivity,
   listRecentEvents,
 } from "../../../backend/data";
-import { mergeGatewayDeviceUpdate } from "@core/contracts";
+import {
+  mergeActivityUpdate,
+  mergeEventUpdate,
+  mergeGatewayDeviceUpdate,
+  mergeLogUpdate,
+} from "@core/contracts";
 import { mergeRepositoryDeviceIntoGatewaySnapshot } from "../gateway-snapshot";
 
 type RuntimeSyncDeps = {
   getSnapshot: () => DesktopSnapshot;
   setSnapshot: (snapshot: DesktopSnapshot) => void;
+  getDevice?: typeof getDevice;
   listDevices?: typeof listDevices;
   listRecentEvents?: typeof listRecentEvents;
+  listDeviceRecentEvents?: typeof listDeviceRecentEvents;
   listDeviceLogs?: typeof listDeviceLogs;
   listDeviceActivity?: typeof listDeviceActivity;
   listRecentActivity?: typeof listRecentActivity;
@@ -22,6 +31,7 @@ type RuntimeSyncDeps = {
 
 export type RuntimeSync = {
   refreshHistory: () => Promise<void>;
+  refreshDeviceHistory: (deviceId: string) => Promise<void>;
   getDeviceActivity: (deviceId: string, limit?: number) => Promise<DeviceActivitySummary[]>;
 };
 
@@ -46,7 +56,10 @@ async function loadSnapshotHistory(deps: RuntimeSyncDeps) {
 }
 
 export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
+  const loadDevice = deps.getDevice ?? getDevice;
   const loadDeviceActivity = deps.listDeviceActivity ?? listDeviceActivity;
+  const loadDeviceRecentEvents = deps.listDeviceRecentEvents ?? listDeviceRecentEvents;
+  const loadDeviceLogs = deps.listDeviceLogs ?? listDeviceLogs;
 
   async function refreshHistory() {
     const history = await loadSnapshotHistory(deps);
@@ -69,8 +82,50 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
     });
   }
 
+  async function refreshDeviceHistory(deviceId: string) {
+    const [repositoryDevice, deviceEvents, deviceLogs, deviceActivities] = await Promise.all([
+      loadDevice(deviceId),
+      loadDeviceRecentEvents({ deviceId, limit: 14 }),
+      loadDeviceLogs({ deviceId, limit: 18 }),
+      loadDeviceActivity({ deviceId, limit: 30 }),
+    ]);
+    const snapshot = deps.getSnapshot();
+    let devices = snapshot.devices;
+
+    if (repositoryDevice) {
+      devices = mergeGatewayDeviceUpdate(
+        devices,
+        mergeRepositoryDeviceIntoGatewaySnapshot(devices, repositoryDevice),
+      );
+    }
+
+    let events = snapshot.events.filter((event) => event.deviceId !== deviceId);
+    for (const event of deviceEvents.toReversed()) {
+      events = mergeEventUpdate(events, event, 14);
+    }
+
+    let logs = snapshot.logs.filter((log) => log.deviceId !== deviceId);
+    for (const log of deviceLogs.toReversed()) {
+      logs = mergeLogUpdate(logs, log, 18);
+    }
+
+    let activities = snapshot.activities.filter((activity) => activity.deviceId !== deviceId);
+    for (const activity of deviceActivities.toReversed()) {
+      activities = mergeActivityUpdate(activities, activity, 30);
+    }
+
+    deps.setSnapshot({
+      ...snapshot,
+      devices,
+      events,
+      logs,
+      activities,
+    });
+  }
+
   return {
     refreshHistory,
+    refreshDeviceHistory,
     async getDeviceActivity(deviceId, limit) {
       return loadDeviceActivity({ deviceId, limit });
     },
