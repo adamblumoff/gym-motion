@@ -210,4 +210,133 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovingSeconds).toBe(15 * 60);
     expect(analytics.buckets.some((bucket) => bucket.movingSeconds === 15 * 60)).toBe(true);
   });
+
+  it("returns stale cached analytics when sync state lookup fails", async () => {
+    const cachedSnapshot: DeviceAnalyticsSnapshot = {
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: "2026-03-18T12:30:00.000Z",
+      source: "canonical",
+      buckets: [
+        {
+          key: "24h-0",
+          label: "12",
+          startAt: "2026-03-18T12:00:00.000Z",
+          endAt: "2026-03-18T13:00:00.000Z",
+          movementCount: 1,
+          movingSeconds: 900,
+        },
+      ],
+      totalMovementCount: 1,
+      totalMovingSeconds: 900,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: "2026-03-18T12:30:00.000Z",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    };
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const service = createAnalyticsService({
+      store: createStore({
+        "gym-motion.desktop.analytics-cache.v1": {
+          "stack-001::24h": cachedSnapshot,
+        },
+      }),
+      getRuntimeDevice: () => null,
+      onUpdated: vi.fn(),
+      getDeviceSyncState: async () => {
+        throw new Error("Connection terminated unexpectedly");
+      },
+    });
+
+    const analytics = await service.getDeviceAnalytics({
+      deviceId: "stack-001",
+      window: "24h",
+    });
+
+    expect(analytics.source).toBe("cache");
+    expect(analytics.warningFlags).toContain("sync-failed");
+    expect(analytics.warningFlags).toContain("stale-cache");
+    expect(analytics.sync.state).toBe("failed");
+    expect(analytics.sync.detail).toContain("Connection terminated unexpectedly");
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[runtime] failed to load cached analytics sync state",
+      expect.any(Error),
+    );
+  });
+
+  it("emits stale cached analytics instead of rejecting when background sync state lookup fails", async () => {
+    const cachedSnapshot: DeviceAnalyticsSnapshot = {
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: "2026-03-18T12:30:00.000Z",
+      source: "canonical",
+      buckets: [
+        {
+          key: "24h-0",
+          label: "12",
+          startAt: "2026-03-18T12:00:00.000Z",
+          endAt: "2026-03-18T13:00:00.000Z",
+          movementCount: 1,
+          movingSeconds: 900,
+        },
+      ],
+      totalMovementCount: 1,
+      totalMovingSeconds: 900,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: "2026-03-18T12:30:00.000Z",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    };
+    const onUpdated = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const service = createAnalyticsService({
+      store: createStore({
+        "gym-motion.desktop.analytics-cache.v1": {
+          "stack-001::24h": cachedSnapshot,
+        },
+      }),
+      getRuntimeDevice: () => null,
+      onUpdated,
+      getDeviceSyncState: async () => {
+        throw new Error("Connection terminated unexpectedly");
+      },
+    });
+
+    service.markSyncFailure("stack-001", "db unavailable");
+
+    await vi.waitFor(() => {
+      expect(onUpdated).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "cache",
+        warningFlags: expect.arrayContaining(["sync-failed", "stale-cache"]),
+        sync: expect.objectContaining({
+          state: "failed",
+          detail: "db unavailable",
+        }),
+      }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[runtime] failed to refresh cached analytics sync state",
+      expect.any(Error),
+    );
+  });
 });

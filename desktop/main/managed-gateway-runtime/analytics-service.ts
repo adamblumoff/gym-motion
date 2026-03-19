@@ -208,6 +208,37 @@ function baseWarningFlags(
   );
 }
 
+function buildCachedSnapshotFromSync(
+  cached: DeviceAnalyticsSnapshot,
+  sync: DeviceAnalyticsSyncState,
+  options?: { markStaleWhileSyncing?: boolean },
+) {
+  const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
+    baseWarningFlags(cached.warningFlags),
+  );
+
+  if (sync.state === "syncing") {
+    warningFlags.add("sync-delayed");
+    if (options?.markStaleWhileSyncing) {
+      warningFlags.add("stale-cache");
+    }
+  }
+  if (sync.state === "failed") {
+    warningFlags.add("sync-failed");
+    warningFlags.add("stale-cache");
+  }
+  if (sync.lastOverflowDetectedAt) {
+    warningFlags.add("history-overflow");
+  }
+
+  return {
+    ...cached,
+    source: sync.state === "idle" ? "canonical" : "cache",
+    sync,
+    warningFlags: [...warningFlags],
+  } satisfies DeviceAnalyticsSnapshot;
+}
+
 function hydrateSyncState(
   deviceId: string,
   runtimeDevice: GatewayRuntimeDeviceSummary | null,
@@ -236,6 +267,18 @@ function hydrateSyncState(
     lastAckedSequence: syncSummary.lastAckedSequence,
     lastAckedBootId: syncSummary.lastAckedBootId,
     lastOverflowDetectedAt: syncSummary.lastOverflowDetectedAt,
+  };
+}
+
+function buildFailedCachedSyncState(
+  cached: DeviceAnalyticsSnapshot,
+  detail: string,
+): DeviceAnalyticsSyncState {
+  return {
+    ...cached.sync,
+    state: "failed",
+    detail,
+    lastCanonicalAt: cached.generatedAt,
   };
 }
 
@@ -370,6 +413,19 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
   async function emitCachedSnapshots(deviceId: string) {
     const cache = readCache();
+    const runtimeDevice = deps.getRuntimeDevice(deviceId);
+    const failureDetail = syncFailures.get(deviceId) ?? null;
+    let syncSummary: Awaited<ReturnType<typeof getDeviceSyncState>> | null = null;
+    let cachedSyncErrorDetail: string | null = null;
+
+    try {
+      syncSummary = await loadDeviceSyncState(deviceId);
+    } catch (error) {
+      cachedSyncErrorDetail =
+        failureDetail ??
+        (error instanceof Error ? error.message : "Analytics sync state refresh failed.");
+      console.error("[runtime] failed to refresh cached analytics sync state", error);
+    }
 
     for (const window of Object.keys(WINDOW_DEFINITIONS) as AnalyticsWindow[]) {
       const cached = cache[cacheKey(deviceId, window)];
@@ -377,35 +433,27 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         continue;
       }
 
-      const syncSummary = await loadDeviceSyncState(deviceId);
-      const sync = hydrateSyncState(
-        deviceId,
-        deps.getRuntimeDevice(deviceId),
-        cached.generatedAt,
-        syncSummary,
-        syncFailures.get(deviceId) ?? null,
-      );
-      const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
-        baseWarningFlags(cached.warningFlags),
-      );
-
-      if (sync.state === "syncing") {
-        warningFlags.add("sync-delayed");
-      }
-      if (sync.state === "failed") {
-        warningFlags.add("sync-failed");
-        warningFlags.add("stale-cache");
-      }
-      if (sync.lastOverflowDetectedAt) {
-        warningFlags.add("history-overflow");
+      if (syncSummary) {
+        const sync = hydrateSyncState(
+          deviceId,
+          runtimeDevice,
+          cached.generatedAt,
+          syncSummary,
+          failureDetail,
+        );
+        deps.onUpdated(buildCachedSnapshotFromSync(cached, sync));
+        continue;
       }
 
-      deps.onUpdated({
-        ...cached,
-        source: sync.state === "idle" ? "canonical" : "cache",
-        sync,
-        warningFlags: [...warningFlags],
-      });
+      deps.onUpdated(
+        buildCachedSnapshotFromSync(
+          cached,
+          buildFailedCachedSyncState(
+            cached,
+            cachedSyncErrorDetail ?? "Analytics sync state refresh failed.",
+          ),
+        ),
+      );
     }
   }
 
@@ -461,36 +509,28 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
       if (cached) {
         scheduleRefresh(input.deviceId);
-        const syncSummary = await loadDeviceSyncState(input.deviceId);
-        const sync = hydrateSyncState(
-          input.deviceId,
-          deps.getRuntimeDevice(input.deviceId),
-          cached.generatedAt,
-          syncSummary,
-          syncFailures.get(input.deviceId) ?? null,
-        );
-        const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
-          baseWarningFlags(cached.warningFlags),
-        );
-
-        if (sync.state === "syncing") {
-          warningFlags.add("sync-delayed");
-          warningFlags.add("stale-cache");
+        try {
+          const syncSummary = await loadDeviceSyncState(input.deviceId);
+          const sync = hydrateSyncState(
+            input.deviceId,
+            deps.getRuntimeDevice(input.deviceId),
+            cached.generatedAt,
+            syncSummary,
+            syncFailures.get(input.deviceId) ?? null,
+          );
+          return buildCachedSnapshotFromSync(cached, sync, {
+            markStaleWhileSyncing: true,
+          });
+        } catch (error) {
+          const detail =
+            syncFailures.get(input.deviceId) ??
+            (error instanceof Error ? error.message : "Analytics sync state refresh failed.");
+          console.error("[runtime] failed to load cached analytics sync state", error);
+          return buildCachedSnapshotFromSync(
+            cached,
+            buildFailedCachedSyncState(cached, detail),
+          );
         }
-        if (sync.state === "failed") {
-          warningFlags.add("sync-failed");
-          warningFlags.add("stale-cache");
-        }
-        if (sync.lastOverflowDetectedAt) {
-          warningFlags.add("history-overflow");
-        }
-
-        return {
-          ...cached,
-          source: sync.state === "idle" ? "canonical" : "cache",
-          sync,
-          warningFlags: [...warningFlags],
-        };
       }
 
       const analytics = await buildAnalyticsSnapshot({
