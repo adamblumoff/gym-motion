@@ -39,7 +39,19 @@ test("manual pair and live analytics updates stay in sync", async () => {
     await expect(app.page.getByText("Analytics")).toBeVisible();
     await expect(app.page.getByText("Live Activity")).toBeVisible();
     await expect(app.page.getByText("Pairing completed and device connected.")).toBeVisible();
-    await expect(app.page.getByText(/Cached snapshot|Canonical snapshot/)).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          app.page.evaluate(async () => {
+            const analytics = await window.gymMotionDesktop.getDeviceAnalytics({
+              deviceId: "esp32-085ab2f4e9d4",
+              window: "24h",
+            });
+            return analytics?.source ?? null;
+          }),
+        { timeout: 30_000 },
+      )
+      .toMatch(/cache|canonical/);
   } finally {
     await app.close();
   }
