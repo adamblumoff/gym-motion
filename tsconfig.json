@@ -21,10 +21,14 @@
     }
   },
   "include": [
+    "backend/**/*.d.ts",
+    "backend/**/*.ts",
     "shared/**/*.ts",
     "desktop/**/*.ts",
     "desktop/**/*.tsx",
-    "electron.vite.config.ts"
+    "electron.vite.config.ts",
+    "vitest.config.ts",
+    "vitest.db.config.ts"
   ],
   "exclude": [
     "desktop/**/*.test.ts",

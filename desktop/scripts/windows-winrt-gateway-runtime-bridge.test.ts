@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createRuntimeTestHarness } from "./gateway-runtime-server.test-helpers";
 

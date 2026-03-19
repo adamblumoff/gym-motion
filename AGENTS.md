@@ -25,6 +25,7 @@
 - Read this before changing how local dev, staging, production DBs, or production devices interact.
 - Movement analytics rebuild note: read `/home/adamblumoff/gym-motion/docs/windows-movement-analytics-vision.md` before restarting analytics, history replay, or reconnect-coupled Windows desktop work from scratch.
 - The current desktop product should be treated as Windows-only. The supported BLE runtime path is Windows app + Rust WinRT sidecar + ESP32 firmware app-session lease protocol.
+- Testing command note: prefer `bun run test` over direct `bun test`. Always go through the repo-owned script entrypoints for tests, E2E, Windows-native validation, and firmware verification so automation follows the same command surface as CI.
 - Preferred Windows desktop validation flow: commit and push the repo state to test, clone into `C:\Users\adamb\Code\gym-motion`, then copy `.env.local` into that Windows repo before running `bun install` / `bun run dev` / `bun run build:win`.
 - When working on the Windows desktop app, always commit and push before handing off so the Windows clone can pull the exact tested state.
 - Default desktop workflow note: unless the user explicitly says not to, finish Windows desktop app changes by committing and pushing the tested branch before handoff.

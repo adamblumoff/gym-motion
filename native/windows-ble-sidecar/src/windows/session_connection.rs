@@ -23,7 +23,7 @@ use super::{
     session_types::SessionCommand,
 };
 
-fn explicit_connect_candidate_ready(
+pub(super) fn explicit_connect_candidate_ready(
     classification: &DiscoveryClassification,
     local_name_present: bool,
     allow_name_prefix_connect: bool,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
 import { createRuntimeTestHarness } from "./gateway-runtime-server.test-helpers";

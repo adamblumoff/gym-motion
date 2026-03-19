@@ -1,6 +1,5 @@
 import type {
   ApprovedNodeRule,
-  AnalyticsWindow,
   DesktopSnapshot,
   DesktopSetupState,
   DeviceAnalyticsSnapshot,

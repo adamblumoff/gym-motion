@@ -1,7 +1,6 @@
 import { deriveHealthStatus } from "../device-status";
 import type {
   DeviceActivitySummary,
-  DeviceLogLevel,
   DeviceLogSummary,
   DeviceSummary,
   DeviceSyncStateSummary,

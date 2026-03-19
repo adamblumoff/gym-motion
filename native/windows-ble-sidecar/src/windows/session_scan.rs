@@ -168,7 +168,7 @@ pub(super) async fn sync_scan_state(
     Ok(())
 }
 
-fn should_pause_approved_reconnect_scan(
+pub(super) fn should_pause_approved_reconnect_scan(
     scan_reason: Option<&str>,
     active_connection_count: usize,
 ) -> bool {

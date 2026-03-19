@@ -1,4 +1,5 @@
 use super::*;
+use crate::windows::session_types::added_allowed_rule_ids;
 
 #[test]
 fn scan_policy_stays_active_while_approved_nodes_are_missing() {
@@ -263,15 +264,16 @@ fn approved_reconnect_scan_restart_pauses_while_a_handshake_is_active() {
         local_name: None,
         known_device_id: None,
     }];
+    let now = Instant::now();
 
     assert!(!should_restart_approved_reconnect_scan(
         &rules,
         &HashMap::new(),
         &HashMap::new(),
         None,
-        Instant::now(),
-        Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
-        Some(Instant::now() + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS)),
+        now,
+        Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+        Some(now + Duration::from_millis(APPROVED_RECONNECT_STARTUP_BURST_MS)),
         1,
     ));
 
@@ -280,8 +282,8 @@ fn approved_reconnect_scan_restart_pauses_while_a_handshake_is_active() {
         &HashMap::new(),
         &HashMap::new(),
         None,
-        Instant::now(),
-        Some(Instant::now() - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
+        now,
+        Some(now - Duration::from_millis(APPROVED_RECONNECT_STALL_MS)),
         None,
         0,
     ));

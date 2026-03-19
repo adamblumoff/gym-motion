@@ -9,7 +9,14 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["desktop/**/*.ts", "desktop/**/*.tsx", "electron.vite.config.ts"],
+    files: [
+      "backend/**/*.ts",
+      "desktop/**/*.ts",
+      "desktop/**/*.tsx",
+      "shared/**/*.ts",
+      "scripts/**/*.ts",
+      "*.config.ts",
+    ],
     languageOptions: {
       globals: {
         ...globals.browser,

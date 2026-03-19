@@ -18,9 +18,11 @@
     "firmware:upload": "./scripts/upload-firmware.sh",
     "firmware:publish": "bun run ./scripts/publish-firmware.ts",
     "device:purge": "bun run ./scripts/purge-device.ts",
-    "lint": "eslint desktop --ext .ts,.tsx",
+    "lint": "eslint \"backend/**/*.ts\" \"desktop/**/*.ts\" \"desktop/**/*.tsx\" \"shared/**/*.ts\" \"scripts/**/*.ts\" \"*.config.ts\"",
     "test:boundaries": "node ./scripts/check-no-archive-imports.mjs && node ./scripts/check-file-sizes.mjs && node ./scripts/check-no-legacy-desktop-imports.mjs",
-    "test": "bun run test:boundaries && bun test ./desktop/main ./shared ./desktop/ui ./desktop/scripts",
+    "test:ts": "vitest run --config vitest.config.ts",
+    "test:backend:db": "vitest run --config vitest.db.config.ts",
+    "test": "bun run test:boundaries && bun run test:ts",
     "test:e2e:desktop": "bun run build:desktop:test && playwright test -c playwright.desktop.config.ts",
     "typecheck": "tsc --noEmit",
     "smoke:windows-desktop": "./scripts/test-windows-desktop.sh",
@@ -62,6 +64,7 @@
     "globals": "^16.3.0",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.43.0"
+    "typescript-eslint": "^8.43.0",
+    "vitest": "^3.2.4"
   }
 }
