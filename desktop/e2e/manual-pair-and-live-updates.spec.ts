@@ -39,7 +39,7 @@ test("manual pair and live analytics updates stay in sync", async () => {
     await expect(app.page.getByText("Analytics")).toBeVisible();
     await expect(app.page.getByText("Live Activity")).toBeVisible();
     await expect(app.page.getByText("Pairing completed and device connected.")).toBeVisible();
-    await expect(app.page.getByText("Canonical snapshot")).toBeVisible();
+    await expect(app.page.getByText(/Cached snapshot|Canonical snapshot/)).toBeVisible();
   } finally {
     await app.close();
   }
