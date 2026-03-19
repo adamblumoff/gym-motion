@@ -18,6 +18,7 @@ export {
   listDeviceActivity,
   listDeviceLogs,
   listRecentActivity,
+  listMotionRollupBuckets,
   listDeviceMotionEvents,
   listDeviceMotionEventsByReceivedAt,
   listDevices,
@@ -28,5 +29,6 @@ export {
   recordFirmwareReport,
   recordHeartbeat,
   recordMotionEvent,
+  rebuildMotionRollups,
   updateDeviceAssignment,
 } from "./repository";

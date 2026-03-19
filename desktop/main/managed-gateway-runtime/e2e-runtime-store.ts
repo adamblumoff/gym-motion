@@ -1,4 +1,5 @@
 import type {
+  AnalyticsWindow,
   BackfillBatchInput,
   BackfillBatchResult,
   DeviceActivitySummary,
@@ -93,6 +94,10 @@ function sortActivities(activities: DeviceActivitySummary[], limit: number) {
         right.id.localeCompare(left.id),
     )
     .slice(0, limit);
+}
+
+function floorBucketStart(timestamp: number, bucketMs: number) {
+  return Math.floor(timestamp / bucketMs) * bucketMs;
 }
 
 export function createE2eRuntimeStore() {
@@ -336,6 +341,74 @@ export function createE2eRuntimeStore() {
         ],
         Math.min(Math.max(limit, 1), 250),
       );
+    },
+
+    async listMotionRollupBuckets(args: {
+      deviceId: string;
+      window: AnalyticsWindow;
+      startBucket: number;
+      endBucketExclusive: number;
+    }) {
+      const bucketMs = args.window === "24h" ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+      const bucketMap = new Map<number, { movementCount: number; movingSeconds: number }>();
+      const events = [...(motionEvents.get(args.deviceId) ?? [])].sort(
+        (left, right) => left.eventTimestamp - right.eventTimestamp || left.id - right.id,
+      );
+      let previousState: MotionEventSummary["state"] = "still";
+      let previousTimestamp = args.startBucket;
+
+      for (const event of events) {
+        if (event.eventTimestamp < args.startBucket) {
+          previousState = event.state;
+          previousTimestamp = event.eventTimestamp;
+          continue;
+        }
+
+        if (previousState === "moving" && event.eventTimestamp > previousTimestamp) {
+          let cursor = Math.max(previousTimestamp, args.startBucket);
+          const end = Math.min(event.eventTimestamp, args.endBucketExclusive);
+
+          while (cursor < end) {
+            const bucketStart = floorBucketStart(cursor, bucketMs);
+            const bucket = bucketMap.get(bucketStart) ?? {
+              movementCount: 0,
+              movingSeconds: 0,
+            };
+            const segmentEnd = Math.min(bucketStart + bucketMs, end);
+            bucket.movingSeconds += Math.round((segmentEnd - cursor) / 1000);
+            bucketMap.set(bucketStart, bucket);
+            cursor = segmentEnd;
+          }
+        }
+
+        if (
+          event.state === "moving" &&
+          previousState !== "moving" &&
+          event.eventTimestamp >= args.startBucket &&
+          event.eventTimestamp < args.endBucketExclusive
+        ) {
+          const bucketStart = floorBucketStart(event.eventTimestamp, bucketMs);
+          const bucket = bucketMap.get(bucketStart) ?? {
+            movementCount: 0,
+            movingSeconds: 0,
+          };
+          bucket.movementCount += 1;
+          bucketMap.set(bucketStart, bucket);
+        }
+
+        previousState = event.state;
+        previousTimestamp = event.eventTimestamp;
+      }
+
+      return [...bucketMap.entries()]
+        .sort((left, right) => left[0] - right[0])
+        .map(([bucketStart, summary]) => ({
+          deviceId: args.deviceId,
+          bucketStart,
+          movementCount: summary.movementCount,
+          movingSeconds: summary.movingSeconds,
+          updatedAt: isoNow(),
+        }));
     },
 
     async listDeviceMotionEventsByReceivedAt(args: {

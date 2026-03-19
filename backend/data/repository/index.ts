@@ -13,6 +13,9 @@ export {
   listRecentActivity,
   getDeviceSyncState,
   recordBackfillBatch,
+  listMotionRollupBuckets,
+  rebuildMotionRollups,
+  refreshMotionRollupsForDeviceRange,
 } from "./telemetry";
 
 export {

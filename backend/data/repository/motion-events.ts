@@ -13,6 +13,7 @@ import {
   mapDeviceRow,
   mapMotionEventRow,
 } from "./shared";
+import { refreshMotionRollupsForDeviceRange } from "./rollups";
 
 export async function recordMotionEvent(payload: IngestPayload): Promise<MotionStreamPayload> {
   const delta = payload.delta ?? null;
@@ -121,6 +122,60 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
               [payload.deviceId, payload.sequence],
             )
           ).rows[0];
+
+    if (insertedEvent.rows[0] && storedEvent) {
+      const previousEvent = await client.query<MotionEventRow>(
+        `select
+           id,
+           device_id,
+           sequence,
+           state,
+           delta,
+           event_timestamp,
+           received_at,
+           boot_id,
+           firmware_version,
+           hardware_id
+         from motion_events
+         where device_id = $1
+           and event_timestamp < $2
+         order by event_timestamp desc, id desc
+         limit 1`,
+        [payload.deviceId, storedEvent.event_timestamp],
+      );
+      const nextEvent = await client.query<MotionEventRow>(
+        `select
+           id,
+           device_id,
+           sequence,
+           state,
+           delta,
+           event_timestamp,
+           received_at,
+           boot_id,
+           firmware_version,
+           hardware_id
+         from motion_events
+         where device_id = $1
+           and event_timestamp > $2
+         order by event_timestamp asc, id asc
+         limit 1`,
+        [payload.deviceId, storedEvent.event_timestamp],
+      );
+      const rangeStart = previousEvent.rows[0]
+        ? Number(previousEvent.rows[0].event_timestamp)
+        : Number(storedEvent.event_timestamp);
+      const rangeEndExclusive = nextEvent.rows[0]
+        ? Number(nextEvent.rows[0].event_timestamp)
+        : Number(storedEvent.event_timestamp) + 1;
+
+      await refreshMotionRollupsForDeviceRange({
+        client,
+        deviceId: payload.deviceId,
+        rangeStart,
+        rangeEndExclusive,
+      });
+    }
 
     await client.query("COMMIT");
 

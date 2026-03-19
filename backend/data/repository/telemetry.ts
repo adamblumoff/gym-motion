@@ -10,3 +10,8 @@ export {
 } from "./motion-events";
 export { recordDeviceLog, listDeviceLogs, listDeviceActivity, listRecentActivity } from "./logs";
 export { getDeviceSyncState, recordBackfillBatch } from "./backfill";
+export {
+  listMotionRollupBuckets,
+  rebuildMotionRollups,
+  refreshMotionRollupsForDeviceRange,
+} from "./rollups";

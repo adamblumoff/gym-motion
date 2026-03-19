@@ -14,6 +14,7 @@ import {
   mapDeviceSyncStateRow,
   mapMotionEventRow,
 } from "./shared";
+import { refreshMotionRollupsForDeviceRange } from "./rollups";
 
 export function shouldApplyBackfillMotionState(
   hasLiveContact: boolean,
@@ -139,9 +140,11 @@ export async function recordBackfillBatch(
 
     const insertedEvents = [];
     const insertedLogs = [];
+    const motionTimestamps: number[] = [];
 
     for (const record of input.records) {
       if (record.kind === "motion") {
+        motionTimestamps.push(record.timestamp);
         const eventResult = await client.query<MotionEventRow>(
           `insert into motion_events (
              device_id,
@@ -229,6 +232,18 @@ export async function recordBackfillBatch(
       if (logResult.rows[0]) {
         insertedLogs.push(mapDeviceLogRow(logResult.rows[0]));
       }
+    }
+
+    if (motionTimestamps.length > 0) {
+      const rangeStart = Math.min(...motionTimestamps);
+      const rangeEndExclusive = Math.max(...motionTimestamps) + 1;
+
+      await refreshMotionRollupsForDeviceRange({
+        client,
+        deviceId: input.deviceId,
+        rangeStart,
+        rangeEndExclusive,
+      });
     }
 
     const syncResult = await client.query<DeviceSyncStateRow>(
