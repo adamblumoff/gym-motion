@@ -17,11 +17,20 @@ def find_compiler() -> str:
     if preferred:
         candidates.append(preferred)
     candidates.extend(["g++", "clang++", "c++"])
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Program Files\LLVM\bin\clang++.exe",
+                r"C:\Program Files\LLVM\bin\clang-cl.exe",
+            ]
+        )
 
     for candidate in candidates:
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
+        if os.path.isfile(candidate):
+            return candidate
 
     raise SystemExit(
         "No C++ compiler found for firmware host tests. Set CXX or install g++/clang++."
