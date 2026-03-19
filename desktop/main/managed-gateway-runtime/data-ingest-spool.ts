@@ -31,6 +31,7 @@ export type DataIngestSpool = {
 };
 
 const MAX_BACKOFF_MS = 30_000;
+const STOPPING_ERROR_MESSAGE = "Gateway ingest spool is stopping.";
 
 function nowIso() {
   return new Date().toISOString();
@@ -116,8 +117,11 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
   `);
 
   const drainingDevices = new Set<string>();
-  let stopped = false;
+  const activeDrains = new Set<Promise<void>>();
+  let state: "running" | "stopping" | "stopped" = "running";
   let drainTimer: NodeJS.Timeout | null = null;
+  let didWarnOnRejectedEnqueue = false;
+  let stopPromise: Promise<void> | null = null;
 
   function clearDrainTimer() {
     if (drainTimer) {
@@ -127,14 +131,14 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
   }
 
   function scheduleDrain(delayMs = 0) {
-    if (stopped) {
+    if (state !== "running") {
       return;
     }
 
     if (delayMs <= 0) {
       clearDrainTimer();
       queueMicrotask(() => {
-        if (!stopped) {
+        if (state === "running") {
           void drainAvailable();
         }
       });
@@ -147,7 +151,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
 
     drainTimer = setTimeout(() => {
       drainTimer = null;
-      if (!stopped) {
+      if (state === "running") {
         void drainAvailable();
       }
     }, delayMs);
@@ -155,6 +159,10 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
   }
 
   function scheduleNextAvailableDrain() {
+    if (state !== "running") {
+      return;
+    }
+
     const nextRow = nextAvailableAt.get() as { available_at?: string } | undefined;
 
     if (!nextRow?.available_at) {
@@ -187,7 +195,18 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     }
   }
 
+  function trackDrainTask(task: Promise<void>) {
+    activeDrains.add(task);
+    task.finally(() => {
+      activeDrains.delete(task);
+    });
+  }
+
   async function drainAvailable() {
+    if (state !== "running") {
+      return;
+    }
+
     const rows = selectReadyRows.all(nowIso()) as IngestSpoolRow[];
 
     for (const row of rows) {
@@ -195,7 +214,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
         continue;
       }
 
-      void processRow(row);
+      trackDrainTask(processRow(row));
     }
 
     if (rows.length === 0) {
@@ -205,15 +224,40 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
 
   return {
     async start() {
-      stopped = false;
+      if (state === "stopped") {
+        throw new Error("Gateway ingest spool has already been stopped.");
+      }
+
       scheduleDrain();
     },
     async stop() {
-      stopped = true;
+      if (state === "stopped") {
+        return;
+      }
+
+      if (stopPromise) {
+        return stopPromise;
+      }
+
+      state = "stopping";
       clearDrainTimer();
-      database.close();
+      stopPromise = (async () => {
+        await Promise.allSettled([...activeDrains]);
+        database.close();
+        state = "stopped";
+      })();
+      await stopPromise;
     },
     async enqueue(message) {
+      if (state !== "running") {
+        if (!didWarnOnRejectedEnqueue) {
+          didWarnOnRejectedEnqueue = true;
+          console.warn("[runtime] rejected ingest spool enqueue because the runtime is stopping.");
+        }
+
+        throw new Error(STOPPING_ERROR_MESSAGE);
+      }
+
       const validated = validateGatewayChildPersistMessage(message);
       const timestamp = nowIso();
 

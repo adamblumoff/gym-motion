@@ -6,10 +6,6 @@ import { type MotionEventRow, mapMotionEventRow } from "./shared";
 
 type Queryable = Pick<PoolClient, "query">;
 
-declare global {
-  var motionRollupTablesAvailable: boolean | undefined;
-}
-
 type RollupDefinition = {
   tableName: "motion_rollups_hourly" | "motion_rollups_daily";
   bucketMs: number;
@@ -33,6 +29,12 @@ export type MotionRollupBucket = {
 
 const HOURLY_BUCKET_MS = 60 * 60 * 1000;
 const DAILY_BUCKET_MS = 24 * 60 * 60 * 1000;
+const NEGATIVE_ROLLUP_AVAILABILITY_TTL_MS = 5_000;
+
+type MotionRollupAvailabilityCache = {
+  available: boolean;
+  checkedAtMs: number;
+};
 
 const ROLLUP_DEFINITIONS: RollupDefinition[] = [
   {
@@ -44,6 +46,8 @@ const ROLLUP_DEFINITIONS: RollupDefinition[] = [
     bucketMs: DAILY_BUCKET_MS,
   },
 ];
+
+let motionRollupAvailabilityCache: MotionRollupAvailabilityCache | null = null;
 
 function isMissingRelationError(error: unknown) {
   return (
@@ -69,22 +73,49 @@ async function queryMotionRollupAvailability(client: Queryable) {
 }
 
 export async function hasMotionRollupTables(client?: Queryable) {
-  if (globalThis.motionRollupTablesAvailable !== undefined) {
-    return globalThis.motionRollupTablesAvailable;
+  if (motionRollupAvailabilityCache?.available) {
+    return true;
+  }
+
+  const nowMs = Date.now();
+  if (
+    motionRollupAvailabilityCache &&
+    !motionRollupAvailabilityCache.available &&
+    nowMs - motionRollupAvailabilityCache.checkedAtMs < NEGATIVE_ROLLUP_AVAILABILITY_TTL_MS
+  ) {
+    return false;
   }
 
   try {
     const available = await queryMotionRollupAvailability(client ?? getDb());
-    globalThis.motionRollupTablesAvailable = available;
+    const previousAvailability = motionRollupAvailabilityCache?.available;
+    motionRollupAvailabilityCache = {
+      available,
+      checkedAtMs: nowMs,
+    };
+
+    if (available && previousAvailability === false) {
+      console.warn(
+        "[runtime] detected motion rollup tables; enabling rollup-backed analytics without restarting.",
+      );
+    }
+
     return available;
   } catch (error) {
     if (isMissingRelationError(error)) {
-      globalThis.motionRollupTablesAvailable = false;
+      motionRollupAvailabilityCache = {
+        available: false,
+        checkedAtMs: nowMs,
+      };
       return false;
     }
 
     throw error;
   }
+}
+
+export function resetMotionRollupAvailabilityCacheForTests() {
+  motionRollupAvailabilityCache = null;
 }
 
 function toSafeNumber(value: string | number) {

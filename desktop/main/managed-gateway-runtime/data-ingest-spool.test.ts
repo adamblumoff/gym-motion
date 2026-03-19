@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDataIngestSpool } from "./data-ingest-spool";
 
@@ -108,5 +108,137 @@ describe("createDataIngestSpool", () => {
     expect(remainingRows?.row_count).toBe(0);
 
     await replaySpool.stop();
+  });
+
+  it("waits for in-flight drains to finish before closing and allows repeated stop calls", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-spool-"));
+    tempDirs.push(tempDir);
+    const dbPath = path.join(tempDir, "ingest-spool.sqlite");
+    let resolvePersist: (() => void) | null = null;
+    let persistStarted = false;
+
+    const spool = createDataIngestSpool({
+      dbPath,
+      persistValidatedMessage() {
+        persistStarted = true;
+        return new Promise<void>((resolve) => {
+          resolvePersist = resolve;
+        });
+      },
+    });
+
+    await spool.start();
+    await spool.enqueue({
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 1,
+        sequence: 7,
+      },
+    });
+
+    await waitFor(() => persistStarted);
+
+    let stopSettled = false;
+    const stopPromise = spool.stop().then(() => {
+      stopSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stopSettled).toBe(false);
+
+    resolvePersist?.();
+    await stopPromise;
+    await spool.stop();
+
+    const database = new DatabaseSync(dbPath);
+    const remainingRows = database.prepare(`
+      select count(*) as row_count
+      from ingest_spool
+    `).get() as { row_count?: number } | undefined;
+    database.close();
+
+    expect(remainingRows?.row_count).toBe(0);
+  });
+
+  it("records retry metadata before shutdown finishes when a drain fails in flight", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-spool-"));
+    tempDirs.push(tempDir);
+    const dbPath = path.join(tempDir, "ingest-spool.sqlite");
+    let rejectPersist: ((error: Error) => void) | null = null;
+    let persistStarted = false;
+
+    const spool = createDataIngestSpool({
+      dbPath,
+      persistValidatedMessage() {
+        persistStarted = true;
+        return new Promise<void>((_resolve, reject) => {
+          rejectPersist = reject;
+        });
+      },
+    });
+
+    await spool.start();
+    await spool.enqueue({
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 1,
+        sequence: 7,
+      },
+    });
+
+    await waitFor(() => persistStarted);
+
+    const stopPromise = spool.stop();
+    rejectPersist?.(new Error("database offline"));
+    await stopPromise;
+
+    const database = new DatabaseSync(dbPath);
+    const failedRow = database.prepare(`
+      select attempt_count, last_error
+      from ingest_spool
+      limit 1
+    `).get() as { attempt_count?: number; last_error?: string } | undefined;
+    database.close();
+
+    expect(failedRow?.attempt_count).toBe(1);
+    expect(failedRow?.last_error).toContain("database offline");
+  });
+
+  it("rejects late enqueue attempts after shutdown without crashing and only warns once", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-spool-"));
+    tempDirs.push(tempDir);
+    const dbPath = path.join(tempDir, "ingest-spool.sqlite");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const spool = createDataIngestSpool({
+      dbPath,
+      async persistValidatedMessage() {},
+    });
+
+    await spool.start();
+    await spool.stop();
+
+    const message = {
+      type: "persist-motion" as const,
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving" as const,
+        timestamp: 1,
+        sequence: 7,
+      },
+    };
+
+    await expect(spool.enqueue(message)).rejects.toThrow("Gateway ingest spool is stopping.");
+    await expect(spool.enqueue(message)).rejects.toThrow("Gateway ingest spool is stopping.");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    warnSpy.mockRestore();
   });
 });
