@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getDeviceSyncState, recordBackfillBatch } from "./backfill";
+import { listDeviceMotionEventsByReceivedAt } from "./motion-events";
 import { recordMotionEvent } from "./motion-events";
 import { listMotionRollupBuckets } from "./rollups";
 import { closeDatabase, hasDatabaseTestEnv, resetDatabaseSchema } from "../test-helpers";
@@ -214,5 +215,65 @@ describeDb("backfill repository", () => {
         ],
       }),
     ).rejects.toThrow("Backfill mismatch");
+  });
+
+  it("derives backfill received_at from the latest live contact instead of import time", async () => {
+    const liveWrite = await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 300_000,
+      delta: 0,
+      sequence: 3,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    const result = await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 2,
+      records: [
+        {
+          kind: "motion",
+          sequence: 1,
+          state: "moving",
+          delta: 5,
+          timestamp: 100_000,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "motion",
+          sequence: 2,
+          state: "still",
+          delta: 0,
+          timestamp: 200_000,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      ],
+    });
+
+    expect(result.insertedEvents).toHaveLength(2);
+    expect(Date.parse(result.insertedEvents[1]!.receivedAt)).toBeLessThan(
+      Date.parse(liveWrite.event!.receivedAt),
+    );
+    expect(Date.parse(result.insertedEvents[1]!.receivedAt)).toBe(
+      Date.parse(liveWrite.event!.receivedAt) - 100_000,
+    );
+    expect(Date.parse(result.insertedEvents[0]!.receivedAt)).toBe(
+      Date.parse(liveWrite.event!.receivedAt) - 200_000,
+    );
+
+    const events = await listDeviceMotionEventsByReceivedAt({
+      deviceId: "stack-001",
+      startTimestamp: Date.parse(result.insertedEvents[0]!.receivedAt) - 1,
+      endTimestamp: Date.parse(liveWrite.event!.receivedAt) + 1,
+    });
+
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]);
   });
 });

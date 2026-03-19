@@ -24,6 +24,26 @@ function sequenceConflictClause() {
   return "(device_id, coalesce(boot_id, ''), sequence) where sequence is not null";
 }
 
+function buildBackfillReceivedAtIso(args: {
+  anchorReceivedAtMs: number;
+  anchorDeviceTimestamp: number | null;
+  recordTimestamp: number | null;
+}) {
+  const { anchorReceivedAtMs, anchorDeviceTimestamp, recordTimestamp } = args;
+
+  if (
+    anchorDeviceTimestamp === null ||
+    recordTimestamp === null ||
+    !Number.isFinite(anchorDeviceTimestamp) ||
+    !Number.isFinite(recordTimestamp)
+  ) {
+    return new Date(anchorReceivedAtMs).toISOString();
+  }
+
+  const offsetMs = anchorDeviceTimestamp - recordTimestamp;
+  return new Date(anchorReceivedAtMs - Math.max(0, offsetMs)).toISOString();
+}
+
 export function shouldApplyBackfillMotionState(
   hasLiveContact: boolean,
   hasMotionRecord: boolean,
@@ -86,10 +106,14 @@ export async function recordBackfillBatch(
     const existingDeviceResult = await client.query<{
       last_event_received_at: Date | null;
       last_heartbeat_at: Date | null;
+      last_seen_at: number | null;
+      boot_id: string | null;
     }>(
       `select
          last_event_received_at,
-         last_heartbeat_at
+         last_heartbeat_at,
+         last_seen_at,
+         boot_id
        from devices
        where id = $1
        limit 1`,
@@ -99,6 +123,9 @@ export async function recordBackfillBatch(
     const hasLiveContact = Boolean(
       existingDevice?.last_event_received_at ?? existingDevice?.last_heartbeat_at,
     );
+    const anchorReceivedAtMs =
+      (existingDevice?.last_event_received_at ?? existingDevice?.last_heartbeat_at)?.getTime() ??
+      Date.now();
     const shouldSeedMotionState = shouldApplyBackfillMotionState(
       hasLiveContact,
       Boolean(lastMotionRecord),
@@ -158,6 +185,15 @@ export async function recordBackfillBatch(
     const insertedEvents = [];
     const insertedLogs = [];
     const motionTimestamps: number[] = [];
+    const maxBatchTimestamp = input.records.reduce((highest, record) => {
+      const recordTimestamp = "timestamp" in record ? record.timestamp ?? null : null;
+      return recordTimestamp === null ? highest : Math.max(highest, recordTimestamp);
+    }, Number.NEGATIVE_INFINITY);
+    const normalizedMaxBatchTimestamp = Number.isFinite(maxBatchTimestamp) ? maxBatchTimestamp : null;
+    const anchorDeviceTimestamp =
+      existingDevice?.boot_id === normalizedActiveBootId && existingDevice.last_seen_at !== null
+        ? existingDevice.last_seen_at
+        : normalizedMaxBatchTimestamp;
     const motionRecords = input.records
       .filter((record): record is Extract<BackfillBatchInput["records"][number], { kind: "motion" }> =>
         record.kind === "motion",
@@ -170,6 +206,11 @@ export async function recordBackfillBatch(
         bootId: record.bootId ?? activeBootId ?? null,
         firmwareVersion: record.firmwareVersion ?? null,
         hardwareId: record.hardwareId ?? null,
+        receivedAt: buildBackfillReceivedAtIso({
+          anchorReceivedAtMs,
+          anchorDeviceTimestamp,
+          recordTimestamp: record.timestamp,
+        }),
       }));
     const logRecords = input.records
       .filter((record): record is Extract<BackfillBatchInput["records"][number], { kind: "node-log" }> =>
@@ -185,6 +226,11 @@ export async function recordBackfillBatch(
         firmwareVersion: record.firmwareVersion ?? null,
         hardwareId: record.hardwareId ?? null,
         metadata: record.metadata ?? null,
+        receivedAt: buildBackfillReceivedAtIso({
+          anchorReceivedAtMs,
+          anchorDeviceTimestamp,
+          recordTimestamp: record.timestamp ?? null,
+        }),
       }));
 
     if (motionRecords.length > 0) {
@@ -196,6 +242,7 @@ export async function recordBackfillBatch(
            state,
            delta,
            event_timestamp,
+           received_at,
            boot_id,
            firmware_version,
            hardware_id
@@ -206,6 +253,7 @@ export async function recordBackfillBatch(
            records.state,
            records.delta,
            records.timestamp,
+           records.received_at::timestamptz,
            records.boot_id,
            records.firmware_version,
            records.hardware_id
@@ -214,6 +262,7 @@ export async function recordBackfillBatch(
            state text,
            delta integer,
            timestamp bigint,
+           received_at text,
            boot_id text,
            firmware_version text,
            hardware_id text
@@ -248,6 +297,7 @@ export async function recordBackfillBatch(
            firmware_version,
            hardware_id,
            device_timestamp,
+           received_at,
            metadata
          )
          select
@@ -260,6 +310,7 @@ export async function recordBackfillBatch(
            records.firmware_version,
            records.hardware_id,
            records.timestamp,
+           records.received_at::timestamptz,
            records.metadata
          from jsonb_to_recordset($2::jsonb) as records(
            sequence bigint,
@@ -267,6 +318,7 @@ export async function recordBackfillBatch(
            code text,
            message text,
            timestamp bigint,
+           received_at text,
            boot_id text,
            firmware_version text,
            hardware_id text,
