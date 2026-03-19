@@ -19,6 +19,6 @@
 - The supported BLE runtime path is Windows app + Rust WinRT sidecar + ESP32 firmware app-session protocol.
 - Do not reintroduce the older noble/WinUSB BLE fallback.
 - The WinRT sidecar depends on the vendored patched `btleplug` at `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched`; treat it as product code.
-- Prefer validating desktop changes from a Windows clone at `C:\Users\adamb\Code\gym-motion` with `.env.local` copied in before running `bun install`, `bun run dev`, or `bun run build:win`.
+- Validate desktop changes from the current Windows repo checkout with `.env.local` present before running `bun install`, `bun run dev`, or `bun run build:win`.
 - Windows desktop dev and packaging require the Rust MSVC toolchain because the native sidecar is built locally.
 - Unless the user explicitly says not to, finish Windows desktop changes by committing and pushing the tested branch before handoff.
