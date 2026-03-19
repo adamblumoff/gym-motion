@@ -21,7 +21,6 @@ def find_compiler() -> str:
         candidates.extend(
             [
                 r"C:\Program Files\LLVM\bin\clang++.exe",
-                r"C:\Program Files\LLVM\bin\clang-cl.exe",
             ]
         )
 
