@@ -1,36 +1,28 @@
-# Windows BLE Bugs
+# Windows BLE Bug History
 
-This file captures BLE/runtime bugs we already paid to learn the hard way.
+This file is historical bug memory for the Windows BLE stack. It is useful for
+remembering failures we already paid to learn, but it may be stale or
+incomplete.
 
-Use it before changing the Windows BLE reconnect flow, the ESP32 app-session
-protocol, or the vendored WinRT `btleplug` package.
+Current code, tests, scripts, and observed runtime behavior win if they disagree
+with anything in this file.
 
-## Ownership Reminder
+Use this as context when changing the Windows BLE reconnect flow, the ESP32
+app-session protocol, or the vendored WinRT `btleplug` package, then verify the
+current implementation directly.
 
-- The sidecar owns every BLE scan, reconnect, and handshake state machine; main and runtime only ask it to start actions or project events.
-- Firmware owns the app-session lease heartbeat and watchdog truth.
-- Runtime server (`backend/runtime`) projects sidecar events into cached devices, known-node persistence, and derived HTTP snapshots; it never invents BLE transport state.
-- `shared/` holds the neutral TS contracts and approved-node matching helpers shared by renderer and main so identity rules stay consistent.
-- Electron main owns persistence, lifecycle, and intent sequencing so the renderer can remain purely presentational.
+## Historical Context
 
-## Scope
-
-- Desktop product target: Windows app + Rust WinRT sidecar + ESP32 firmware
-- Main BLE transport code:
-  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/core_impl.rs`
-  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session.rs`
-  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/handshake.rs`
+- Active product path at the time of these bugs: Windows app + Rust WinRT
+  sidecar + ESP32 firmware
+- Main BLE transport code usually lived under:
+  - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/`
   - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched`
-- Firmware app-session code:
+- Firmware app-session code usually lived under:
   - `/home/adamblumoff/gym-motion/firmware/runtime_ble.ino`
 
-## Rules Of Thumb
+## Historical Heuristics To Re-Verify
 
-- The sidecar owns BLE transport truth.
-- The firmware owns app-session lease truth.
-- Electron/runtime server should project BLE state, not invent it.
-- Reconnect exhaustion prompts must be backend-owned pause state, not a
-  component-local dismissal toggle.
 - Do not reuse WinRT GATT handles across reconnect churn unless they were
   refreshed from a fresh discovery pass.
 - Do not fall back to reconnect scan bursts until in-session recovery has
@@ -256,7 +248,7 @@ protocol, or the vendored WinRT `btleplug` package.
 - If future changes increase scan-burst counts again, check whether an earlier
   recovery stage was removed or bypassed.
 
-## Firmware Protocol Notes
+## Historical Protocol Notes
 
 - `app-session-bootstrap` carries `sessionNonce`
 - `app-session-lease` carries `sessionId`
@@ -268,12 +260,13 @@ protocol, or the vendored WinRT `btleplug` package.
   - `bootId`
   - `bootUptimeMs`
 
-If any future agent changes these fields, they must audit the sidecar handshake
-and session-health validation together.
+If these fields change in the future, audit the current sidecar handshake and
+session-health validation together instead of assuming this section is still
+accurate.
 
-## Low-Level Package Notes
+## Historical Package Notes
 
-The vendored package is product code for now:
+The vendored package was product code during these failures:
 
 - `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched`
 
@@ -284,7 +277,7 @@ Important lessons:
 - Closed WinRT object errors should trigger handle refresh/recovery, not just
   retries against the same stale object.
 
-## Future Debugging Checklist
+## Debugging Checklist To Re-Verify
 
 When BLE reconnect regresses, check these in order:
 
