@@ -17,7 +17,10 @@ import {
   normalizeAllowedNodesPayload,
   describeNode,
 } from "./windows-winrt-gateway-node.js";
-import { sendToDesktop } from "./windows-winrt-gateway-desktop-ipc.js";
+import {
+  handlePersistAck,
+  sendToDesktop,
+} from "./windows-winrt-gateway-desktop-ipc.js";
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 
@@ -328,6 +331,10 @@ async function handleDesktopControlCommand(command) {
 
 function attachControlReader() {
   process.on("message", (command) => {
+    if (handlePersistAck(command, debug)) {
+      return;
+    }
+
     if (!command || typeof command !== "object") {
       console.error("[gateway-winrt] ignored invalid control command", command);
       return;

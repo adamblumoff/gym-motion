@@ -14,6 +14,10 @@ import {
   sortActivities,
 } from "./shared";
 
+function sequenceConflictClause() {
+  return "(device_id, coalesce(boot_id, ''), sequence) where sequence is not null";
+}
+
 export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogSummary> {
   const result = await getDb().query<DeviceLogRow>(
     `insert into device_logs (
@@ -29,7 +33,7 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
        metadata
      )
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     on conflict (device_id, sequence) where sequence is not null do nothing
+     on conflict ${sequenceConflictClause()} do nothing
      returning
        id,
        device_id,
@@ -80,9 +84,11 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
        metadata,
        received_at
      from device_logs
-     where device_id = $1 and sequence = $2
+     where device_id = $1
+       and coalesce(boot_id, '') = coalesce($2, '')
+       and sequence = $3
      limit 1`,
-    [input.deviceId, input.sequence],
+    [input.deviceId, input.bootId ?? null, input.sequence],
   );
 
   if (!existing.rows[0]) {

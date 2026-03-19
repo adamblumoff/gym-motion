@@ -12,6 +12,7 @@ type PersistMessageType = GatewayChildPersistMessage["type"];
 
 type IngestSpoolRow = {
   id: number;
+  message_id: string;
   device_id: string;
   message_type: PersistMessageType;
   payload_json: string;
@@ -43,6 +44,7 @@ function nextDelayMs(attemptCount: number) {
 
 function deserializeRow(row: IngestSpoolRow): ValidatedGatewayChildPersistMessage {
   return validateGatewayChildPersistMessage({
+    messageId: row.message_id,
     type: row.message_type,
     deviceId: row.device_id,
     payload: JSON.parse(row.payload_json),
@@ -59,6 +61,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     pragma synchronous = normal;
     create table if not exists ingest_spool (
       id integer primary key autoincrement,
+      message_id text not null unique,
       device_id text not null,
       message_type text not null,
       payload_json text not null,
@@ -75,6 +78,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
 
   const insertRow = database.prepare(`
     insert into ingest_spool (
+      message_id,
       device_id,
       message_type,
       payload_json,
@@ -83,11 +87,13 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       attempt_count,
       last_error
     )
-    values (?, ?, ?, ?, ?, 0, null)
+    values (?, ?, ?, ?, ?, ?, 0, null)
+    on conflict(message_id) do nothing
   `);
   const selectReadyRows = database.prepare(`
     select
       spool.id,
+      spool.message_id,
       spool.device_id,
       spool.message_type,
       spool.payload_json,
@@ -102,6 +108,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     order by spool.id asc
   `);
   const deleteRow = database.prepare(`delete from ingest_spool where id = ?`);
+  const deleteRowByMessageId = database.prepare(`delete from ingest_spool where message_id = ?`);
   const markFailed = database.prepare(`
     update ingest_spool
     set attempt_count = attempt_count + 1,
@@ -115,13 +122,60 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     order by available_at asc, id asc
     limit 1
   `);
+  const selectRowByMessageId = database.prepare(`
+    select
+      id,
+      message_id,
+      device_id,
+      message_type,
+      payload_json,
+      attempt_count
+    from ingest_spool
+    where message_id = ?
+    limit 1
+  `);
 
   const drainingDevices = new Set<string>();
   const activeDrains = new Set<Promise<void>>();
+  const pendingResolvers = new Map<
+    string,
+    Array<{ resolve: () => void; reject: (error: Error) => void }>
+  >();
   let state: "running" | "stopping" | "stopped" = "running";
   let drainTimer: NodeJS.Timeout | null = null;
   let didWarnOnRejectedEnqueue = false;
   let stopPromise: Promise<void> | null = null;
+
+  function rejectPendingResolvers(error: Error) {
+    for (const waiters of pendingResolvers.values()) {
+      for (const waiter of waiters) {
+        waiter.reject(error);
+      }
+    }
+
+    pendingResolvers.clear();
+  }
+
+  function resolveMessage(messageId: string) {
+    const waiters = pendingResolvers.get(messageId);
+
+    if (!waiters) {
+      return;
+    }
+
+    pendingResolvers.delete(messageId);
+    for (const waiter of waiters) {
+      waiter.resolve();
+    }
+  }
+
+  function awaitMessage(messageId: string) {
+    return new Promise<void>((resolve, reject) => {
+      const waiters = pendingResolvers.get(messageId) ?? [];
+      waiters.push({ resolve, reject });
+      pendingResolvers.set(messageId, waiters);
+    });
+  }
 
   function clearDrainTimer() {
     if (drainTimer) {
@@ -179,6 +233,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     try {
       await deps.persistValidatedMessage(deserializeRow(row));
       deleteRow.run(row.id);
+      resolveMessage(row.message_id);
     } catch (error) {
       const attemptCount = row.attempt_count + 1;
       const detail = error instanceof Error ? error.message : String(error);
@@ -243,6 +298,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       clearDrainTimer();
       stopPromise = (async () => {
         await Promise.allSettled([...activeDrains]);
+        rejectPendingResolvers(new Error(STOPPING_ERROR_MESSAGE));
         database.close();
         state = "stopped";
       })();
@@ -262,6 +318,7 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       const timestamp = nowIso();
 
       insertRow.run(
+        validated.messageId,
         validated.deviceId,
         validated.type,
         JSON.stringify(validated.payload),
@@ -269,7 +326,17 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
         timestamp,
       );
 
+      const existingRow = selectRowByMessageId.get(validated.messageId) as
+        | IngestSpoolRow
+        | undefined;
+
+      if (!existingRow) {
+        return;
+      }
+
+      const completion = awaitMessage(validated.messageId);
       scheduleDrain();
+      return await completion;
     },
   };
 }

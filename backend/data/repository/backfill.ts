@@ -16,6 +16,14 @@ import {
 } from "./shared";
 import { refreshMotionRollupsForDeviceRange } from "./rollups";
 
+function normalizeBootId(bootId: string | null | undefined) {
+  return bootId ?? "";
+}
+
+function sequenceConflictClause() {
+  return "(device_id, coalesce(boot_id, ''), sequence) where sequence is not null";
+}
+
 export function shouldApplyBackfillMotionState(
   hasLiveContact: boolean,
   hasMotionRecord: boolean,
@@ -23,17 +31,24 @@ export function shouldApplyBackfillMotionState(
   return !hasLiveContact && hasMotionRecord;
 }
 
-export async function getDeviceSyncState(deviceId: string): Promise<DeviceSyncStateSummary> {
+export async function getDeviceSyncState(
+  deviceId: string,
+  bootId?: string | null,
+): Promise<DeviceSyncStateSummary> {
   const result = await getDb().query<DeviceSyncStateRow>(
     `select
        device_id,
+       boot_id,
        last_acked_sequence,
        last_acked_boot_id,
        last_sync_completed_at,
        last_overflow_detected_at
      from device_sync_state
-     where device_id = $1`,
-    [deviceId],
+     where device_id = $1
+       and ($2::text is null or boot_id = $2)
+     order by updated_at desc, boot_id desc
+     limit 1`,
+    [deviceId, bootId === undefined ? null : normalizeBootId(bootId)],
   );
 
   if (!result.rows[0]) {
@@ -53,6 +68,8 @@ export async function recordBackfillBatch(
   input: BackfillBatchInput,
 ): Promise<BackfillBatchResult> {
   const client = await getDb().connect();
+  const activeBootId = input.bootId ?? input.records.at(-1)?.bootId ?? null;
+  const normalizedActiveBootId = normalizeBootId(activeBootId);
 
   try {
     await client.query("BEGIN");
@@ -141,52 +158,85 @@ export async function recordBackfillBatch(
     const insertedEvents = [];
     const insertedLogs = [];
     const motionTimestamps: number[] = [];
+    const motionRecords = input.records
+      .filter((record): record is Extract<BackfillBatchInput["records"][number], { kind: "motion" }> =>
+        record.kind === "motion",
+      )
+      .map((record) => ({
+        sequence: record.sequence,
+        state: record.state,
+        delta: record.delta ?? null,
+        timestamp: record.timestamp,
+        bootId: record.bootId ?? activeBootId ?? null,
+        firmwareVersion: record.firmwareVersion ?? null,
+        hardwareId: record.hardwareId ?? null,
+      }));
+    const logRecords = input.records
+      .filter((record): record is Extract<BackfillBatchInput["records"][number], { kind: "node-log" }> =>
+        record.kind === "node-log",
+      )
+      .map((record) => ({
+        sequence: record.sequence,
+        level: record.level,
+        code: record.code,
+        message: record.message,
+        timestamp: record.timestamp ?? null,
+        bootId: record.bootId ?? activeBootId ?? null,
+        firmwareVersion: record.firmwareVersion ?? null,
+        hardwareId: record.hardwareId ?? null,
+        metadata: record.metadata ?? null,
+      }));
 
-    for (const record of input.records) {
-      if (record.kind === "motion") {
-        motionTimestamps.push(record.timestamp);
-        const eventResult = await client.query<MotionEventRow>(
-          `insert into motion_events (
-             device_id,
-             sequence,
-             state,
-             delta,
-             event_timestamp,
-             boot_id,
-             firmware_version,
-             hardware_id
-           )
-           values ($1, $2, $3, $4, $5, $6, $7, $8)
-           on conflict (device_id, sequence) where sequence is not null do nothing
-           returning
-             id,
-             device_id,
-             sequence,
-             state,
-             delta,
-             event_timestamp,
-             received_at,
-             boot_id,
-             firmware_version,
-             hardware_id`,
-          [
-            input.deviceId,
-            record.sequence,
-            record.state,
-            record.delta ?? null,
-            record.timestamp,
-            record.bootId ?? input.bootId ?? null,
-            record.firmwareVersion ?? null,
-            record.hardwareId ?? null,
-          ],
-        );
+    if (motionRecords.length > 0) {
+      motionTimestamps.push(...motionRecords.map((record) => record.timestamp));
+      const eventResult = await client.query<MotionEventRow>(
+        `insert into motion_events (
+           device_id,
+           sequence,
+           state,
+           delta,
+           event_timestamp,
+           boot_id,
+           firmware_version,
+           hardware_id
+         )
+         select
+           $1,
+           records.sequence,
+           records.state,
+           records.delta,
+           records.timestamp,
+           records.boot_id,
+           records.firmware_version,
+           records.hardware_id
+         from jsonb_to_recordset($2::jsonb) as records(
+           sequence bigint,
+           state text,
+           delta integer,
+           timestamp bigint,
+           boot_id text,
+           firmware_version text,
+           hardware_id text
+         )
+         on conflict ${sequenceConflictClause()} do nothing
+         returning
+           id,
+           device_id,
+           sequence,
+           state,
+           delta,
+           event_timestamp,
+           received_at,
+           boot_id,
+           firmware_version,
+           hardware_id`,
+        [input.deviceId, JSON.stringify(motionRecords)],
+      );
 
-        if (eventResult.rows[0]) {
-          insertedEvents.push(mapMotionEventRow(eventResult.rows[0]));
-        }
-        continue;
-      }
+      insertedEvents.push(...eventResult.rows.map(mapMotionEventRow));
+    }
 
+    if (logRecords.length > 0) {
       const logResult = await client.query<DeviceLogRow>(
         `insert into device_logs (
            device_id,
@@ -200,8 +250,29 @@ export async function recordBackfillBatch(
            device_timestamp,
            metadata
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         on conflict (device_id, sequence) where sequence is not null do nothing
+         select
+           $1,
+           records.sequence,
+           records.level,
+           records.code,
+           records.message,
+           records.boot_id,
+           records.firmware_version,
+           records.hardware_id,
+           records.timestamp,
+           records.metadata
+         from jsonb_to_recordset($2::jsonb) as records(
+           sequence bigint,
+           level text,
+           code text,
+           message text,
+           timestamp bigint,
+           boot_id text,
+           firmware_version text,
+           hardware_id text,
+           metadata jsonb
+         )
+         on conflict ${sequenceConflictClause()} do nothing
          returning
            id,
            device_id,
@@ -215,23 +286,10 @@ export async function recordBackfillBatch(
            device_timestamp,
            metadata,
            received_at`,
-        [
-          input.deviceId,
-          record.sequence,
-          record.level,
-          record.code,
-          record.message,
-          record.bootId ?? input.bootId ?? null,
-          record.firmwareVersion ?? null,
-          record.hardwareId ?? null,
-          record.timestamp ?? null,
-          record.metadata ?? null,
-        ],
+        [input.deviceId, JSON.stringify(logRecords)],
       );
 
-      if (logResult.rows[0]) {
-        insertedLogs.push(mapDeviceLogRow(logResult.rows[0]));
-      }
+      insertedLogs.push(...logResult.rows.map(mapDeviceLogRow));
     }
 
     if (motionTimestamps.length > 0) {
@@ -246,32 +304,56 @@ export async function recordBackfillBatch(
       });
     }
 
+    const existingBootSyncState = await client.query<{ has_row: boolean }>(
+      `select true as has_row
+       from device_sync_state
+       where device_id = $1
+         and boot_id = $2
+       limit 1`,
+      [input.deviceId, normalizedActiveBootId],
+    );
+    const insertedRecordCount = insertedEvents.length + insertedLogs.length;
+    const expectedRecordCount = input.records.length;
+
+    if (
+      expectedRecordCount > 0 &&
+      insertedRecordCount === 0 &&
+      existingBootSyncState.rowCount === 0
+    ) {
+      throw new Error(
+        `Backfill mismatch for ${input.deviceId}: empty insert set for new boot ${activeBootId ?? "<legacy>"}.`,
+      );
+    }
+
     const syncResult = await client.query<DeviceSyncStateRow>(
       `insert into device_sync_state (
          device_id,
+         boot_id,
          last_acked_sequence,
          last_acked_boot_id,
          last_sync_completed_at,
          last_overflow_detected_at,
          updated_at
        )
-       values ($1, $2, $3, now(), $4, now())
-       on conflict (device_id) do update
-       set last_acked_sequence = greatest(device_sync_state.last_acked_sequence, excluded.last_acked_sequence),
+       values ($1, $2, $3, $4, now(), $5, now())
+       on conflict (device_id, boot_id) do update
+       set last_acked_sequence = excluded.last_acked_sequence,
            last_acked_boot_id = excluded.last_acked_boot_id,
            last_sync_completed_at = now(),
            last_overflow_detected_at = coalesce(excluded.last_overflow_detected_at, device_sync_state.last_overflow_detected_at),
            updated_at = now()
        returning
          device_id,
+         boot_id,
          last_acked_sequence,
          last_acked_boot_id,
          last_sync_completed_at,
          last_overflow_detected_at`,
       [
         input.deviceId,
+        normalizedActiveBootId,
         input.ackSequence,
-        input.bootId ?? null,
+        activeBootId ?? null,
         input.overflowDetectedAt ?? null,
       ],
     );

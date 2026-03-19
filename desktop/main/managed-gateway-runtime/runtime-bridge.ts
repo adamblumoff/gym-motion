@@ -72,6 +72,24 @@ function canSendGatewayCommand(
   );
 }
 
+function sendPersistAck(
+  child: ChildProcess | null,
+  messageId: string,
+  ok: boolean,
+  error?: string,
+) {
+  if (!canSendGatewayCommand(child)) {
+    return;
+  }
+
+  child.send({
+    type: "persist-ack",
+    messageId,
+    ok,
+    ...(error ? { error } : {}),
+  });
+}
+
 export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   const pendingCommands = new Map<string, PendingCommand>();
   const commandTimeoutMs = deps.commandTimeoutMs ?? 5_000;
@@ -178,6 +196,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       processEnv: process.env,
       runtimePort,
       approvedNodes: deps.readApprovedNodes(),
+      childOutboxPath: path.join(app.getPath("userData"), "gateway-child-outbox.sqlite"),
     });
 
     env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
@@ -266,12 +285,23 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         return;
       }
 
-      void deps.onChildPersistMessage(parsedMessage).catch((error) => {
-        console.error(
-          `[runtime] failed to persist gateway child message ${parsedMessage.type} for ${parsedMessage.deviceId}`,
-          error,
-        );
-      });
+      void deps
+        .onChildPersistMessage(parsedMessage)
+        .then(() => {
+          sendPersistAck(spawnedChild, parsedMessage.messageId, true);
+        })
+        .catch((error) => {
+          sendPersistAck(
+            spawnedChild,
+            parsedMessage.messageId,
+            false,
+            error instanceof Error ? error.message : String(error),
+          );
+          console.error(
+            `[runtime] failed to persist gateway child message ${parsedMessage.type} for ${parsedMessage.deviceId}`,
+            error,
+          );
+        });
     });
     spawnedChild.once("exit", (code, signal) => {
       const wasIntentional = deps.intentionalChildExits.has(spawnedChild);

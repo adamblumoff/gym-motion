@@ -15,6 +15,10 @@ import {
 } from "./shared";
 import { refreshMotionRollupsForDeviceRange } from "./rollups";
 
+function sequenceConflictClause() {
+  return "(device_id, coalesce(boot_id, ''), sequence) where sequence is not null";
+}
+
 export async function recordMotionEvent(payload: IngestPayload): Promise<MotionStreamPayload> {
   const delta = payload.delta ?? null;
   const client = await getDb().connect();
@@ -75,7 +79,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          hardware_id
        )
        values ($1, $2, $3, $4, $5, $6, $7, $8)
-       on conflict (device_id, sequence) where sequence is not null do nothing
+       on conflict ${sequenceConflictClause()} do nothing
        returning
          id,
          device_id,
@@ -117,9 +121,11 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
                  firmware_version,
                  hardware_id
                from motion_events
-               where device_id = $1 and sequence = $2
+               where device_id = $1
+                 and coalesce(boot_id, '') = coalesce($2, '')
+                 and sequence = $3
                limit 1`,
-              [payload.deviceId, payload.sequence],
+              [payload.deviceId, payload.bootId ?? null, payload.sequence],
             )
           ).rows[0];
 

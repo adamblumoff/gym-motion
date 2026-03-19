@@ -43,6 +43,8 @@ describe("createDataEventHandler", () => {
       refreshHistory: async () => {},
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
+      reportHistoryRefreshFailure: () => {},
+      clearHistoryRefreshFailure: () => {},
     });
 
     applyDataEvent({
@@ -90,6 +92,8 @@ describe("createDataEventHandler", () => {
       },
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
+      reportHistoryRefreshFailure: () => {},
+      clearHistoryRefreshFailure: () => {},
     });
 
     applyDataEvent({
@@ -98,6 +102,7 @@ describe("createDataEventHandler", () => {
       deviceId: "stack-001",
     });
 
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(refreshAnalyticsNowCalls).toEqual([]);

@@ -60,6 +60,7 @@ export type DeviceLogRow = {
 
 export type DeviceSyncStateRow = {
   device_id: string;
+  boot_id: string;
   last_acked_sequence: string | number;
   last_acked_boot_id: string | null;
   last_sync_completed_at: Date | null;

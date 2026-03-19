@@ -120,9 +120,8 @@ export function createManagedGatewayRuntime(
       });
     },
     hasMotionRollupTables: e2eRuntimeStore ? async () => true : undefined,
-    listDeviceMotionEventsByReceivedAt: e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
-    findLatestDeviceMotionEventBeforeReceivedAt:
-      e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
+    listDeviceMotionEvents: e2eRuntimeStore?.listDeviceMotionEvents,
+    findLatestDeviceMotionEventBefore: e2eRuntimeStore?.findLatestDeviceMotionEventBefore,
     listMotionRollupBuckets: e2eRuntimeStore?.listMotionRollupBuckets,
     getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
@@ -170,6 +169,30 @@ export function createManagedGatewayRuntime(
         gatewayIssue: issue,
       }),
     };
+  }
+
+  function emitGatewayIssueSnapshot() {
+    emit({
+      type: "gateway-updated",
+      gateway: snapshot.gateway,
+      liveStatus: snapshot.liveStatus,
+      runtimeState: snapshot.runtimeState,
+      gatewayIssue: snapshot.gatewayIssue,
+    });
+  }
+
+  function reportHistoryRefreshFailure(detail: string) {
+    setGatewayIssue(`History refresh unavailable: ${detail}`);
+    emitGatewayIssueSnapshot();
+  }
+
+  function clearHistoryRefreshFailure() {
+    if (!snapshot.gatewayIssue?.startsWith("History refresh unavailable:")) {
+      return;
+    }
+
+    setGatewayIssue(null);
+    emitGatewayIssueSnapshot();
   }
 
   function readApprovedNodes() {
@@ -390,6 +413,8 @@ export function createManagedGatewayRuntime(
     refreshHistory: () => runtimeSync.refreshHistory(),
     refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
+    reportHistoryRefreshFailure,
+    clearHistoryRefreshFailure,
   });
 
   function applyDataEvent(event: Parameters<typeof applyDataEventToSnapshot>[0]) {

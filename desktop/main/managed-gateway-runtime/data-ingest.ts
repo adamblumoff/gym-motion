@@ -29,23 +29,32 @@ type DataIngestDeps = {
 
 type QueueKey = string;
 
+function queueKeyForMessage(message: { deviceId: string; type: GatewayChildPersistMessage["type"] }) {
+  const lane = message.type === "persist-device-backfill" ? "backfill" : "live";
+  return `${message.deviceId}:${lane}`;
+}
+
 export type ValidatedGatewayChildPersistMessage =
   | {
+      messageId: string;
       type: "persist-motion";
       deviceId: string;
       payload: IngestPayload;
     }
   | {
+      messageId: string;
       type: "persist-heartbeat";
       deviceId: string;
       payload: HeartbeatPayload;
     }
   | {
+      messageId: string;
       type: "persist-device-log";
       deviceId: string;
       payload: DeviceLogInput;
     }
   | {
+      messageId: string;
       type: "persist-device-backfill";
       deviceId: string;
       payload: BackfillBatchInput;
@@ -67,6 +76,7 @@ export function validateGatewayChildPersistMessage(
       }
 
       return {
+        messageId: message.messageId,
         type: message.type,
         deviceId: message.deviceId,
         payload: parsed.data,
@@ -84,6 +94,7 @@ export function validateGatewayChildPersistMessage(
       }
 
       return {
+        messageId: message.messageId,
         type: message.type,
         deviceId: message.deviceId,
         payload: parsed.data,
@@ -101,6 +112,7 @@ export function validateGatewayChildPersistMessage(
       }
 
       return {
+        messageId: message.messageId,
         type: message.type,
         deviceId: message.deviceId,
         payload: parsed.data,
@@ -120,6 +132,7 @@ export function validateGatewayChildPersistMessage(
       }
 
       return {
+        messageId: message.messageId,
         type: message.type,
         deviceId: message.deviceId,
         payload: parsed.data,
@@ -135,14 +148,14 @@ export function createDataIngestController(deps: DataIngestDeps) {
   const persistLog = deps.recordLog ?? recordDeviceLog;
   const persistBackfill = deps.recordBackfill ?? recordBackfillBatch;
 
-  function enqueue(deviceId: string, work: () => Promise<void>) {
-    const current = chains.get(deviceId) ?? Promise.resolve();
+  function enqueue(queueKey: QueueKey, work: () => Promise<void>) {
+    const current = chains.get(queueKey) ?? Promise.resolve();
     const next = current.then(work, work);
     const tracked = next.catch(() => {});
-    chains.set(deviceId, tracked);
+    chains.set(queueKey, tracked);
     return next.finally(() => {
-      if (chains.get(deviceId) === tracked) {
-        chains.delete(deviceId);
+      if (chains.get(queueKey) === tracked) {
+        chains.delete(queueKey);
       }
     });
   }
@@ -187,10 +200,10 @@ export function createDataIngestController(deps: DataIngestDeps) {
   return {
     handleMessage(message: GatewayChildPersistMessage) {
       const validated = validateGatewayChildPersistMessage(message);
-      return enqueue(validated.deviceId, () => persistValidatedMessage(validated));
+      return enqueue(queueKeyForMessage(validated), () => persistValidatedMessage(validated));
     },
     persistValidatedMessage(message: ValidatedGatewayChildPersistMessage) {
-      return enqueue(message.deviceId, () => persistValidatedMessage(message));
+      return enqueue(queueKeyForMessage(message), () => persistValidatedMessage(message));
     },
   };
 }

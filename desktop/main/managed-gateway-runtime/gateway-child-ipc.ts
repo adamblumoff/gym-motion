@@ -13,6 +13,7 @@ type GatewayChildPersistMessageType =
   | "persist-device-backfill";
 
 export type GatewayChildPersistMessage = {
+  messageId: string;
   type: GatewayChildPersistMessageType;
   deviceId: string;
   payload: unknown;
@@ -92,6 +93,13 @@ export type GatewayChildControlResponseMessage = {
   error?: string;
 };
 
+export type GatewayParentPersistAckMessage = {
+  type: "persist-ack";
+  messageId: string;
+  ok: boolean;
+  error?: string;
+};
+
 export type GatewayChildRuntimeMessage =
   | GatewayChildRuntimeDeviceMessage
   | GatewayChildGatewayStateMessage
@@ -121,11 +129,17 @@ export function parseGatewayChildMessage(input: unknown): GatewayChildMessage | 
   }
 
   if (isPersistMessageType(input.type)) {
-    if (typeof input.deviceId !== "string" || input.deviceId.trim().length === 0) {
+    if (
+      typeof input.messageId !== "string" ||
+      input.messageId.trim().length === 0 ||
+      typeof input.deviceId !== "string" ||
+      input.deviceId.trim().length === 0
+    ) {
       return null;
     }
 
     return {
+      messageId: input.messageId,
       type: input.type,
       deviceId: input.deviceId,
       payload: input.payload,

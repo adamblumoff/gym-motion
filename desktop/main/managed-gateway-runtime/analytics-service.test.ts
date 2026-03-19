@@ -19,6 +19,7 @@ function createStore(initial: Record<string, unknown> = {}) {
 
 describe("createAnalyticsService", () => {
   it("builds canonical snapshots from rollup buckets", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-18T12:30:00.000Z"));
     const onUpdated = vi.fn();
     const service = createAnalyticsService({
       store: createStore(),
@@ -53,6 +54,7 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovingSeconds).toBe(900);
     expect(analytics.buckets.some((bucket) => bucket.movementCount === 1)).toBe(true);
     expect(onUpdated).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
   });
 
   it("returns cached snapshots while preserving sync warning derivation", async () => {
@@ -157,19 +159,20 @@ describe("createAnalyticsService", () => {
   });
 
   it("falls back to raw history when rollup tables are unavailable", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-18T12:30:00.000Z"));
     const service = createAnalyticsService({
       store: createStore(),
       getRuntimeDevice: () => null,
       onUpdated: vi.fn(),
       hasMotionRollupTables: async () => false,
-      listDeviceMotionEventsByReceivedAt: async () => [
+      listDeviceMotionEvents: async () => [
         {
           id: 1,
           deviceId: "stack-001",
           sequence: 1,
           state: "moving",
           delta: 3,
-          eventTimestamp: 1000,
+          eventTimestamp: Date.parse("2026-03-18T12:10:00.000Z"),
           receivedAt: "2026-03-18T12:10:00.000Z",
           bootId: "boot-1",
           firmwareVersion: "1.0.0",
@@ -181,14 +184,14 @@ describe("createAnalyticsService", () => {
           sequence: 2,
           state: "still",
           delta: 0,
-          eventTimestamp: 2000,
+          eventTimestamp: Date.parse("2026-03-18T12:25:00.000Z"),
           receivedAt: "2026-03-18T12:25:00.000Z",
           bootId: "boot-1",
           firmwareVersion: "1.0.0",
           hardwareId: "hw-1",
         },
       ],
-      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      findLatestDeviceMotionEventBefore: async () => null,
       listMotionRollupBuckets: async () => {
         throw new Error("should not use rollup buckets");
       },
@@ -209,6 +212,7 @@ describe("createAnalyticsService", () => {
     expect(analytics.totalMovementCount).toBe(1);
     expect(analytics.totalMovingSeconds).toBe(15 * 60);
     expect(analytics.buckets.some((bucket) => bucket.movingSeconds === 15 * 60)).toBe(true);
+    nowSpy.mockRestore();
   });
 
   it("returns stale cached analytics when sync state lookup fails", async () => {

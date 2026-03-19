@@ -54,6 +54,36 @@ describeDb("motion event repository", () => {
     expect(second.event?.id).toBe(first.event?.id);
   });
 
+  it("allows the same device sequence to be recorded on a different boot", async () => {
+    const first = await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 100,
+      delta: 9,
+      sequence: 4,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    const second = await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 200,
+      delta: 0,
+      sequence: 4,
+      bootId: "boot-2",
+      firmwareVersion: "0.5.4",
+      hardwareId: "hw-1",
+    });
+
+    expect(first.event?.id).not.toBe(second.event?.id);
+    expect(second.event).toMatchObject({
+      sequence: 4,
+      eventTimestamp: 200,
+      bootId: "boot-2",
+    });
+  });
+
   it("records hourly rollups once per movement start and avoids double-counting duplicate sequences", async () => {
     await recordMotionEvent({
       deviceId: "stack-001",

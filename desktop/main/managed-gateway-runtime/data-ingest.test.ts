@@ -59,6 +59,7 @@ describe("createDataIngestController", () => {
     });
 
     const first = controller.handleMessage({
+      messageId: "msg-1",
       type: "persist-motion",
       deviceId: "stack-001",
       payload: {
@@ -69,6 +70,7 @@ describe("createDataIngestController", () => {
       },
     });
     const second = controller.handleMessage({
+      messageId: "msg-2",
       type: "persist-motion",
       deviceId: "stack-001",
       payload: {
@@ -79,6 +81,7 @@ describe("createDataIngestController", () => {
       },
     });
     const third = controller.handleMessage({
+      messageId: "msg-3",
       type: "persist-motion",
       deviceId: "stack-002",
       payload: {
@@ -133,5 +136,67 @@ describe("createDataIngestController", () => {
         },
       },
     });
+  });
+
+  it("keeps live writes moving while backfill waits in its own lane", async () => {
+    const callOrder: string[] = [];
+    let releaseBackfill: (() => void) | null = null;
+
+    const controller = createDataIngestController({
+      applyDataEvent() {},
+      async recordMotion(payload) {
+        callOrder.push(`motion:${payload.sequence}`);
+        return {
+          device: { id: payload.deviceId },
+          event: undefined,
+        } as never;
+      },
+      recordBackfill(payload) {
+        callOrder.push(`backfill:${payload.ackSequence}`);
+        return new Promise((resolve) => {
+          releaseBackfill = () =>
+            resolve({
+              insertedEvents: [],
+              insertedLogs: [],
+              syncState: {
+                deviceId: payload.deviceId,
+                lastAckedSequence: payload.ackSequence,
+                lastAckedBootId: payload.bootId ?? null,
+                lastSyncCompletedAt: null,
+                lastOverflowDetectedAt: null,
+              },
+            });
+        });
+      },
+    });
+
+    const backfill = controller.handleMessage({
+      messageId: "backfill-1",
+      type: "persist-device-backfill",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        bootId: "boot-1",
+        ackSequence: 10,
+        records: [],
+      },
+    });
+    const live = controller.handleMessage({
+      messageId: "motion-1",
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 11,
+        sequence: 11,
+      },
+    });
+
+    await live;
+    expect(callOrder).toEqual(["backfill:10", "motion:11"]);
+
+    releaseBackfill?.();
+    await backfill;
   });
 });

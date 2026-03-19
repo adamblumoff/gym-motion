@@ -17,17 +17,20 @@ describe("buildGatewayChildEnv", () => {
           localName: "GymMotion-aabb",
         },
       ],
+      childOutboxPath: "C:/temp/gateway-child-outbox.sqlite",
     });
 
     const nextEnv = buildGatewayChildEnv({
       processEnv: {},
       runtimePort: 4511,
       approvedNodes: [],
+      childOutboxPath: "C:/temp/gateway-child-outbox.sqlite",
     });
 
     expect(env.API_URL).toBeUndefined();
     expect(env.GATEWAY_RUNTIME_PORT).toBe("4510");
     expect(env.GATEWAY_APPROVED_NODE_RULES).toContain("esp32-001");
+    expect(env.GATEWAY_CHILD_OUTBOX_PATH).toBe("C:/temp/gateway-child-outbox.sqlite");
     expect(nextEnv.GATEWAY_RUNTIME_PORT).toBe("4511");
     expect(nextEnv.GATEWAY_APPROVED_NODE_RULES).toBe("[]");
   });

@@ -24,7 +24,23 @@ type DataEventHandlerDeps = {
   refreshHistory: () => Promise<void>;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
+  reportHistoryRefreshFailure: (detail: string) => void;
+  clearHistoryRefreshFailure: () => void;
 };
+
+async function refreshHistoryWithRetry(refreshHistory: () => Promise<void>) {
+  try {
+    await refreshHistory();
+    return;
+  } catch (firstError) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+      await refreshHistory();
+    } catch {
+      throw firstError;
+    }
+  }
+}
 
 export function createDataEventHandler(deps: DataEventHandlerDeps) {
   return function applyDataEvent(event: DesktopDataEvent) {
@@ -134,9 +150,16 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         break;
       case "backfill-recorded":
         deps.scheduleAnalyticsRefresh(event.deviceId);
-        void deps.refreshHistory().then(() => {
-          deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
-        });
+        void refreshHistoryWithRetry(deps.refreshHistory)
+          .then(() => {
+            deps.clearHistoryRefreshFailure();
+            deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
+          })
+          .catch((error) => {
+            deps.reportHistoryRefreshFailure(
+              error instanceof Error ? error.message : "History refresh failed after backfill.",
+            );
+          });
         break;
     }
   };

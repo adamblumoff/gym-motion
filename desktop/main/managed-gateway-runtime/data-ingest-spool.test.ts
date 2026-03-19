@@ -55,7 +55,8 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    await spool.enqueue({
+    const firstEnqueue = spool.enqueue({
+      messageId: "msg-1",
       type: "persist-motion",
       deviceId: "stack-001",
       payload: {
@@ -67,6 +68,7 @@ describe("createDataIngestSpool", () => {
     });
 
     await waitFor(() => attemptedSequences.length === 1);
+    firstEnqueue.catch(() => {});
     await spool.stop();
 
     const database = new DatabaseSync(dbPath);
@@ -95,7 +97,19 @@ describe("createDataIngestSpool", () => {
     });
 
     await replaySpool.start();
+    const replayEnqueue = replaySpool.enqueue({
+      messageId: "msg-1",
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 1,
+        sequence: 7,
+      },
+    });
     await waitFor(() => attemptedSequences.length === 2);
+    await replayEnqueue;
 
     const verifyDatabase = new DatabaseSync(dbPath);
     const remainingRows = verifyDatabase.prepare(`
@@ -128,7 +142,8 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    await spool.enqueue({
+    const enqueuePromise = spool.enqueue({
+      messageId: "msg-2",
       type: "persist-motion",
       deviceId: "stack-001",
       payload: {
@@ -151,6 +166,7 @@ describe("createDataIngestSpool", () => {
 
     resolvePersist?.();
     await stopPromise;
+    await enqueuePromise;
     await spool.stop();
 
     const database = new DatabaseSync(dbPath);
@@ -181,7 +197,8 @@ describe("createDataIngestSpool", () => {
     });
 
     await spool.start();
-    await spool.enqueue({
+    const enqueuePromise = spool.enqueue({
+      messageId: "msg-3",
       type: "persist-motion",
       deviceId: "stack-001",
       payload: {
@@ -197,6 +214,7 @@ describe("createDataIngestSpool", () => {
     const stopPromise = spool.stop();
     rejectPersist?.(new Error("database offline"));
     await stopPromise;
+    await expect(enqueuePromise).rejects.toThrow("Gateway ingest spool is stopping.");
 
     const database = new DatabaseSync(dbPath);
     const failedRow = database.prepare(`
@@ -225,6 +243,7 @@ describe("createDataIngestSpool", () => {
     await spool.stop();
 
     const message = {
+      messageId: "msg-4",
       type: "persist-motion" as const,
       deviceId: "stack-001",
       payload: {

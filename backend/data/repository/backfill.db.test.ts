@@ -135,4 +135,84 @@ describeDb("backfill repository", () => {
       }),
     ]);
   });
+
+  it("tracks sync state independently for each boot", async () => {
+    await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 12,
+      records: [
+        {
+          kind: "motion",
+          sequence: 10,
+          state: "moving",
+          delta: 5,
+          timestamp: 100,
+          bootId: "boot-1",
+        },
+      ],
+    });
+    await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-2",
+      ackSequence: 4,
+      records: [
+        {
+          kind: "motion",
+          sequence: 1,
+          state: "still",
+          delta: 0,
+          timestamp: 200,
+          bootId: "boot-2",
+        },
+      ],
+    });
+
+    const bootOneState = await getDeviceSyncState("stack-001", "boot-1");
+    const bootTwoState = await getDeviceSyncState("stack-001", "boot-2");
+
+    expect(bootOneState).toMatchObject({
+      deviceId: "stack-001",
+      lastAckedSequence: 12,
+      lastAckedBootId: "boot-1",
+    });
+    expect(bootTwoState).toMatchObject({
+      deviceId: "stack-001",
+      lastAckedSequence: 4,
+      lastAckedBootId: "boot-2",
+    });
+  });
+
+  it("fails noisy when a new sync cursor would advance without inserting any records", async () => {
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 100,
+      delta: 5,
+      sequence: 10,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    await expect(
+      recordBackfillBatch({
+        deviceId: "stack-001",
+        bootId: "boot-1",
+        ackSequence: 12,
+        records: [
+          {
+            kind: "motion",
+            sequence: 10,
+            state: "moving",
+            delta: 5,
+            timestamp: 100,
+            bootId: "boot-1",
+            firmwareVersion: "0.5.3",
+            hardwareId: "hw-1",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Backfill mismatch");
+  });
 });

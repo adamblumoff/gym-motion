@@ -411,6 +411,37 @@ export function createE2eRuntimeStore() {
         }));
     },
 
+    async listDeviceMotionEvents(args: {
+      deviceId: string;
+      startTimestamp: number;
+      endTimestamp?: number;
+    }) {
+      const end = args.endTimestamp ?? Date.now();
+      return (motionEvents.get(args.deviceId) ?? [])
+        .filter(
+          (event) =>
+            event.eventTimestamp >= args.startTimestamp && event.eventTimestamp < end,
+        )
+        .map(clone)
+        .sort((left, right) => left.eventTimestamp - right.eventTimestamp || left.id - right.id);
+    },
+
+    async findLatestDeviceMotionEventBefore(args: {
+      deviceId: string;
+      beforeTimestamp: number;
+    }) {
+      const matches = (motionEvents.get(args.deviceId) ?? []).filter(
+        (event) => event.eventTimestamp < args.beforeTimestamp,
+      );
+      return matches.length > 0
+        ? clone(
+            [...matches].sort(
+              (left, right) => right.eventTimestamp - left.eventTimestamp || right.id - left.id,
+            )[0] ?? null,
+          )
+        : null;
+    },
+
     async listDeviceMotionEventsByReceivedAt(args: {
       deviceId: string;
       startReceivedAt: string;
