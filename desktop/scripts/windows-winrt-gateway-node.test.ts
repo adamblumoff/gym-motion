@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { approvedNodeRulesReferToSamePhysicalNode } from "./windows-winrt-gateway-node.mjs";
+import { approvedNodeRulesReferToSamePhysicalNode } from "./windows-winrt-gateway-node";
 
 describe("approvedNodeRulesReferToSamePhysicalNode", () => {
   it("treats a provisional manual-scan rule and canonical known-device rule as the same node", () => {

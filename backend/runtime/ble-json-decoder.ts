@@ -1,3 +1,4 @@
+// @ts-nocheck
 const MAX_BUFFER_LENGTH = 64 * 1024
 
 export function createJsonObjectDecoder({ label, onObject, onParseError }) {

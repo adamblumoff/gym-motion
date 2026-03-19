@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldWriteDiscoveryLog,
   shouldWriteSidecarLog,
-} from "./windows-winrt-gateway-logging.mjs";
+} from "./windows-winrt-gateway-logging";
 
 describe("windows winrt gateway logging", () => {
   it("suppresses discovery logs during silent approved reconnect scans", () => {

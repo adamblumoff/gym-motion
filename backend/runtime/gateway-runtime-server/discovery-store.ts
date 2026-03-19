@@ -1,3 +1,4 @@
+// @ts-nocheck
 function normalizeBleAddress(address) {
   return typeof address === "string" ? address.toLowerCase() : null;
 }

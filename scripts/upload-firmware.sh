@@ -17,52 +17,34 @@ else
   exit 1
 fi
 
-PORT="${PORT:-}"
-FQBN="${FQBN:-esp32:esp32:esp32}"
-SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
-BUILD_PATH="${BUILD_PATH:-build/firmware}"
-PARTITIONS="${PARTITIONS:-min_spiffs}"
-VERIFY_UPLOAD="${VERIFY_UPLOAD:-0}"
+PORT=""
+EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)
-      PORT="${2:-}"
+      PORT="$2"
       shift 2
       ;;
-    --verify)
-      VERIFY_UPLOAD=1
-      shift
-      ;;
     *)
-      echo "Unsupported argument: $1" >&2
-      echo "Usage: $0 --port <serial-port> [--verify]" >&2
-      exit 1
+      EXTRA_ARGS+=("$1")
+      shift
       ;;
   esac
 done
 
 if [[ -z "$PORT" ]]; then
-  echo "A serial port is required. Pass --port <serial-port> or set PORT." >&2
+  echo "usage: bun run firmware:upload -- --port <serial-port> [extra arduino-cli args]" >&2
   exit 1
 fi
 
-echo "Uploading reference BLE node firmware to $PORT"
+FQBN="${FQBN:-esp32:esp32:esp32}"
+SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
+PARTITIONS="${PARTITIONS:-min_spiffs}"
 
-"$REPO_ROOT/scripts/build-firmware.sh"
-
-UPLOAD_ARGS=(
-  upload
-  --fqbn "$FQBN"
-  --board-options "PartitionScheme=$PARTITIONS"
-  --input-dir "$BUILD_PATH"
-  --port "$PORT"
-)
-
-if [[ "$VERIFY_UPLOAD" == "1" ]]; then
-  UPLOAD_ARGS+=(--verify)
-fi
-
-"$ARDUINO_CLI_BIN" "${UPLOAD_ARGS[@]}"
-
-echo "Reference BLE node firmware uploaded to $PORT using $FQBN with PartitionScheme=$PARTITIONS"
+"$ARDUINO_CLI_BIN" upload \
+  --fqbn "$FQBN" \
+  --board-options "PartitionScheme=$PARTITIONS" \
+  --port "$PORT" \
+  "${EXTRA_ARGS[@]}" \
+  "$SKETCH_PATH"

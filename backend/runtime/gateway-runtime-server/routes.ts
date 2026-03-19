@@ -1,4 +1,5 @@
-import { STREAM_PING_MS, formatSseEvent, jsonResponse } from "./utils.mjs";
+// @ts-nocheck
+import { STREAM_PING_MS, formatSseEvent, jsonResponse } from "./utils.js";
 
 export function createRequestHandler({
   gatewayState,

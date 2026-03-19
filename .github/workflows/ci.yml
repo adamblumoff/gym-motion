@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - chore/testing-foundation-vitest-ci
 
 jobs:
   ts-fast:
@@ -118,3 +119,24 @@ jobs:
 
       - name: Build firmware
         run: bun run firmware:build
+
+  firmware-host-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install host test compiler
+        run: sudo apt-get update && sudo apt-get install -y g++
+
+      - name: Run firmware host tests
+        run: bun run firmware:test:host

@@ -19,14 +19,11 @@ export default {
   npmRebuild: false,
   asar: true,
   asarUnpack: [
-    "backend/runtime/**",
-    "desktop/scripts/**",
+    "out/runtime/**",
   ],
   files: [
-    "backend/runtime/**",
     "dist/**",
     "out/**",
-    "desktop/scripts/**",
     "package.json",
   ],
   extraResources: isWindowsTarget

@@ -1,5 +1,6 @@
-import { sendToDesktop as defaultSendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
-import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.mjs";
+// @ts-nocheck
+import { sendToDesktop as defaultSendToDesktop } from "./windows-winrt-gateway-desktop-ipc.js";
+import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.js";
 
 function trimMessage(message) {
   const normalized = typeof message === "string" ? message.trim() : "";

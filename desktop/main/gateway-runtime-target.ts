@@ -18,13 +18,22 @@ export function resolveGatewayScriptPath(options: {
     return path.join(
       options.resourcesPath,
       "app.asar.unpacked",
+      "out",
+      "runtime",
       "desktop",
       "scripts",
-      "windows-winrt-gateway.mjs",
+      "windows-winrt-gateway.js",
     );
   }
 
-  return path.join(options.cwd, "desktop", "scripts", "windows-winrt-gateway.mjs");
+  return path.join(
+    options.cwd,
+    "out",
+    "runtime",
+    "desktop",
+    "scripts",
+    "windows-winrt-gateway.js",
+  );
 }
 
 export function resolveWindowsSidecarPath(options: {

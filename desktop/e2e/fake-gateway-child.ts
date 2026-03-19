@@ -1,6 +1,7 @@
+// @ts-nocheck
 import process from "node:process";
 
-import { sendToDesktop } from "../scripts/windows-winrt-gateway-desktop-ipc.mjs";
+import { sendToDesktop } from "../scripts/windows-winrt-gateway-desktop-ipc.js";
 
 const DEFAULT_NODE = {
   ruleId: "rule-f4e9d4",

@@ -10,6 +10,8 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
+#include "runtime_host_protocol.hpp"
+
 const char* FIRMWARE_VERSION = "0.5.3";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_NAMESPACE = "gym-motion";

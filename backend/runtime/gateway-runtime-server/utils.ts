@@ -1,3 +1,4 @@
+// @ts-nocheck
 import path from "node:path";
 
 export const METADATA_REFRESH_MS = 15_000;

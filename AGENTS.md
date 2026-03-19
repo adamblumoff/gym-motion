@@ -11,7 +11,7 @@
 - PlatformIO note: `/home/adamblumoff/gym-motion/firmware/platformio.ini` mirrors the current ESP32 Arduino build defaults (`esp32dev` + `min_spiffs.csv`) for local firmware work that prefers PlatformIO over Arduino CLI.
 - OTA release workflow:
   - before pushing, run the local manual QA gate:
-    - `bun test`
+    - `bun run test`
     - `bun run lint`
     - `bun run build`
     - `bun run firmware:build`

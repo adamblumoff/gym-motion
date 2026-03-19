@@ -34,7 +34,10 @@ void saveProvisioningConfig(
 }
 
 unsigned long allocateHistorySequence() {
-  const unsigned long sequence = nextHistorySequence++;
+  firmware_runtime::HistorySyncState state;
+  state.nextSequence = nextHistorySequence;
+  const unsigned long sequence = firmware_runtime::allocateHistorySequence(state);
+  nextHistorySequence = state.nextSequence;
   preferences.putULong(PREF_NEXT_SEQUENCE, nextHistorySequence);
   lastJournaledSequence = sequence;
   return sequence;
@@ -204,17 +207,25 @@ void journalMotionState(const char* state, int delta, unsigned long timestamp) {
 }
 
 void acknowledgeHistoryThrough(unsigned long sequence) {
-  if (sequence <= ackedHistorySequence) {
+  firmware_runtime::HistorySyncState state;
+  state.nextSequence = nextHistorySequence;
+  state.ackedSequence = ackedHistorySequence;
+  state.overflowed = historyOverflowed;
+  state.droppedCount = historyDroppedCount;
+  const firmware_runtime::HistoryAckResult result =
+    firmware_runtime::acknowledgeHistoryThrough(state, sequence);
+
+  if (!result.advanced) {
     return;
   }
 
-  ackedHistorySequence = sequence;
+  ackedHistorySequence = state.ackedSequence;
+  historyOverflowed = state.overflowed;
+  historyDroppedCount = state.droppedCount;
   preferences.putULong(PREF_ACKED_SEQUENCE, ackedHistorySequence);
   compactHistoryAboveSequence(ackedHistorySequence);
 
-  if (historyOverflowed) {
-    historyOverflowed = false;
-    historyDroppedCount = 0;
+  if (result.clearedOverflow) {
     persistHistoryOverflowState();
   }
 }

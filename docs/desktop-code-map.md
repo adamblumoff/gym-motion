@@ -12,9 +12,9 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Child IPC persistence ingest: [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
 - Preload bridge: [desktop/preload/index.ts](/home/adamblumoff/gym-motion/desktop/preload/index.ts)
 - Renderer runtime provider: [desktop/ui/src/app/runtime-context.tsx](/home/adamblumoff/gym-motion/desktop/ui/src/app/runtime-context.tsx)
-- Windows gateway script: [desktop/scripts/windows-winrt-gateway.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway.mjs)
-- Windows gateway child-to-main bridge: [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
-- Runtime server root: [backend/runtime/gateway-runtime-server/core.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.mjs)
+- Windows gateway script: [desktop/scripts/windows-winrt-gateway.ts](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway.ts)
+- Windows gateway child-to-main bridge: [desktop/scripts/windows-winrt-gateway-runtime-bridge.ts](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.ts)
+- Runtime server root: [backend/runtime/gateway-runtime-server/core.ts](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.ts)
 - Sidecar runtime root: [native/windows-ble-sidecar/src/windows/core_impl.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/core_impl.rs)
 - Sidecar session orchestration: [native/windows-ble-sidecar/src/windows/session.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session.rs)
 
@@ -25,9 +25,9 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
   - [native/windows-ble-sidecar/src/windows/session_command.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session_command.rs)
   - [native/windows-ble-sidecar/src/windows/session_transport.rs](/home/adamblumoff/gym-motion/native/windows-ble-sidecar/src/windows/session_transport.rs)
 - Runtime server (projection/cache only):
-  - [backend/runtime/gateway-runtime-server/core.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.mjs)
-  - [backend/runtime/gateway-runtime-server/runtime-events.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/runtime-events.mjs)
-  - [backend/runtime/gateway-runtime-server/routes.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/routes.mjs)
+  - [backend/runtime/gateway-runtime-server/core.ts](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/core.ts)
+  - [backend/runtime/gateway-runtime-server/runtime-events.ts](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/runtime-events.ts)
+  - [backend/runtime/gateway-runtime-server/routes.ts](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/routes.ts)
 - Electron main (lifecycle, persistence, intent sequencing):
   - [desktop/main/runtime.ts](/home/adamblumoff/gym-motion/desktop/main/runtime.ts)
   - [desktop/main/managed-gateway-runtime/operator-intents.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/operator-intents.ts)
@@ -49,9 +49,9 @@ This map is the quick "where do I edit" index for the supported Windows desktop 
 - Node list, badges, setup row folding, or dashboard status looks wrong:
   - start in renderer selectors under [desktop/ui/src/app/selectors](/home/adamblumoff/gym-motion/desktop/ui/src/app/selectors)
 - Runtime HTTP snapshot or stream projection is wrong:
-  - start in [backend/runtime/gateway-runtime-server/runtime-events.mjs](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/runtime-events.mjs)
+  - start in [backend/runtime/gateway-runtime-server/runtime-events.ts](/home/adamblumoff/gym-motion/backend/runtime/gateway-runtime-server/runtime-events.ts)
 - Device logs or telemetry are reaching the gateway console but not the per-device UI history:
-  - start in [desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.mjs)
+  - start in [desktop/scripts/windows-winrt-gateway-runtime-bridge.ts](/home/adamblumoff/gym-motion/desktop/scripts/windows-winrt-gateway-runtime-bridge.ts)
   - then check [desktop/main/managed-gateway-runtime/data-ingest.ts](/home/adamblumoff/gym-motion/desktop/main/managed-gateway-runtime/data-ingest.ts)
 - Raw WinRT sidecar logs are visible in the gateway console but intentionally absent from UI device history:
   - this is expected; only motion plus connected/disconnected lifecycle events are persisted for the UI

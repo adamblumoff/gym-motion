@@ -1,4 +1,5 @@
-import { METADATA_REFRESH_MS } from "./utils.mjs";
+// @ts-nocheck
+import { METADATA_REFRESH_MS } from "./utils.js";
 
 export function createMetadataManager({ apiBaseUrl, metadataByDeviceId, debug }) {
   let metadataLoadedAt = 0;

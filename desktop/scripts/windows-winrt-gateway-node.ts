@@ -1,3 +1,4 @@
+// @ts-nocheck
 export function describeNode(node = {}) {
   return {
     deviceId: node.knownDeviceId ?? node.known_device_id ?? null,

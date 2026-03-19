@@ -12,7 +12,14 @@ import type {
 import type { DesktopTestStepName } from "@core/services";
 
 const ROOT_DIR = process.cwd();
-const FAKE_GATEWAY_CHILD = path.join(ROOT_DIR, "desktop", "e2e", "fake-gateway-child.mjs");
+const FAKE_GATEWAY_CHILD = path.join(
+  ROOT_DIR,
+  "out",
+  "runtime",
+  "desktop",
+  "e2e",
+  "fake-gateway-child.js",
+);
 
 export const DEFAULT_APPROVED_RULE: ApprovedNodeRule = {
   id: "rule-f4e9d4",

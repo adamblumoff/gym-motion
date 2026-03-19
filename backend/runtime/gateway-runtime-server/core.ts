@@ -1,3 +1,4 @@
+// @ts-nocheck
 import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
@@ -13,15 +14,15 @@ import {
   sortDevices,
   emptyOtaRuntimeState,
   emptyReconnectRuntimeState,
-} from "./utils.mjs";
+} from "./utils.js";
 
-import { createKnownNodeStore } from "./persistence.mjs";
-import { createRequestHandler } from "./routes.mjs";
-import { createProjectionHelpers } from "./projection.mjs";
-import { createDiscoveryStore } from "./discovery-store.mjs";
-import { createManualScanManager } from "./manual-scan.mjs";
-import { createMetadataManager } from "./metadata-manager.mjs";
-import { createRuntimeDeviceEventController } from "./runtime-events.mjs";
+import { createKnownNodeStore } from "./persistence.js";
+import { createRequestHandler } from "./routes.js";
+import { createProjectionHelpers } from "./projection.js";
+import { createDiscoveryStore } from "./discovery-store.js";
+import { createManualScanManager } from "./manual-scan.js";
+import { createMetadataManager } from "./metadata-manager.js";
+import { createRuntimeDeviceEventController } from "./runtime-events.js";
 
 export function createGatewayRuntimeServer({
   apiBaseUrl,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
+import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge";
 
 describe("windows winrt gateway runtime bridge", () => {
   it("serializes telemetry forwarding per device while allowing other devices to continue", async () => {

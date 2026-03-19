@@ -22,7 +22,9 @@ describe("gateway runtime target", () => {
         cwd: "/repo",
         resourcesPath: "/resources",
       }),
-    ).toBe(path.join("/repo", "desktop", "scripts", "windows-winrt-gateway.mjs"));
+    ).toBe(
+      path.join("/repo", "out", "runtime", "desktop", "scripts", "windows-winrt-gateway.js"),
+    );
   });
 
   it("rejects non-Windows runtime paths", () => {

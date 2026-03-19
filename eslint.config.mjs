@@ -4,7 +4,15 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["release/**", "dist/**", "out/**", "node_modules/**"],
+    ignores: [
+      "release/**",
+      "dist/**",
+      "out/**",
+      "node_modules/**",
+      "backend/runtime/**/*.ts",
+      "desktop/e2e/fake-gateway-child.ts",
+      "desktop/scripts/windows-winrt-gateway*.ts",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

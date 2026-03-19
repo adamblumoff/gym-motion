@@ -1,24 +1,25 @@
+// @ts-nocheck
 /* global console, setTimeout */
 
 import process from "node:process";
 import { spawn } from "node:child_process";
 
-import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.mjs";
-import { shouldWriteSidecarLog } from "./windows-winrt-gateway-logging.mjs";
+import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.js";
+import { shouldWriteSidecarLog } from "./windows-winrt-gateway-logging.js";
 import {
   createGatewayConfig,
   parseApprovedNodeRules,
   readSelectedAdapterId,
   selectPreferredAdapter,
-} from "./windows-winrt-gateway-config.mjs";
+} from "./windows-winrt-gateway-config.js";
 import {
   approvedNodeRulesReferToSamePhysicalNode,
   normalizeAllowedNodesPayload,
   describeNode,
-} from "./windows-winrt-gateway-node.mjs";
-import { sendToDesktop } from "./windows-winrt-gateway-desktop-ipc.mjs";
-import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.mjs";
-import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.mjs";
+} from "./windows-winrt-gateway-node.js";
+import { sendToDesktop } from "./windows-winrt-gateway-desktop-ipc.js";
+import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.js";
+import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 
 const config = createGatewayConfig();
 

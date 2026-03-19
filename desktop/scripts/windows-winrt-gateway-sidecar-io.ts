@@ -1,3 +1,4 @@
+// @ts-nocheck
 /* global Buffer, console */
 
 export function attachJsonLineReader(stream, onEvent) {

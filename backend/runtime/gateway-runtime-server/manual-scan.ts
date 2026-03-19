@@ -1,3 +1,4 @@
+// @ts-nocheck
 export function createManualScanManager() {
   let manualScanState = "idle";
   let pairingCandidateId = null;

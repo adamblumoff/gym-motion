@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "out/runtime",
+    "noEmit": false,
+    "strict": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "backend/runtime/**/*.ts",
+    "desktop/scripts/windows-winrt-gateway*.ts",
+    "desktop/e2e/fake-gateway-child.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "node_modules/**",
+    "dist/**",
+    "out/**",
+    "release/**"
+  ]
+}

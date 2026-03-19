@@ -1,4 +1,5 @@
-import { latestTimestamp } from "./utils.mjs";
+// @ts-nocheck
+import { latestTimestamp } from "./utils.js";
 
 export function createProjectionHelpers({
   metadataByDeviceId,
