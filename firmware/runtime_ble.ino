@@ -383,7 +383,7 @@ void enforceRuntimeAppSessionLease() {
   startRuntimeAdvertising("expired app-session lease");
 }
 
-void sendTelemetry(int delta, unsigned long timestamp, bool force) {
+void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateChanged) {
   if (!runtimeBleConnected) {
     return;
   }
@@ -402,7 +402,8 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force) {
     ",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
-    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
+    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
+    "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
   notifyCharacteristic(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
   lastReportedState = currentDetectedState;
@@ -507,7 +508,7 @@ void handleRuntimeControl(const String& payload) {
 
   if (command.type == firmware_runtime::ControlCommandType::SyncNow) {
     disarmRuntimeBootstrapWatchdog();
-    sendTelemetry(lastReportedDelta, millis(), true);
+    sendTelemetry(lastReportedDelta, millis(), true, false);
     return;
   }
 
@@ -565,7 +566,7 @@ class GymServerCallbacks : public BLEServerCallbacks {
     if (runtimeStatusCharacteristic != nullptr) {
       runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
     }
-    sendTelemetry(lastReportedDelta, millis(), true);
+    sendTelemetry(lastReportedDelta, millis(), true, false);
   }
 
   void onDisconnect(BLEServer* server) override {

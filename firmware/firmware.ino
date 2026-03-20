@@ -121,7 +121,12 @@ struct OtaTransferState {
 OtaTransferState otaTransfer;
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version = "");
-void sendTelemetry(int delta, unsigned long timestamp, bool force = false);
+void sendTelemetry(
+  int delta,
+  unsigned long timestamp,
+  bool force = false,
+  bool stateChanged = false
+);
 
 String escapeJsonString(const String& value) {
   String escaped;

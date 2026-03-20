@@ -180,6 +180,64 @@ describe("windows winrt gateway runtime bridge", () => {
     expect(messages).toEqual([]);
   });
 
+  it("persists snapshot telemetry as a heartbeat even when it seeds the current state", async () => {
+    const messages = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: {
+              gatewayConnectionState: "connected",
+              telemetryFreshness: "fresh",
+              lastTelemetryAt: 1,
+              lastConnectedAt: null,
+              lastDisconnectedAt: null,
+            },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop(message) {
+        messages.push(message);
+        return true;
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 1,
+      delta: 0,
+      sequence: 99,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+      snapshot: true,
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "persist-heartbeat",
+        deviceId: "stack-001",
+        payload: {
+          deviceId: "stack-001",
+          timestamp: 1,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      },
+    ]);
+  });
+
   it("only persists connected and disconnected lifecycle logs", () => {
     const messages = [];
 

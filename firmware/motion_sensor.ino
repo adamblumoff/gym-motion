@@ -68,7 +68,7 @@ void updateMotionState() {
   }
 
   if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
-    sendTelemetry(delta, now, pendingMotionUpdate);
+    sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
   }
 
   lastX = x;

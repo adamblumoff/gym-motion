@@ -129,8 +129,9 @@ export function createRuntimeBridge({
     await runtimeServer.noteTelemetry(payload, peripheralInfo);
 
     const stateChanged = context.lastState !== payload.state;
+    const snapshotTelemetry = payload.snapshot === true;
 
-    if (stateChanged) {
+    if (!snapshotTelemetry && stateChanged) {
       emitPersistMessage("persist-motion", payload.deviceId, {
         deviceId: payload.deviceId,
         state: payload.state,
@@ -147,6 +148,7 @@ export function createRuntimeBridge({
     }
 
     if (Date.now() - context.lastHeartbeatForwardedAt < config.heartbeatMinIntervalMs) {
+      context.lastState = payload.state;
       return;
     }
 
@@ -157,6 +159,7 @@ export function createRuntimeBridge({
       firmwareVersion: payload.firmwareVersion,
       hardwareId: payload.hardwareId,
     });
+    context.lastState = payload.state;
     context.lastHeartbeatForwardedAt = Date.now();
   }
 
