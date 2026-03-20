@@ -216,6 +216,10 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
     firmware_runtime::acknowledgeHistoryThrough(state, sequence);
 
   if (!result.advanced) {
+    logRuntimeHistoryEvent(
+      "Ack ignored through sequence=" + String(sequence) +
+      " currentAckedSequence=" + String(ackedHistorySequence)
+    );
     return;
   }
 
@@ -228,6 +232,12 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
   if (result.clearedOverflow) {
     persistHistoryOverflowState();
   }
+
+  logRuntimeHistoryEvent(
+    "Ack applied through sequence=" + String(sequence) +
+    " ackedHistorySequence=" + String(ackedHistorySequence) +
+    " overflowCleared=" + String(result.clearedOverflow ? "true" : "false")
+  );
 }
 
 void sendHistorySyncComplete(
@@ -248,12 +258,26 @@ void sendHistorySyncComplete(
 
   payload += "}";
   notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+
+  logRuntimeHistoryEvent(
+    "Sync complete latestSequence=" + String(latestSequence) +
+    " highWaterSequence=" + String(highWaterSequence) +
+    " sentCount=" + String(sentCount) +
+    " hasMore=" + String(latestSequence < highWaterSequence ? "true" : "false") +
+    " overflowed=" + String(historyOverflowed ? "true" : "false")
+  );
 }
 
 void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
   File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
   const unsigned long highWaterSequence =
     nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+
+  logRuntimeHistoryEvent(
+    "Streaming records afterSequence=" + String(afterSequence) +
+    " maxRecords=" + String(maxRecords) +
+    " highWaterSequence=" + String(highWaterSequence)
+  );
 
   if (!history) {
     sendHistorySyncComplete(afterSequence, highWaterSequence, 0);

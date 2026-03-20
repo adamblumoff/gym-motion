@@ -35,6 +35,10 @@ export type DataIngestSpool = {
 const MAX_BACKOFF_MS = 30_000;
 const STOPPING_ERROR_MESSAGE = "Gateway ingest spool is stopping.";
 
+function logBackfillSpool(message: string, details: Record<string, unknown>) {
+  console.info(`[runtime] ${message}`, details);
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -258,9 +262,24 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     drainingDevices.add(row.device_id);
 
     try {
+      if (row.message_type === "persist-device-backfill") {
+        logBackfillSpool("draining backfill spool message", {
+          messageId: row.message_id,
+          deviceId: row.device_id,
+          attemptCount: row.attempt_count,
+        });
+      }
+
       await deps.persistValidatedMessage(deserializeRow(row));
       deleteRow.run(row.id);
       resolveMessage(row.message_id);
+
+      if (row.message_type === "persist-device-backfill") {
+        logBackfillSpool("drained backfill spool message", {
+          messageId: row.message_id,
+          deviceId: row.device_id,
+        });
+      }
     } catch (error) {
       const attemptCount = row.attempt_count + 1;
       const detail = error instanceof Error ? error.message : String(error);
@@ -328,6 +347,15 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       timestamp,
       timestamp,
     );
+
+    if (validated.type === "persist-device-backfill") {
+      logBackfillSpool("queued backfill spool message", {
+        messageId: validated.messageId,
+        deviceId: validated.deviceId,
+        ackSequence: validated.payload.ackSequence,
+        recordCount: validated.payload.records.length,
+      });
+    }
 
     const existingRow = selectRowByMessageId.get(validated.messageId) as
       | IngestSpoolRow

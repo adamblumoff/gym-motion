@@ -33,6 +33,10 @@ function queueKeyForMessage(message: { deviceId: string }) {
   return message.deviceId;
 }
 
+function logIngest(message: string, details: Record<string, unknown>) {
+  console.info(`[runtime] ${message}`, details);
+}
+
 export type ValidatedGatewayChildPersistMessage =
   | {
       messageId: string;
@@ -186,7 +190,21 @@ export function createDataIngestController(deps: DataIngestDeps) {
         return;
       }
       case "persist-device-backfill": {
+        logIngest("persisting backfill batch", {
+          messageId: message.messageId,
+          deviceId: message.deviceId,
+          ackSequence: message.payload.ackSequence,
+          recordCount: message.payload.records.length,
+        });
         const payload = await persistBackfill(message.payload);
+        logIngest("persisted backfill batch", {
+          messageId: message.messageId,
+          deviceId: message.deviceId,
+          ackSequence: message.payload.ackSequence,
+          insertedEventCount: payload.insertedEvents.length,
+          insertedLogCount: payload.insertedLogs.length,
+          provenAckSequence: payload.syncState.lastAckedSequence,
+        });
         deps.applyDataEvent({
           type: "backfill-recorded",
           payload,
@@ -199,10 +217,27 @@ export function createDataIngestController(deps: DataIngestDeps) {
   return {
     handleMessage(message: GatewayChildPersistMessage) {
       const validated = validateGatewayChildPersistMessage(message);
-      return enqueue(queueKeyForMessage(validated), () => persistValidatedMessage(validated));
+      const queueKey = queueKeyForMessage(validated);
+      const queueBusy = chains.has(queueKey);
+
+      if (validated.type === "persist-device-backfill" || queueBusy) {
+        logIngest("queued ingest message", {
+          messageId: validated.messageId,
+          type: validated.type,
+          deviceId: validated.deviceId,
+          queueBusy,
+          ackSequence:
+            validated.type === "persist-device-backfill"
+              ? validated.payload.ackSequence
+              : undefined,
+        });
+      }
+
+      return enqueue(queueKey, () => persistValidatedMessage(validated));
     },
     persistValidatedMessage(message: ValidatedGatewayChildPersistMessage) {
-      return enqueue(queueKeyForMessage(message), () => persistValidatedMessage(message));
+      const queueKey = queueKeyForMessage(message);
+      return enqueue(queueKey, () => persistValidatedMessage(message));
     },
   };
 }

@@ -105,6 +105,11 @@ void logRuntimeTransportEvent(const String& message) {
   Serial.println(message);
 }
 
+void logRuntimeHistoryEvent(const String& message) {
+  Serial.print("[history] ");
+  Serial.println(message);
+}
+
 void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
   if (advertising == nullptr) {
     return;
@@ -534,12 +539,19 @@ void handleRuntimeControl(const String& payload) {
     disarmRuntimeBootstrapWatchdog();
     const firmware_runtime::HistorySyncRequest request =
       firmware_runtime::createHistorySyncRequest(command, HISTORY_SYNC_PAGE_SIZE);
+    logRuntimeHistoryEvent(
+      "Sync requested afterSequence=" + String(request.afterSequence) +
+      " maxRecords=" + String(request.maxRecords)
+    );
     streamHistoryRecords(request.afterSequence, request.maxRecords);
     return;
   }
 
   if (command.type == firmware_runtime::ControlCommandType::HistoryAck) {
     disarmRuntimeBootstrapWatchdog();
+    logRuntimeHistoryEvent(
+      "Ack requested through sequence=" + String(command.sequence)
+    );
     acknowledgeHistoryThrough(command.sequence);
     return;
   }

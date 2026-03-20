@@ -43,6 +43,10 @@ async function refreshWithRetry(work: () => Promise<void>) {
   }
 }
 
+function logBackfillEvent(message: string, details: Record<string, unknown>) {
+  console.info(`[runtime] ${message}`, details);
+}
+
 export function createDataEventHandler(deps: DataEventHandlerDeps) {
   return function applyDataEvent(event: DesktopDataEvent) {
     switch (event.type) {
@@ -150,13 +154,26 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         }
         break;
       case "backfill-recorded":
+        logBackfillEvent("backfill recorded; scheduling history and analytics refresh", {
+          deviceId: event.deviceId,
+        });
         deps.scheduleAnalyticsRefresh(event.deviceId);
         void refreshWithRetry(() => deps.refreshDeviceHistory(event.deviceId))
           .then(() => {
             deps.clearHistoryRefreshFailure();
+            logBackfillEvent("backfill device history refresh completed", {
+              deviceId: event.deviceId,
+            });
             deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
           })
           .catch((error) => {
+            logBackfillEvent("backfill device history refresh failed", {
+              deviceId: event.deviceId,
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : "History refresh failed after backfill.",
+            });
             deps.reportHistoryRefreshFailure(
               error instanceof Error ? error.message : "History refresh failed after backfill.",
             );
