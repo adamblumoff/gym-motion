@@ -123,10 +123,10 @@ SessionOnlineUpdate markAppSessionOnline(
   state.appSessionLeaseTimeoutMs = nextTimeout;
   state.runtimeBootstrapSessionNonce = sessionNonce;
 
-  return {
-    sessionChanged,
-    nextTimeout,
-  };
+  SessionOnlineUpdate update;
+  update.sessionChanged = sessionChanged;
+  update.nextTimeoutMs = nextTimeout;
+  return update;
 }
 
 LeaseEnforcementResult evaluateAppSessionLease(
@@ -141,12 +141,12 @@ LeaseEnforcementResult evaluateAppSessionLease(
   if (state.runtimeBootstrapLeasePending) {
     if (state.runtimeBleConnectedAt > 0 &&
         now - state.runtimeBleConnectedAt >= bootstrapTimeoutMs) {
-      return {
-        LeaseEnforcementResultKind::BootstrapTimedOut,
-        true,
-        true,
-        true,
-      };
+      LeaseEnforcementResult result;
+      result.kind = LeaseEnforcementResultKind::BootstrapTimedOut;
+      result.shouldDisconnect = true;
+      result.shouldRestartAdvertising = true;
+      result.shouldResetSession = true;
+      return result;
     }
 
     return {};
@@ -159,12 +159,12 @@ LeaseEnforcementResult evaluateAppSessionLease(
   if (!state.runtimeAppSessionConnected || state.lastAppSessionLeaseAt == 0) {
     if (state.runtimeBleConnectedAt > 0 &&
         now - state.runtimeBleConnectedAt >= bootstrapTimeoutMs) {
-      return {
-        LeaseEnforcementResultKind::MissingLeaseTimedOut,
-        true,
-        true,
-        true,
-      };
+      LeaseEnforcementResult result;
+      result.kind = LeaseEnforcementResultKind::MissingLeaseTimedOut;
+      result.shouldDisconnect = true;
+      result.shouldRestartAdvertising = true;
+      result.shouldResetSession = true;
+      return result;
     }
 
     return {};
@@ -174,12 +174,11 @@ LeaseEnforcementResult evaluateAppSessionLease(
     return {};
   }
 
-  return {
-    LeaseEnforcementResultKind::LeaseExpired,
-    true,
-    true,
-    false,
-  };
+  LeaseEnforcementResult result;
+  result.kind = LeaseEnforcementResultKind::LeaseExpired;
+  result.shouldDisconnect = true;
+  result.shouldRestartAdvertising = true;
+  return result;
 }
 
 ControlCommand parseRuntimeControlCommand(
@@ -259,20 +258,21 @@ HistoryAckResult acknowledgeHistoryThrough(HistorySyncState& state, unsigned lon
     state.droppedCount = 0;
   }
 
-  return {
-    true,
-    clearedOverflow,
-  };
+  HistoryAckResult result;
+  result.advanced = true;
+  result.clearedOverflow = clearedOverflow;
+  return result;
 }
 
 HistorySyncRequest createHistorySyncRequest(
   const ControlCommand& command,
   std::size_t defaultHistoryPageSize
 ) {
-  return {
-    command.afterSequence,
-    command.maxRecords > 0 ? command.maxRecords : defaultHistoryPageSize,
-  };
+  HistorySyncRequest request;
+  request.afterSequence = command.afterSequence;
+  request.maxRecords =
+    command.maxRecords > 0 ? command.maxRecords : defaultHistoryPageSize;
+  return request;
 }
 
 }  // namespace firmware_runtime
