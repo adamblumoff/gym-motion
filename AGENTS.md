@@ -12,6 +12,7 @@
 - Source-of-truth sketch: `/home/adamblumoff/gym-motion/firmware/firmware.ino`
 - Normal firmware rollouts should go through the OTA release flow, not manual Arduino uploads.
 - For bench USB flashing, prefer `bun run firmware:upload -- --port <serial-port>` so local flashes match the repo's OTA/CI partition settings.
+- After firmware changes, try a bench USB upload with `bun run firmware:upload -- --port <serial-port>` before handoff when hardware access is available and the local environment supports it.
 
 ## Windows Desktop Notes
 
