@@ -185,21 +185,21 @@ describeDb("backfill repository", () => {
   });
 
   it("clamps an existing boot cursor at the first missing sequence in the batch", async () => {
-    await recordMotionEvent({
-      deviceId: "stack-001",
-      state: "moving",
-      timestamp: 1,
-      delta: 5,
-      sequence: 1,
-      bootId: "boot-1",
-      firmwareVersion: "0.5.3",
-      hardwareId: "hw-1",
-    });
     await recordBackfillBatch({
       deviceId: "stack-001",
       bootId: "boot-1",
       ackSequence: 2,
       records: [
+        {
+          kind: "motion",
+          sequence: 1,
+          state: "moving",
+          delta: 5,
+          timestamp: 1,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
         {
           kind: "node-log",
           sequence: 2,
