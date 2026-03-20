@@ -21,11 +21,11 @@ describeDb("backfill repository", () => {
     const result = await recordBackfillBatch({
       deviceId: "stack-001",
       bootId: "boot-1",
-      ackSequence: 12,
+      ackSequence: 2,
       records: [
         {
           kind: "motion",
-          sequence: 10,
+          sequence: 1,
           state: "moving",
           delta: 5,
           timestamp: 100,
@@ -35,7 +35,7 @@ describeDb("backfill repository", () => {
         },
         {
           kind: "node-log",
-          sequence: 11,
+          sequence: 2,
           level: "info",
           code: "node.connected",
           message: "Gateway connected.",
@@ -56,12 +56,12 @@ describeDb("backfill repository", () => {
     expect(result.insertedLogs).toHaveLength(1);
     expect(result.syncState).toMatchObject({
       deviceId: "stack-001",
-      lastAckedSequence: 12,
+      lastAckedSequence: 2,
       lastAckedBootId: "boot-1",
     });
     expect(syncState).toMatchObject({
       deviceId: "stack-001",
-      lastAckedSequence: 12,
+      lastAckedSequence: 2,
       lastAckedBootId: "boot-1",
     });
   });
@@ -141,11 +141,11 @@ describeDb("backfill repository", () => {
     await recordBackfillBatch({
       deviceId: "stack-001",
       bootId: "boot-1",
-      ackSequence: 12,
+      ackSequence: 1,
       records: [
         {
           kind: "motion",
-          sequence: 10,
+          sequence: 1,
           state: "moving",
           delta: 5,
           timestamp: 100,
@@ -156,7 +156,7 @@ describeDb("backfill repository", () => {
     await recordBackfillBatch({
       deviceId: "stack-001",
       bootId: "boot-2",
-      ackSequence: 4,
+      ackSequence: 1,
       records: [
         {
           kind: "motion",
@@ -174,47 +174,184 @@ describeDb("backfill repository", () => {
 
     expect(bootOneState).toMatchObject({
       deviceId: "stack-001",
-      lastAckedSequence: 12,
+      lastAckedSequence: 1,
       lastAckedBootId: "boot-1",
     });
     expect(bootTwoState).toMatchObject({
       deviceId: "stack-001",
-      lastAckedSequence: 4,
+      lastAckedSequence: 1,
       lastAckedBootId: "boot-2",
     });
   });
 
-  it("fails noisy when a new sync cursor would advance without inserting any records", async () => {
+  it("clamps an existing boot cursor at the first missing sequence in the batch", async () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "moving",
-      timestamp: 100,
+      timestamp: 1,
       delta: 5,
-      sequence: 10,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 2,
+      records: [
+        {
+          kind: "node-log",
+          sequence: 2,
+          level: "info",
+          code: "node.connected",
+          message: "Gateway connected.",
+          timestamp: 2,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      ],
+    });
+
+    const result = await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 5,
+      records: [
+        {
+          kind: "motion",
+          sequence: 3,
+          state: "moving",
+          delta: 5,
+          timestamp: 3,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "node-log",
+          sequence: 5,
+          level: "info",
+          code: "node.connected",
+          message: "Gateway connected.",
+          timestamp: 5,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      ],
+    });
+
+    expect(result.syncState.lastAckedSequence).toBe(3);
+    expect(await getDeviceSyncState("stack-001", "boot-1")).toMatchObject({
+      lastAckedSequence: 3,
+    });
+  });
+
+  it("counts pre-existing duplicates toward contiguous durable coverage", async () => {
+    await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 5,
+      records: [
+        {
+          kind: "motion",
+          sequence: 1,
+          state: "moving",
+          delta: 5,
+          timestamp: 1,
+          bootId: "boot-1",
+        },
+        {
+          kind: "motion",
+          sequence: 2,
+          state: "still",
+          delta: 0,
+          timestamp: 2,
+          bootId: "boot-1",
+        },
+        {
+          kind: "motion",
+          sequence: 3,
+          state: "moving",
+          delta: 4,
+          timestamp: 3,
+          bootId: "boot-1",
+        },
+        {
+          kind: "motion",
+          sequence: 4,
+          state: "still",
+          delta: 0,
+          timestamp: 4,
+          bootId: "boot-1",
+        },
+        {
+          kind: "motion",
+          sequence: 5,
+          state: "moving",
+          delta: 6,
+          timestamp: 5,
+          bootId: "boot-1",
+        },
+      ],
+    });
+
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 6,
+      delta: 0,
+      sequence: 6,
       bootId: "boot-1",
       firmwareVersion: "0.5.3",
       hardwareId: "hw-1",
     });
 
-    await expect(
-      recordBackfillBatch({
-        deviceId: "stack-001",
-        bootId: "boot-1",
-        ackSequence: 12,
-        records: [
-          {
-            kind: "motion",
-            sequence: 10,
-            state: "moving",
-            delta: 5,
-            timestamp: 100,
-            bootId: "boot-1",
-            firmwareVersion: "0.5.3",
-            hardwareId: "hw-1",
-          },
-        ],
-      }),
-    ).rejects.toThrow("Backfill mismatch");
+    const result = await recordBackfillBatch({
+      deviceId: "stack-001",
+      bootId: "boot-1",
+      ackSequence: 8,
+      records: [
+        {
+          kind: "motion",
+          sequence: 6,
+          state: "still",
+          delta: 0,
+          timestamp: 6,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "node-log",
+          sequence: 7,
+          level: "info",
+          code: "node.connected",
+          message: "Gateway connected.",
+          timestamp: 7,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "motion",
+          sequence: 8,
+          state: "moving",
+          delta: 3,
+          timestamp: 8,
+          bootId: "boot-1",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      ],
+    });
+
+    expect(result.syncState.lastAckedSequence).toBe(8);
+    expect(await getDeviceSyncState("stack-001", "boot-1")).toMatchObject({
+      lastAckedSequence: 8,
+    });
   });
 
   it("derives backfill received_at from the latest live contact instead of import time", async () => {

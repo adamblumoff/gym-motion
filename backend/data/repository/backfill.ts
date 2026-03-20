@@ -54,6 +54,81 @@ export function shouldApplyBackfillMotionState(
   return !hasLiveContact && hasMotionRecord;
 }
 
+type BackfillExpectedKinds = {
+  motion: boolean;
+  log: boolean;
+};
+
+function buildExpectedBackfillSequenceKinds(args: {
+  records: BackfillBatchInput["records"];
+  previousAckSequence: number;
+  requestedAckSequence: number;
+}) {
+  const expectedBySequence = new Map<number, BackfillExpectedKinds>();
+
+  for (const record of args.records) {
+    if (
+      record.sequence <= args.previousAckSequence ||
+      record.sequence > args.requestedAckSequence
+    ) {
+      continue;
+    }
+
+    const expected = expectedBySequence.get(record.sequence) ?? {
+      motion: false,
+      log: false,
+    };
+
+    if (record.kind === "motion") {
+      expected.motion = true;
+    } else {
+      expected.log = true;
+    }
+
+    expectedBySequence.set(record.sequence, expected);
+  }
+
+  return expectedBySequence;
+}
+
+export function computeProvenBackfillAckSequence(args: {
+  previousAckSequence: number;
+  requestedAckSequence: number;
+  records: BackfillBatchInput["records"];
+  durableMotionSequences: Iterable<number>;
+  durableLogSequences: Iterable<number>;
+}) {
+  const expectedBySequence = buildExpectedBackfillSequenceKinds({
+    records: args.records,
+    previousAckSequence: args.previousAckSequence,
+    requestedAckSequence: args.requestedAckSequence,
+  });
+  const durableMotionSequences = new Set(args.durableMotionSequences);
+  const durableLogSequences = new Set(args.durableLogSequences);
+  let provenAckSequence = args.previousAckSequence;
+
+  while (provenAckSequence < args.requestedAckSequence) {
+    const nextSequence = provenAckSequence + 1;
+    const expected = expectedBySequence.get(nextSequence);
+
+    if (!expected) {
+      break;
+    }
+
+    if (expected.motion && !durableMotionSequences.has(nextSequence)) {
+      break;
+    }
+
+    if (expected.log && !durableLogSequences.has(nextSequence)) {
+      break;
+    }
+
+    provenAckSequence = nextSequence;
+  }
+
+  return provenAckSequence;
+}
+
 export async function getDeviceSyncState(
   deviceId: string,
   bootId?: string | null,
@@ -96,6 +171,20 @@ export async function recordBackfillBatch(
 
   try {
     await client.query("BEGIN");
+
+    const existingBootSyncStateResult = await client.query<{
+      last_acked_sequence: string | number;
+    }>(
+      `select last_acked_sequence
+       from device_sync_state
+       where device_id = $1
+         and boot_id = $2
+       limit 1`,
+      [input.deviceId, normalizedActiveBootId],
+    );
+    const previousAckSequence = existingBootSyncStateResult.rows[0]
+      ? Number(existingBootSyncStateResult.rows[0].last_acked_sequence)
+      : 0;
 
     const maxTimestamp = input.records.reduce(
       (highest, record) => Math.max(highest, "timestamp" in record ? record.timestamp ?? 0 : 0),
@@ -359,26 +448,47 @@ export async function recordBackfillBatch(
       });
     }
 
-    const existingBootSyncState = await client.query<{ has_row: boolean }>(
-      `select true as has_row
-       from device_sync_state
-       where device_id = $1
-         and boot_id = $2
-       limit 1`,
-      [input.deviceId, normalizedActiveBootId],
-    );
-    const insertedRecordCount = insertedEvents.length + insertedLogs.length;
-    const expectedRecordCount = input.records.length;
+    const expectedBySequence = buildExpectedBackfillSequenceKinds({
+      records: input.records,
+      previousAckSequence,
+      requestedAckSequence: input.ackSequence,
+    });
+    const expectedMotionSequences = [...expectedBySequence.entries()]
+      .filter(([, expected]) => expected.motion)
+      .map(([sequence]) => sequence);
+    const expectedLogSequences = [...expectedBySequence.entries()]
+      .filter(([, expected]) => expected.log)
+      .map(([sequence]) => sequence);
 
-    if (
-      expectedRecordCount > 0 &&
-      insertedRecordCount === 0 &&
-      existingBootSyncState.rowCount === 0
-    ) {
-      throw new Error(
-        `Backfill mismatch for ${input.deviceId}: empty insert set for new boot ${activeBootId ?? "<legacy>"}.`,
-      );
-    }
+    const durableMotionSequenceRows =
+      expectedMotionSequences.length > 0
+        ? await client.query<{ sequence: string | number }>(
+            `select sequence
+             from motion_events
+             where device_id = $1
+               and coalesce(boot_id, '') = $2
+               and sequence = any($3::bigint[])`,
+            [input.deviceId, normalizedActiveBootId, expectedMotionSequences],
+          )
+        : { rows: [] };
+    const durableLogSequenceRows =
+      expectedLogSequences.length > 0
+        ? await client.query<{ sequence: string | number }>(
+            `select sequence
+             from device_logs
+             where device_id = $1
+               and coalesce(boot_id, '') = $2
+               and sequence = any($3::bigint[])`,
+            [input.deviceId, normalizedActiveBootId, expectedLogSequences],
+          )
+        : { rows: [] };
+    const provenAckSequence = computeProvenBackfillAckSequence({
+      previousAckSequence,
+      requestedAckSequence: input.ackSequence,
+      records: input.records,
+      durableMotionSequences: durableMotionSequenceRows.rows.map((row) => Number(row.sequence)),
+      durableLogSequences: durableLogSequenceRows.rows.map((row) => Number(row.sequence)),
+    });
 
     const syncResult = await client.query<DeviceSyncStateRow>(
       `insert into device_sync_state (
@@ -404,10 +514,10 @@ export async function recordBackfillBatch(
          last_acked_boot_id,
          last_sync_completed_at,
          last_overflow_detected_at`,
-      [
+       [
         input.deviceId,
         normalizedActiveBootId,
-        input.ackSequence,
+        provenAckSequence,
         activeBootId ?? null,
         input.overflowDetectedAt ?? null,
       ],
