@@ -29,9 +29,8 @@ type DataIngestDeps = {
 
 type QueueKey = string;
 
-function queueKeyForMessage(message: { deviceId: string; type: GatewayChildPersistMessage["type"] }) {
-  const lane = message.type === "persist-device-backfill" ? "backfill" : "live";
-  return `${message.deviceId}:${lane}`;
+function queueKeyForMessage(message: { deviceId: string }) {
+  return message.deviceId;
 }
 
 export type ValidatedGatewayChildPersistMessage =

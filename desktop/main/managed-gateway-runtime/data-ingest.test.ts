@@ -138,21 +138,93 @@ describe("createDataIngestController", () => {
     });
   });
 
-  it("keeps live writes moving while backfill waits in its own lane", async () => {
+  it("serializes backfill behind earlier live writes for the same device", async () => {
+    const callOrder: string[] = [];
+    let releaseMotion: (() => void) | null = null;
+
+    const controller = createDataIngestController({
+      applyDataEvent() {},
+      recordMotion(payload) {
+        callOrder.push(`motion:${payload.sequence}`);
+        return new Promise((resolve) => {
+          releaseMotion = () =>
+            resolve({
+              device: { id: payload.deviceId },
+              event: undefined,
+            } as never);
+        });
+      },
+      async recordBackfill(payload) {
+        callOrder.push(`backfill:${payload.ackSequence}`);
+        return {
+          insertedEvents: [],
+          insertedLogs: [],
+          syncState: {
+            deviceId: payload.deviceId,
+            lastAckedSequence: payload.ackSequence,
+            lastAckedBootId: payload.bootId ?? null,
+            lastSyncCompletedAt: null,
+            lastOverflowDetectedAt: null,
+          },
+        };
+      },
+    });
+
+    const live = controller.handleMessage({
+      messageId: "motion-1",
+      type: "persist-motion",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 11,
+        sequence: 11,
+      },
+    });
+    const backfill = controller.handleMessage({
+      messageId: "backfill-1",
+      type: "persist-device-backfill",
+      deviceId: "stack-001",
+      payload: {
+        deviceId: "stack-001",
+        bootId: "boot-1",
+        ackSequence: 10,
+        records: [],
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(callOrder).toEqual(["motion:11"]);
+
+    releaseMotion?.();
+    await Promise.all([live, backfill]);
+
+    expect(callOrder).toEqual(["motion:11", "backfill:10"]);
+  });
+
+  it("serializes heartbeat behind backfill for the same device while keeping other devices independent", async () => {
     const callOrder: string[] = [];
     let releaseBackfill: (() => void) | null = null;
 
     const controller = createDataIngestController({
       applyDataEvent() {},
       async recordMotion(payload) {
-        callOrder.push(`motion:${payload.sequence}`);
+        callOrder.push(`motion:${payload.deviceId}:${payload.sequence}`);
         return {
           device: { id: payload.deviceId },
           event: undefined,
         } as never;
       },
+      async recordHeartbeat(payload) {
+        callOrder.push(`heartbeat:${payload.deviceId}:${payload.timestamp}`);
+        return {
+          device: { id: payload.deviceId },
+        } as never;
+      },
       recordBackfill(payload) {
-        callOrder.push(`backfill:${payload.ackSequence}`);
+        callOrder.push(`backfill:${payload.deviceId}:${payload.ackSequence}`);
         return new Promise((resolve) => {
           releaseBackfill = () =>
             resolve({
@@ -181,22 +253,43 @@ describe("createDataIngestController", () => {
         records: [],
       },
     });
-    const live = controller.handleMessage({
-      messageId: "motion-1",
-      type: "persist-motion",
+    const heartbeat = controller.handleMessage({
+      messageId: "heartbeat-1",
+      type: "persist-heartbeat",
       deviceId: "stack-001",
       payload: {
         deviceId: "stack-001",
-        state: "moving",
         timestamp: 11,
-        sequence: 11,
+        bootId: "boot-1",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+    });
+    const otherDeviceMotion = controller.handleMessage({
+      messageId: "motion-1",
+      type: "persist-motion",
+      deviceId: "stack-002",
+      payload: {
+        deviceId: "stack-002",
+        state: "moving",
+        timestamp: 12,
+        sequence: 1,
       },
     });
 
-    await live;
-    expect(callOrder).toEqual(["backfill:10", "motion:11"]);
+    await otherDeviceMotion;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(callOrder).toEqual(["backfill:stack-001:10", "motion:stack-002:1"]);
 
     releaseBackfill?.();
-    await backfill;
+    await Promise.all([backfill, heartbeat]);
+
+    expect(callOrder).toEqual([
+      "backfill:stack-001:10",
+      "motion:stack-002:1",
+      "heartbeat:stack-001:11",
+    ]);
   });
 });
