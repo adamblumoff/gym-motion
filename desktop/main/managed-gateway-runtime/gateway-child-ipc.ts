@@ -93,6 +93,37 @@ export type GatewayChildControlResponseMessage = {
   error?: string;
 };
 
+export type GatewayChildHistoryRecordMessage = {
+  type: "history_record";
+  node: {
+    id: string;
+    label: string;
+    peripheral_id?: string | null;
+    address?: string | null;
+    local_name?: string | null;
+    known_device_id?: string | null;
+    last_rssi?: number | null;
+    last_seen_at?: string | null;
+  };
+  device_id: string;
+  record: unknown;
+};
+
+export type GatewayChildHistorySyncCompleteMessage = {
+  type: "history_sync_complete";
+  node: GatewayChildHistoryRecordMessage["node"];
+  payload: {
+    status_type: string;
+    device_id: string;
+    latest_sequence: number;
+    high_water_sequence: number;
+    sent_count: number;
+    has_more: boolean;
+    overflowed?: boolean | null;
+    dropped_count?: number | null;
+  };
+};
+
 export type GatewayParentPersistAckMessage = {
   type: "persist-ack";
   messageId: string;
@@ -106,7 +137,9 @@ export type GatewayChildRuntimeMessage =
   | GatewayChildAdaptersUpdatedMessage
   | GatewayChildManualScanUpdatedMessage
   | GatewayChildRuntimeReadyMessage
-  | GatewayChildControlResponseMessage;
+  | GatewayChildControlResponseMessage
+  | GatewayChildHistoryRecordMessage
+  | GatewayChildHistorySyncCompleteMessage;
 
 export type GatewayChildMessage = GatewayChildPersistMessage | GatewayChildRuntimeMessage;
 
@@ -154,6 +187,8 @@ export function parseGatewayChildMessage(input: unknown): GatewayChildMessage | 
     case "manual-scan-updated":
     case "runtime-ready":
     case "control-response":
+    case "history_record":
+    case "history_sync_complete":
       return input as GatewayChildRuntimeMessage;
     default:
       return null;

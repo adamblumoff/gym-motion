@@ -5,6 +5,10 @@ import process from "node:process";
 export function createGatewayConfig() {
   return {
     apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
+    desktopApiBaseUrl: (process.env.GATEWAY_DESKTOP_API_BASE_URL ?? "http://127.0.0.1:0").replace(
+      /\/$/,
+      "",
+    ),
     runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
     runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
     heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),

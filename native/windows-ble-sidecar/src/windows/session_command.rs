@@ -12,6 +12,7 @@ use super::{
         approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, mark_node_connected,
         node_key, prune_reconnect_states, RECONNECT_ATTEMPT_LIMIT,
     },
+    handshake::write_chunked_json_command,
     session::{sync_current_scan_state, SessionContext, SessionState, SCAN_WINDOW_SECS},
     session_connection::{
         emit_visible_manual_candidates, peripheral_for_node, recover_visible_approved_node,
@@ -20,6 +21,86 @@ use super::{
     session_scan::emit_manual_scan_state,
     session_types::SessionCommand,
 };
+
+fn resolve_connected_node_for_device<'a>(
+    connected_nodes: &'a std::collections::HashMap<String, crate::protocol::DiscoveredNode>,
+    device_id: &str,
+) -> Option<&'a crate::protocol::DiscoveredNode> {
+    connected_nodes
+        .values()
+        .find(|node| node.known_device_id.as_deref() == Some(device_id))
+}
+
+async fn send_history_control_command(
+    context: &SessionContext,
+    state: &SessionState,
+    device_id: &str,
+    payload: serde_json::Value,
+    missing_message: &str,
+) -> Result<bool> {
+    let Some(node) = resolve_connected_node_for_device(&state.connected_nodes, device_id).cloned()
+    else {
+        context
+            .writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: missing_message.to_string(),
+                details: Some(json!({
+                    "deviceId": device_id,
+                })),
+            })
+            .await?;
+        return Ok(false);
+    };
+
+    let Some(peripheral) = peripheral_for_node(&context.adapter, &node).await else {
+        context
+            .writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: format!(
+                    "Skipping history control for {} because the active peripheral is no longer available.",
+                    device_id
+                ),
+                details: Some(json!({
+                    "deviceId": device_id,
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                })),
+            })
+            .await?;
+        return Ok(false);
+    };
+
+    peripheral.discover_services().await?;
+    let Some(control_characteristic) = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|candidate| candidate.uuid == context.config.control_uuid)
+    else {
+        context
+            .writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: format!(
+                    "Skipping history control for {} because the runtime control characteristic is unavailable.",
+                    device_id
+                ),
+                details: Some(json!({
+                    "deviceId": device_id,
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                })),
+            })
+            .await?;
+        return Ok(false);
+    };
+
+    write_chunked_json_command(&peripheral, &control_characteristic, &payload.to_string()).await?;
+    Ok(true)
+}
 
 pub(super) async fn handle_session_command(
     context: &SessionContext,
@@ -41,6 +122,45 @@ pub(super) async fn handle_session_command(
         SessionCommand::RefreshScanPolicy => {
             let allowed = context.allowed_nodes.read().await.clone();
             prune_reconnect_states(&mut state.reconnect_states, &allowed);
+        }
+        SessionCommand::BeginHistorySync {
+            device_id,
+            after_sequence,
+            max_records,
+        } => {
+            let _ = send_history_control_command(
+                context,
+                state,
+                &device_id,
+                json!({
+                    "type": "history-sync-begin",
+                    "afterSequence": after_sequence,
+                    "maxRecords": max_records,
+                }),
+                &format!(
+                    "Skipping history sync for {} because it is not currently connected.",
+                    device_id
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        SessionCommand::AcknowledgeHistorySync { device_id, sequence } => {
+            let _ = send_history_control_command(
+                context,
+                state,
+                &device_id,
+                json!({
+                    "type": "history-ack",
+                    "sequence": sequence,
+                }),
+                &format!(
+                    "Skipping history ack for {} because it is not currently connected.",
+                    device_id
+                ),
+            )
+            .await?;
+            return Ok(());
         }
         SessionCommand::PairManualCandidate { candidate_id } => {
             let Some(node) = state.manual_candidates.get(&candidate_id).cloned() else {
@@ -286,4 +406,55 @@ pub(super) async fn handle_session_command(
     }
 
     sync_current_scan_state(context, state).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::protocol::DiscoveredNode;
+
+    use super::resolve_connected_node_for_device;
+
+    #[test]
+    fn resolves_connected_node_by_known_device_id() {
+        let connected = HashMap::from([(
+            "peripheral:abc".to_string(),
+            DiscoveredNode {
+                id: "peripheral:abc".to_string(),
+                label: "GymMotion-123".to_string(),
+                peripheral_id: Some("abc".to_string()),
+                address: Some("AA:BB".to_string()),
+                local_name: Some("GymMotion-123".to_string()),
+                known_device_id: Some("device-1".to_string()),
+                last_rssi: Some(-61),
+                last_seen_at: None,
+            },
+        )]);
+
+        let resolved =
+            resolve_connected_node_for_device(&connected, "device-1").expect("node should exist");
+
+        assert_eq!(resolved.known_device_id.as_deref(), Some("device-1"));
+        assert_eq!(resolved.peripheral_id.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn ignores_connected_nodes_without_matching_known_device_id() {
+        let connected = HashMap::from([(
+            "peripheral:abc".to_string(),
+            DiscoveredNode {
+                id: "peripheral:abc".to_string(),
+                label: "GymMotion-123".to_string(),
+                peripheral_id: Some("abc".to_string()),
+                address: Some("AA:BB".to_string()),
+                local_name: Some("GymMotion-123".to_string()),
+                known_device_id: Some("device-1".to_string()),
+                last_rssi: Some(-61),
+                last_seen_at: None,
+            },
+        )]);
+
+        assert!(resolve_connected_node_for_device(&connected, "device-2").is_none());
+    }
 }

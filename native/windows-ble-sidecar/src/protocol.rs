@@ -91,6 +91,34 @@ pub struct RuntimeStatusPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HistoryRecordPayload {
+    #[serde(rename = "type")]
+    pub status_type: String,
+    #[serde(alias = "deviceId")]
+    pub device_id: String,
+    pub record: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistorySyncCompletePayload {
+    #[serde(rename = "type")]
+    pub status_type: String,
+    #[serde(alias = "deviceId")]
+    pub device_id: String,
+    #[serde(alias = "latestSequence")]
+    pub latest_sequence: u64,
+    #[serde(alias = "highWaterSequence")]
+    pub high_water_sequence: u64,
+    #[serde(alias = "sentCount")]
+    pub sent_count: usize,
+    #[serde(alias = "hasMore")]
+    pub has_more: bool,
+    pub overflowed: Option<bool>,
+    #[serde(alias = "droppedCount")]
+    pub dropped_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     ListAdapters,
@@ -101,6 +129,15 @@ pub enum Command {
     Rescan,
     StartManualScan,
     RefreshScanPolicy,
+    BeginHistorySync {
+        device_id: String,
+        after_sequence: u64,
+        max_records: usize,
+    },
+    AcknowledgeHistorySync {
+        device_id: String,
+        sequence: u64,
+    },
     PairManualCandidate { candidate_id: String },
     RecoverApprovedNode { rule_id: String },
     ResumeApprovedNodeReconnect { rule_id: String },
@@ -139,6 +176,15 @@ pub enum Event {
         node: DiscoveredNode,
         payload: TelemetryPayload,
     },
+    HistoryRecord {
+        node: DiscoveredNode,
+        device_id: String,
+        record: Value,
+    },
+    HistorySyncComplete {
+        node: DiscoveredNode,
+        payload: HistorySyncCompletePayload,
+    },
     Log {
         level: String,
         message: String,
@@ -152,7 +198,11 @@ pub enum Event {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApprovedNodeRule, Command, Event, TelemetryPayload};
+    use serde_json::json;
+
+    use super::{
+        ApprovedNodeRule, Command, Event, HistorySyncCompletePayload, TelemetryPayload,
+    };
 
     #[test]
     fn serializes_commands_with_expected_tag() {
@@ -171,6 +221,34 @@ mod tests {
             serde_json::to_value(Command::RefreshScanPolicy).expect("command should serialize");
 
         assert_eq!(value["type"], "refresh_scan_policy");
+    }
+
+    #[test]
+    fn serializes_begin_history_sync_command() {
+        let value = serde_json::to_value(Command::BeginHistorySync {
+            device_id: "device-1".to_string(),
+            after_sequence: 12,
+            max_records: 0,
+        })
+        .expect("command should serialize");
+
+        assert_eq!(value["type"], "begin_history_sync");
+        assert_eq!(value["device_id"], "device-1");
+        assert_eq!(value["after_sequence"], 12);
+        assert_eq!(value["max_records"], 0);
+    }
+
+    #[test]
+    fn serializes_acknowledge_history_sync_command() {
+        let value = serde_json::to_value(Command::AcknowledgeHistorySync {
+            device_id: "device-1".to_string(),
+            sequence: 17,
+        })
+        .expect("command should serialize");
+
+        assert_eq!(value["type"], "acknowledge_history_sync");
+        assert_eq!(value["device_id"], "device-1");
+        assert_eq!(value["sequence"], 17);
     }
 
     #[test]
@@ -333,5 +411,65 @@ mod tests {
         assert_eq!(payload.boot_id.as_deref(), Some("boot-1"));
         assert_eq!(payload.firmware_version.as_deref(), Some("1.0.0"));
         assert_eq!(payload.hardware_id.as_deref(), Some("hw-1"));
+    }
+
+    #[test]
+    fn serializes_history_record_event() {
+        let value = serde_json::to_value(Event::HistoryRecord {
+            node: super::DiscoveredNode {
+                id: "peripheral:abc".to_string(),
+                label: "GymMotion-123".to_string(),
+                peripheral_id: Some("abc".to_string()),
+                address: None,
+                local_name: Some("GymMotion-123".to_string()),
+                known_device_id: Some("device-1".to_string()),
+                last_rssi: Some(-61),
+                last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
+            },
+            device_id: "device-1".to_string(),
+            record: json!({
+                "kind": "motion",
+                "sequence": 8,
+                "state": "moving",
+                "timestamp": 1234,
+            }),
+        })
+        .expect("event should serialize");
+
+        assert_eq!(value["type"], "history_record");
+        assert_eq!(value["device_id"], "device-1");
+        assert_eq!(value["record"]["sequence"], 8);
+    }
+
+    #[test]
+    fn serializes_history_sync_complete_event() {
+        let value = serde_json::to_value(Event::HistorySyncComplete {
+            node: super::DiscoveredNode {
+                id: "peripheral:abc".to_string(),
+                label: "GymMotion-123".to_string(),
+                peripheral_id: Some("abc".to_string()),
+                address: None,
+                local_name: Some("GymMotion-123".to_string()),
+                known_device_id: Some("device-1".to_string()),
+                last_rssi: Some(-61),
+                last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
+            },
+            payload: HistorySyncCompletePayload {
+                status_type: "history-sync-complete".to_string(),
+                device_id: "device-1".to_string(),
+                latest_sequence: 20,
+                high_water_sequence: 24,
+                sent_count: 4,
+                has_more: true,
+                overflowed: Some(true),
+                dropped_count: Some(2),
+            },
+        })
+        .expect("event should serialize");
+
+        assert_eq!(value["type"], "history_sync_complete");
+        assert_eq!(value["payload"]["device_id"], "device-1");
+        assert_eq!(value["payload"]["latest_sequence"], 20);
+        assert_eq!(value["payload"]["has_more"], true);
     }
 }

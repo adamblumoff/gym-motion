@@ -475,6 +475,7 @@ export function createManagedGatewayRuntime(
     selectedAdapter,
     readApprovedNodes,
     getWindowsScanRequested: () => windowsScanRequested,
+    getDesktopApiBaseUrl: () => apiServer.apiBaseUrl,
     getStopped: () => stopped,
     intentionalChildExits,
     clearWindowsAdapterRetryTimer: () => {

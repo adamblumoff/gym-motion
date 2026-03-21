@@ -29,6 +29,7 @@ type RuntimeBridgeDeps = {
   selectedAdapter: () => BleAdapterSummary | null;
   readApprovedNodes: () => ApprovedNodeRule[];
   getWindowsScanRequested: () => boolean;
+  getDesktopApiBaseUrl: () => string;
   getStopped: () => boolean;
   intentionalChildExits: WeakSet<ChildProcess>;
   clearWindowsAdapterRetryTimer: () => void;
@@ -197,6 +198,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       runtimePort,
       approvedNodes: deps.readApprovedNodes(),
       childOutboxPath: path.join(app.getPath("userData"), "gateway-child-outbox.sqlite"),
+      desktopApiBaseUrl: deps.getDesktopApiBaseUrl(),
     });
 
     env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
@@ -279,7 +281,9 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         parsedMessage.type === "gateway-state" ||
         parsedMessage.type === "adapters-updated" ||
         parsedMessage.type === "manual-scan-updated" ||
-        parsedMessage.type === "runtime-device-updated"
+        parsedMessage.type === "runtime-device-updated" ||
+        parsedMessage.type === "history_record" ||
+        parsedMessage.type === "history_sync_complete"
       ) {
         deps.onChildRuntimeMessage(parsedMessage);
         return;

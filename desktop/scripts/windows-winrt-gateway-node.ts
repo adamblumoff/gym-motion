@@ -23,6 +23,9 @@ export function createDeviceContext(deviceId) {
     advertisedName: null,
     rssi: null,
     lastTelemetryConnectionState: null,
+    historySyncActiveBootId: null,
+    historySyncCompletedBootId: null,
+    historySyncFailedBootId: null,
   };
 }
 

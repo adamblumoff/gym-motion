@@ -14,6 +14,15 @@ pub(super) struct SessionHandle {
 pub(super) enum SessionCommand {
     StartManualScan,
     RefreshScanPolicy,
+    BeginHistorySync {
+        device_id: String,
+        after_sequence: u64,
+        max_records: usize,
+    },
+    AcknowledgeHistorySync {
+        device_id: String,
+        sequence: u64,
+    },
     PairManualCandidate {
         candidate_id: String,
     },

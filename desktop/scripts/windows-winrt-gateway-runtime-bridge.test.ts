@@ -383,4 +383,571 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     ]);
   });
+
+  it("requests history sync from the stored ack sequence for the current boot", async () => {
+    const sidecarCommands = [];
+    const fetchCalls = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        fetchCalls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 12,
+              lastAckedBootId: "boot-1",
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 13,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
+    expect(sidecarCommands[0]).toEqual({
+      type: "begin_history_sync",
+      device_id: "stack-001",
+      after_sequence: 12,
+      max_records: 0,
+    });
+  });
+
+  it("requests history sync from zero for a new boot", async () => {
+    const sidecarCommands = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl() {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 0,
+              lastAckedBootId: null,
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 1,
+      bootId: "boot-2",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    expect(sidecarCommands[0]).toEqual({
+      type: "begin_history_sync",
+      device_id: "stack-001",
+      after_sequence: 0,
+      max_records: 0,
+    });
+  });
+
+  it("persists a history page and acks the repository-proven sequence", async () => {
+    const sidecarCommands = [];
+    const persistedBodies = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url, init) {
+        if (String(url).includes("/api/device-sync/")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              ok: true,
+              syncState: {
+                deviceId: "stack-001",
+                lastAckedSequence: 4,
+                lastAckedBootId: "boot-1",
+              },
+            }),
+          });
+        }
+
+        persistedBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 6,
+              lastAckedBootId: "boot-1",
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 5,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: {
+        kind: "motion",
+        sequence: 5,
+        state: "moving",
+        delta: 8,
+        timestamp: 1,
+        bootId: "boot-1",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+    });
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: {
+        kind: "node-log",
+        sequence: 6,
+        level: "info",
+        code: "node.connected",
+        message: "Connected",
+        timestamp: 2,
+        bootId: "boot-1",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+    });
+
+    await bridge.handleHistorySyncComplete({
+      payload: {
+        device_id: "stack-001",
+        latest_sequence: 6,
+        high_water_sequence: 6,
+        sent_count: 2,
+        has_more: false,
+        overflowed: false,
+      },
+    });
+
+    expect(persistedBodies).toEqual([
+      {
+        deviceId: "stack-001",
+        bootId: "boot-1",
+        records: [
+          {
+            kind: "motion",
+            sequence: 5,
+            state: "moving",
+            delta: 8,
+            timestamp: 1,
+            bootId: "boot-1",
+            firmwareVersion: "0.5.3",
+            hardwareId: "hw-1",
+          },
+          {
+            kind: "node-log",
+            sequence: 6,
+            level: "info",
+            code: "node.connected",
+            message: "Connected",
+            timestamp: 2,
+            bootId: "boot-1",
+            firmwareVersion: "0.5.3",
+            hardwareId: "hw-1",
+          },
+        ],
+        ackSequence: 6,
+      },
+    ]);
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 4,
+        max_records: 0,
+      },
+      {
+        type: "acknowledge_history_sync",
+        device_id: "stack-001",
+        sequence: 6,
+      },
+    ]);
+  });
+
+  it("requests the next history page from the repository-proven ack sequence", async () => {
+    const sidecarCommands = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        if (String(url).includes("/api/device-sync/")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              ok: true,
+              syncState: {
+                deviceId: "stack-001",
+                lastAckedSequence: 4,
+                lastAckedBootId: "boot-1",
+              },
+            }),
+          });
+        }
+
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 6,
+              lastAckedBootId: "boot-1",
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 5,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: {
+        kind: "motion",
+        sequence: 5,
+        state: "moving",
+        delta: 8,
+        timestamp: 1,
+      },
+    });
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: {
+        kind: "motion",
+        sequence: 8,
+        state: "still",
+        delta: 0,
+        timestamp: 2,
+      },
+    });
+
+    await bridge.handleHistorySyncComplete({
+      payload: {
+        device_id: "stack-001",
+        latest_sequence: 8,
+        high_water_sequence: 10,
+        sent_count: 2,
+        has_more: true,
+        overflowed: false,
+      },
+    });
+
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 4,
+        max_records: 0,
+      },
+      {
+        type: "acknowledge_history_sync",
+        device_id: "stack-001",
+        sequence: 6,
+      },
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 6,
+        max_records: 0,
+      },
+    ]);
+  });
+
+  it("does not persist or ack an empty history sync completion", async () => {
+    const sidecarCommands = [];
+    const fetchCalls = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        fetchCalls.push(String(url));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 0,
+              lastAckedBootId: null,
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    await bridge.handleHistorySyncComplete({
+      payload: {
+        device_id: "stack-001",
+        latest_sequence: 0,
+        high_water_sequence: 0,
+        sent_count: 0,
+        has_more: false,
+        overflowed: false,
+      },
+    });
+
+    expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 0,
+        max_records: 0,
+      },
+    ]);
+  });
+
+  it("does not ack history when persistence fails", async () => {
+    const sidecarCommands = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+      },
+      runtimeServer: {
+        noteTelemetry() {
+          return Promise.resolve({
+            before: { gatewayConnectionState: "connected" },
+            after: { gatewayConnectionState: "connected" },
+          });
+        },
+        resolveKnownDeviceId() {
+          return null;
+        },
+      },
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        if (String(url).includes("/api/device-sync/")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              ok: true,
+              syncState: {
+                deviceId: "stack-001",
+                lastAckedSequence: 0,
+                lastAckedBootId: null,
+              },
+            }),
+          });
+        }
+
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: {
+        kind: "motion",
+        sequence: 1,
+        state: "moving",
+        delta: 8,
+        timestamp: 1,
+      },
+    });
+
+    await bridge.handleHistorySyncComplete({
+      payload: {
+        device_id: "stack-001",
+        latest_sequence: 1,
+        high_water_sequence: 1,
+        sent_count: 1,
+        has_more: false,
+        overflowed: false,
+      },
+    });
+
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 0,
+        max_records: 0,
+      },
+    ]);
+  });
 });

@@ -127,6 +127,9 @@ const runtimeBridge = createRuntimeBridge({
   config,
   runtimeServer,
   debug,
+  sendSidecarCommand(command) {
+    sendCommand(command.type, command);
+  },
 });
 
 function setRuntimeIssue(issue) {
@@ -481,6 +484,24 @@ function handleSidecarEvent(event) {
         });
       break;
     }
+    case "history_record":
+      runtimeBridge.handleHistoryRecord({
+        device_id: event.device_id,
+        node: event.node ?? {},
+        record: event.record,
+      });
+      break;
+    case "history_sync_complete":
+      void runtimeBridge
+        .handleHistorySyncComplete({
+          node: event.node ?? {},
+          payload: event.payload ?? {},
+        })
+        .catch((error) => {
+          console.error("[gateway-winrt] failed to complete history sync page", error);
+          setRuntimeIssue(error instanceof Error ? error.message : "History sync failed.");
+        });
+      break;
     case "log":
       if (
         shouldWriteSidecarLog(event.level ?? "info", event.message ?? "sidecar log", config.verbose)

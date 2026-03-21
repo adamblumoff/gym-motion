@@ -7,7 +7,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use btleplug::api::Peripheral as _;
 use futures::StreamExt;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::{
     sync::{mpsc, watch, RwLock},
     time::sleep,
@@ -16,8 +16,8 @@ use tokio::{
 use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
-        ApprovedNodeRule, DiscoveredNode, Event, ReconnectStatus, RuntimeStatusPayload,
-        TelemetryPayload,
+        ApprovedNodeRule, DiscoveredNode, Event, HistoryRecordPayload,
+        HistorySyncCompletePayload, ReconnectStatus, RuntimeStatusPayload, TelemetryPayload,
     },
 };
 
@@ -118,12 +118,15 @@ pub(super) async fn monitor_active_session(
 
                 if notification.uuid == config.status_uuid {
                     for payload in status_decoder.push_bytes(&notification.value)? {
-                        match serde_json::from_value::<RuntimeStatusPayload>(payload) {
-                            Ok(status) => {
-                                if status.status_type != "app-session-online" {
-                                    continue;
-                                }
+                        let status_type = payload
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
 
+                        match status_type.as_str() {
+                            "app-session-online" => match serde_json::from_value::<RuntimeStatusPayload>(payload) {
+                            Ok(status) => {
                                 let Some(session_id) = status.session_id.clone() else {
                                     writer
                                         .send(&Event::Log {
@@ -215,6 +218,61 @@ pub(super) async fn monitor_active_session(
                                     )
                                     .await;
                             }
+                            },
+                            "history-record" => match serde_json::from_value::<HistoryRecordPayload>(payload) {
+                                Ok(status) => {
+                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                        known_device_ids
+                                            .write()
+                                            .await
+                                            .insert(peripheral_id, status.device_id.clone());
+                                    }
+                                    let mut enriched = node.clone();
+                                    enriched.known_device_id = Some(status.device_id.clone());
+                                    writer
+                                        .send(&Event::HistoryRecord {
+                                            node: enriched,
+                                            device_id: status.device_id,
+                                            record: status.record,
+                                        })
+                                        .await?;
+                                }
+                                Err(error) => {
+                                    writer
+                                        .error(
+                                            format!("Failed to parse history record payload: {error}"),
+                                            Some(json!({ "node": node.id })),
+                                        )
+                                        .await;
+                                }
+                            },
+                            "history-sync-complete" => match serde_json::from_value::<HistorySyncCompletePayload>(payload) {
+                                Ok(status) => {
+                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                        known_device_ids
+                                            .write()
+                                            .await
+                                            .insert(peripheral_id, status.device_id.clone());
+                                    }
+                                    let mut enriched = node.clone();
+                                    enriched.known_device_id = Some(status.device_id.clone());
+                                    writer
+                                        .send(&Event::HistorySyncComplete {
+                                            node: enriched,
+                                            payload: status,
+                                        })
+                                        .await?;
+                                }
+                                Err(error) => {
+                                    writer
+                                        .error(
+                                            format!("Failed to parse history sync completion payload: {error}"),
+                                            Some(json!({ "node": node.id })),
+                                        )
+                                        .await;
+                                }
+                            },
+                            _ => {}
                         }
                     }
                     continue;

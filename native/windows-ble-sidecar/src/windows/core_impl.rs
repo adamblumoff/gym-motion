@@ -126,6 +126,34 @@ impl Sidecar {
                 }
                 self.emit_adapters().await?;
             }
+            Command::BeginHistorySync {
+                device_id,
+                after_sequence,
+                max_records,
+            } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session.commands.send(SessionCommand::BeginHistorySync {
+                        device_id,
+                        after_sequence,
+                        max_records,
+                    });
+                }
+            }
+            Command::AcknowledgeHistorySync { device_id, sequence } => {
+                if self.session.is_none() {
+                    self.start_session().await?;
+                }
+
+                if let Some(session) = &self.session {
+                    let _ = session
+                        .commands
+                        .send(SessionCommand::AcknowledgeHistorySync { device_id, sequence });
+                }
+            }
             Command::RecoverApprovedNode { rule_id } => {
                 if self.session.is_none() {
                     self.start_session().await?;

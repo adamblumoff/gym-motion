@@ -157,7 +157,11 @@ export async function handleDeviceRoutes(args: {
 
   if (method === "GET" && pathname.startsWith("/api/device-sync/")) {
     const deviceId = decodeURIComponent(pathname.replace("/api/device-sync/", ""));
-    json(response, 200, { ok: true, syncState: await getDeviceSyncState(deviceId) });
+    const bootId = url.searchParams.get("bootId");
+    json(response, 200, {
+      ok: true,
+      syncState: await getDeviceSyncState(deviceId, bootId),
+    });
     return true;
   }
 
