@@ -13,7 +13,11 @@ import {
   mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
-import type { DesktopRuntimeEvent, ThemeState } from "@core/services";
+import type {
+  DesktopRuntimeBatchPatch,
+  DesktopRuntimeEvent,
+  ThemeState,
+} from "@core/services";
 
 import type { DesktopAppState } from "./state";
 
@@ -104,6 +108,8 @@ function applyRuntimeEvent(
   }
 
   switch (event.type) {
+    case "runtime-batch":
+      return applyRuntimeBatch(previousSnapshot, event.patch);
     case "gateway-updated":
       return {
         ...previousSnapshot,
@@ -135,6 +141,73 @@ function applyRuntimeEvent(
     default:
       return previousSnapshot;
   }
+}
+
+function applyRuntimeBatch(
+  previousSnapshot: DesktopSnapshot,
+  patch: DesktopRuntimeBatchPatch,
+): DesktopSnapshot {
+  if (patch.replaceSnapshot) {
+    return patch.replaceSnapshot;
+  }
+
+  let nextSnapshot = previousSnapshot;
+
+  if (patch.gateway) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      gateway: patch.gateway.gateway,
+      liveStatus: patch.gateway.liveStatus,
+      runtimeState: patch.gateway.runtimeState,
+      gatewayIssue: patch.gateway.gatewayIssue,
+    };
+  }
+
+  if (patch.devices?.length) {
+    let devices = nextSnapshot.devices;
+    for (const device of patch.devices) {
+      devices = mergeGatewayDeviceUpdate(devices, device);
+    }
+    nextSnapshot = {
+      ...nextSnapshot,
+      devices,
+    };
+  }
+
+  if (patch.events?.length) {
+    let events = nextSnapshot.events;
+    for (const event of patch.events) {
+      events = mergeEventUpdate(events, event, 14);
+    }
+    nextSnapshot = {
+      ...nextSnapshot,
+      events,
+    };
+  }
+
+  if (patch.logs?.length) {
+    let logs = nextSnapshot.logs;
+    for (const log of patch.logs) {
+      logs = mergeLogUpdate(logs, log, 18);
+    }
+    nextSnapshot = {
+      ...nextSnapshot,
+      logs,
+    };
+  }
+
+  if (patch.activities?.length) {
+    let activities = nextSnapshot.activities;
+    for (const activity of patch.activities) {
+      activities = mergeActivityUpdate(activities, activity, 30);
+    }
+    nextSnapshot = {
+      ...nextSnapshot,
+      activities,
+    };
+  }
+
+  return nextSnapshot;
 }
 
 export function replaceThemeState(

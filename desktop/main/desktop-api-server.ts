@@ -11,10 +11,12 @@ export type DesktopDataEvent =
   | {
       type: "motion-update";
       payload: MotionStreamPayload;
+      sourceMessageId?: string;
     }
   | {
       type: "device-log";
       payload: DeviceLogSummary;
+      sourceMessageId?: string;
     }
   | {
       type: "device-updated";

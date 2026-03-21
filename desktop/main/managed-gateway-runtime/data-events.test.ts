@@ -76,7 +76,7 @@ describe("createDataEventHandler", () => {
     expect(refreshAnalyticsNowCalls).toEqual(["stack-001"]);
     expect(scheduleAnalyticsRefreshCalls).toEqual([]);
     expect(recordLiveMotionCalls).toEqual(["stack-001"]);
-    expect(emittedEvents).toEqual(["device-upserted", "event-recorded", "activity-recorded"]);
+    expect(emittedEvents).toEqual(["runtime-batch"]);
     expect(snapshot.events).toHaveLength(1);
     expect(snapshot.activities).toHaveLength(1);
   });

@@ -50,6 +50,7 @@ function createHistorySyncState({
     timerHandle: null,
     timerToken: 0,
     pausedReason: null,
+    completionPending: false,
   };
 }
 
@@ -70,7 +71,8 @@ export function createRuntimeBridge({
   const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 2_000;
   const deviceContexts = new Map();
   const pendingNodeLogs = new Map();
-  const deviceTaskChains = new Map();
+  const liveTaskChains = new Map();
+  const historyTaskChains = new Map();
   const historySyncByDevice = new Map();
 
   function emitPersistMessage(type, deviceId, payload) {
@@ -167,17 +169,25 @@ export function createRuntimeBridge({
     return await response.json();
   }
 
-  function queueDeviceTask(deviceId, work) {
-    const current = deviceTaskChains.get(deviceId) ?? Promise.resolve();
+  function queueTask(taskChains, deviceId, work) {
+    const current = taskChains.get(deviceId) ?? Promise.resolve();
     const next = current.then(work, work);
     const tracked = next.catch(() => {});
-    deviceTaskChains.set(deviceId, tracked);
+    taskChains.set(deviceId, tracked);
 
     return next.finally(() => {
-      if (deviceTaskChains.get(deviceId) === tracked) {
-        deviceTaskChains.delete(deviceId);
+      if (taskChains.get(deviceId) === tracked) {
+        taskChains.delete(deviceId);
       }
     });
+  }
+
+  function queueLiveDeviceTask(deviceId, work) {
+    return queueTask(liveTaskChains, deviceId, work);
+  }
+
+  function queueHistoryDeviceTask(deviceId, work) {
+    return queueTask(historyTaskChains, deviceId, work);
   }
 
   function syncBackfillContext(context, state) {
@@ -256,7 +266,7 @@ export function createRuntimeBridge({
           return;
         }
         current.timerHandle = null;
-        void queueDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
+        void queueHistoryDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
       });
       return;
     }
@@ -267,7 +277,7 @@ export function createRuntimeBridge({
         return;
       }
       current.timerHandle = null;
-      void queueDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
+      void queueHistoryDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
     }, delayMs);
   }
 
@@ -395,6 +405,9 @@ export function createRuntimeBridge({
     const deviceId = payload.device_id;
     const state = historySyncByDevice.get(deviceId);
     const context = deviceContexts.get(deviceId);
+    if (state) {
+      state.completionPending = false;
+    }
 
     logBackfill("received history sync completion", {
       deviceId: deviceId ?? null,
@@ -634,7 +647,7 @@ export function createRuntimeBridge({
   }
 
   function forwardTelemetry(payload, node = {}) {
-    return queueDeviceTask(payload.deviceId, () => forwardTelemetryNow(payload, node));
+    return queueLiveDeviceTask(payload.deviceId, () => forwardTelemetryNow(payload, node));
   }
 
   function handleHistoryRecordNow(event) {
@@ -660,7 +673,7 @@ export function createRuntimeBridge({
       return Promise.resolve();
     }
 
-    return queueDeviceTask(deviceId, () => handleHistoryRecordNow(event));
+    return queueHistoryDeviceTask(deviceId, () => handleHistoryRecordNow(event));
   }
 
   function handleHistorySyncComplete(event) {
@@ -669,7 +682,12 @@ export function createRuntimeBridge({
       return Promise.resolve();
     }
 
-    return queueDeviceTask(deviceId, () => handleHistorySyncCompleteNow(event));
+    const state = historySyncByDevice.get(deviceId);
+    if (state) {
+      state.completionPending = true;
+    }
+
+    return queueHistoryDeviceTask(deviceId, () => handleHistorySyncCompleteNow(event));
   }
 
   function handleNodeDiscovered(node, scanReason = null) {
@@ -813,7 +831,13 @@ export function createRuntimeBridge({
       return Promise.resolve();
     }
 
-    return queueDeviceTask(knownDeviceId, () => handleNodeConnectionStateNow(event));
+    const historyState = historySyncByDevice.get(knownDeviceId);
+    const enqueueConnectionState =
+      historyState?.completionPending === true
+        ? queueHistoryDeviceTask
+        : queueLiveDeviceTask;
+
+    return enqueueConnectionState(knownDeviceId, () => handleNodeConnectionStateNow(event));
   }
 
   return {

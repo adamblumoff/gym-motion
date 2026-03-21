@@ -20,6 +20,7 @@ type DataEventHandlerDeps = {
   getSnapshot: () => DesktopSnapshot;
   setSnapshot: (snapshot: DesktopSnapshot) => void;
   pruneSnapshot: (snapshot: DesktopSnapshot) => DesktopSnapshot;
+  clearOptimisticMessage: (messageId: string) => void;
   emit: (event: DesktopRuntimeEvent) => void;
   refreshHistory: () => Promise<void>;
   refreshDeviceHistory: (deviceId: string) => Promise<void>;
@@ -53,6 +54,9 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
     switch (event.type) {
       case "motion-update": {
         const payload: MotionStreamPayload = event.payload;
+        if (event.sourceMessageId) {
+          deps.clearOptimisticMessage(event.sourceMessageId);
+        }
         const snapshot = deps.getSnapshot();
         const device = mergeRepositoryDeviceIntoGatewaySnapshot(
           snapshot.devices,
@@ -67,20 +71,19 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         if (!nextSnapshot.devices.some((currentDevice) => currentDevice.id === device.id)) {
           break;
         }
-
-        deps.emit({
-          type: "device-upserted",
-          device,
-        });
+        const batch: Extract<DesktopRuntimeEvent, { type: "runtime-batch" }>["patch"] = {
+          devices: [device],
+        };
 
         if (payload.event) {
           deps.recordLiveMotion(payload.event);
+          const snapshotWithEvent = deps.getSnapshot();
           deps.setSnapshot({
-            ...deps.getSnapshot(),
-            events: mergeEventUpdate(deps.getSnapshot().events, payload.event, 14),
+            ...snapshotWithEvent,
+            events: mergeEventUpdate(snapshotWithEvent.events, payload.event, 14),
           });
-          deps.emit({ type: "event-recorded", event: payload.event });
           deps.refreshAnalyticsNow(payload.event.deviceId);
+          batch.events = [payload.event];
 
           const activity: DeviceActivitySummary = {
             id: `motion-${payload.event.id}`,
@@ -101,17 +104,22 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             metadata:
               payload.event.delta === null ? null : { delta: payload.event.delta },
           };
+          const snapshotWithActivity = deps.getSnapshot();
           deps.setSnapshot({
-            ...deps.getSnapshot(),
-            activities: mergeActivityUpdate(deps.getSnapshot().activities, activity, 30),
+            ...snapshotWithActivity,
+            activities: mergeActivityUpdate(snapshotWithActivity.activities, activity, 30),
           });
-          deps.emit({ type: "activity-recorded", activity });
+          batch.activities = [activity];
         }
+        deps.emit({ type: "runtime-batch", patch: batch });
 
         break;
       }
       case "device-log": {
         const payload: DeviceLogSummary = event.payload;
+        if (event.sourceMessageId) {
+          deps.clearOptimisticMessage(event.sourceMessageId);
+        }
         const activity: DeviceActivitySummary = {
           id: `log-${payload.id}`,
           deviceId: payload.deviceId,
@@ -135,8 +143,13 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
           logs: mergeLogUpdate(deps.getSnapshot().logs, payload, 18),
           activities: mergeActivityUpdate(deps.getSnapshot().activities, activity, 30),
         });
-        deps.emit({ type: "log-recorded", log: payload });
-        deps.emit({ type: "activity-recorded", activity });
+        deps.emit({
+          type: "runtime-batch",
+          patch: {
+            logs: [payload],
+            activities: [activity],
+          },
+        });
         break;
       }
       case "device-updated":
@@ -152,7 +165,12 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
           });
           deps.setSnapshot(nextSnapshot);
-          deps.emit({ type: "device-upserted", device });
+          deps.emit({
+            type: "runtime-batch",
+            patch: {
+              devices: [device],
+            },
+          });
         }
         break;
       case "backfill-recorded":

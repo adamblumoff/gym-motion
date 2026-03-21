@@ -4,6 +4,7 @@ import {
   buildNodeLogs,
   displayNodeAddress,
   displayNodeName,
+  indexNodeLogs,
   rssiToPercent,
   shouldDisplayDashboardDevice,
 } from "./shared";
@@ -13,6 +14,8 @@ export function buildBluetoothNodes(
   snapshot: DesktopSnapshot,
   approvedNodes?: ApprovedNodeRule[],
 ): BluetoothNodeData[] {
+  const nodeLogsByDeviceId = indexNodeLogs(snapshot.activities);
+
   return snapshot.devices
     .filter((device) => shouldDisplayDashboardDevice(device, approvedNodes))
     .map((device) => ({
@@ -28,7 +31,7 @@ export function buildBluetoothNodes(
       reconnectAttemptLimit: device.reconnectAttemptLimit,
       reconnectRetryExhausted: device.reconnectRetryExhausted,
       reconnectAwaitingDecision: device.reconnectAwaitingDecision ?? false,
-      logs: buildNodeLogs(device, snapshot.activities),
+      logs: nodeLogsByDeviceId.get(device.id) ?? buildNodeLogs(device, snapshot.activities),
     }));
 }
 
