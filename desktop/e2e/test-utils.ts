@@ -65,10 +65,16 @@ export async function launchDesktopApp(
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-e2e-"));
   await writePreferences(userDataDir, options.approvedNodes ?? []);
 
+  const {
+    ELECTRON_RUN_AS_NODE: _electronRunAsNode,
+    ELECTRON_NO_ATTACH_CONSOLE: _electronNoAttachConsole,
+    ...launchEnv
+  } = process.env;
+
   const electronApp = await electron.launch({
     args: [ROOT_DIR],
     env: {
-      ...process.env,
+      ...launchEnv,
       GYM_MOTION_E2E: "1",
       GYM_MOTION_GATEWAY_CHILD_SCRIPT: FAKE_GATEWAY_CHILD,
       GYM_MOTION_E2E_USER_DATA_DIR: userDataDir,

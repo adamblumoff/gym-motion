@@ -20,7 +20,11 @@ type DataEventHandlerDeps = {
   getSnapshot: () => DesktopSnapshot;
   setSnapshot: (snapshot: DesktopSnapshot) => void;
   pruneSnapshot: (snapshot: DesktopSnapshot) => DesktopSnapshot;
-  clearOptimisticMessage: (messageId: string) => void;
+  clearOptimisticMessage: (messageId: string) => {
+    removedEventIds: Array<number | string>;
+    removedLogIds: Array<number | string>;
+    removedActivityIds: Array<number | string>;
+  };
   emit: (event: DesktopRuntimeEvent) => void;
   refreshHistory: () => Promise<void>;
   refreshDeviceHistory: (deviceId: string) => Promise<void>;
@@ -54,9 +58,9 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
     switch (event.type) {
       case "motion-update": {
         const payload: MotionStreamPayload = event.payload;
-        if (event.sourceMessageId) {
-          deps.clearOptimisticMessage(event.sourceMessageId);
-        }
+        const clearedOptimistic = event.sourceMessageId
+          ? deps.clearOptimisticMessage(event.sourceMessageId)
+          : null;
         const snapshot = deps.getSnapshot();
         const device = mergeRepositoryDeviceIntoGatewaySnapshot(
           snapshot.devices,
@@ -74,6 +78,12 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         const batch: Extract<DesktopRuntimeEvent, { type: "runtime-batch" }>["patch"] = {
           devices: [device],
         };
+        if (clearedOptimistic?.removedEventIds.length) {
+          batch.removedEventIds = clearedOptimistic.removedEventIds;
+        }
+        if (clearedOptimistic?.removedActivityIds.length) {
+          batch.removedActivityIds = clearedOptimistic.removedActivityIds;
+        }
 
         if (payload.event) {
           deps.recordLiveMotion(payload.event);
@@ -117,9 +127,9 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
       }
       case "device-log": {
         const payload: DeviceLogSummary = event.payload;
-        if (event.sourceMessageId) {
-          deps.clearOptimisticMessage(event.sourceMessageId);
-        }
+        const clearedOptimistic = event.sourceMessageId
+          ? deps.clearOptimisticMessage(event.sourceMessageId)
+          : null;
         const activity: DeviceActivitySummary = {
           id: `log-${payload.id}`,
           deviceId: payload.deviceId,
@@ -146,6 +156,8 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         deps.emit({
           type: "runtime-batch",
           patch: {
+            removedLogIds: clearedOptimistic?.removedLogIds,
+            removedActivityIds: clearedOptimistic?.removedActivityIds,
             logs: [payload],
             activities: [activity],
           },

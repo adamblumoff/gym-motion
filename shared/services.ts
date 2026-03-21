@@ -43,8 +43,11 @@ export const DESKTOP_TEST_CHANNELS = {
 export type DesktopRuntimeBatchPatch = {
   devices?: GatewayRuntimeDeviceSummary[];
   events?: MotionEventSummary[];
+  removedEventIds?: Array<number | string>;
   logs?: DeviceLogSummary[];
+  removedLogIds?: Array<number | string>;
   activities?: DeviceActivitySummary[];
+  removedActivityIds?: Array<number | string>;
   gateway?: {
     gateway: GatewayStatusSummary;
     liveStatus: string;

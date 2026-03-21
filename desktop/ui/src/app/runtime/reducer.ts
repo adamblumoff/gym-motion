@@ -153,6 +153,29 @@ function applyRuntimeBatch(
 
   let nextSnapshot = previousSnapshot;
 
+  if (patch.removedEventIds?.length) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      events: nextSnapshot.events.filter((event) => !patch.removedEventIds?.includes(event.id)),
+    };
+  }
+
+  if (patch.removedLogIds?.length) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      logs: nextSnapshot.logs.filter((log) => !patch.removedLogIds?.includes(log.id)),
+    };
+  }
+
+  if (patch.removedActivityIds?.length) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      activities: nextSnapshot.activities.filter(
+        (activity) => !patch.removedActivityIds?.includes(activity.id),
+      ),
+    };
+  }
+
   if (patch.gateway) {
     nextSnapshot = {
       ...nextSnapshot,

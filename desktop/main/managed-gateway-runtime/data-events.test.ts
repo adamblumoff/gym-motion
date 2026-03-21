@@ -81,6 +81,68 @@ describe("createDataEventHandler", () => {
     expect(snapshot.activities).toHaveLength(1);
   });
 
+  it("removes optimistic live records from the renderer batch before adding canonical records", () => {
+    const emittedEvents: Array<ReturnType<typeof createEmptySnapshot> | { type: string; patch?: unknown }> = [];
+    let snapshot = createEmptySnapshot();
+
+    const applyDataEvent = createDataEventHandler({
+      getSnapshot: () => snapshot,
+      setSnapshot: (nextSnapshot) => {
+        snapshot = nextSnapshot;
+      },
+      pruneSnapshot: (nextSnapshot) => nextSnapshot,
+      clearOptimisticMessage: () => ({
+        removedEventIds: [-1],
+        removedLogIds: [],
+        removedActivityIds: ["optimistic-motion:message-1"],
+      }),
+      emit: (event) => emittedEvents.push(event),
+      refreshHistory: async () => {},
+      refreshDeviceHistory: async () => {},
+      refreshAnalyticsNow: () => {},
+      scheduleAnalyticsRefresh: () => {},
+      recordLiveMotion: () => {},
+      reportHistoryRefreshFailure: () => {},
+      clearHistoryRefreshFailure: () => {},
+    });
+
+    applyDataEvent({
+      type: "motion-update",
+      sourceMessageId: "message-1",
+      payload: {
+        device: createRepositoryDevice("stack-001"),
+        event: {
+          id: 11,
+          deviceId: "stack-001",
+          sequence: 7,
+          state: "moving",
+          delta: 4,
+          eventTimestamp: 1234,
+          receivedAt: "2026-03-18T12:00:01.000Z",
+          bootId: "boot-1",
+          firmwareVersion: "1.0.0",
+          hardwareId: "hw-1",
+        },
+      },
+    });
+
+    expect(emittedEvents).toHaveLength(1);
+    expect(emittedEvents[0]).toMatchObject({
+      type: "runtime-batch",
+      patch: {
+        removedEventIds: [-1],
+        removedActivityIds: ["optimistic-motion:message-1"],
+        events: [
+          expect.objectContaining({
+            id: 11,
+            deviceId: "stack-001",
+            state: "moving",
+          }),
+        ],
+      },
+    });
+  });
+
   it("keeps backfill on the background analytics refresh path", async () => {
     const refreshAnalyticsNowCalls: string[] = [];
     const scheduleAnalyticsRefreshCalls: string[] = [];

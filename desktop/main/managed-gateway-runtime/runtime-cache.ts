@@ -44,7 +44,11 @@ type RuntimeCache = {
     messageId: string,
     payload: DeviceLogInput,
   ) => RuntimeBatchPatchState;
-  clearOptimisticMessage: (messageId: string) => void;
+  clearOptimisticMessage: (messageId: string) => {
+    removedEventIds: Array<number | string>;
+    removedLogIds: Array<number | string>;
+    removedActivityIds: Array<number | string>;
+  };
   pushEvent: (event: MotionEventSummary) => void;
   pushLog: (log: DeviceLogSummary) => void;
   pushActivity: (activity: DeviceActivitySummary) => void;
@@ -279,6 +283,9 @@ export function createRuntimeCache(
   }
 
   function clearOptimisticMessage(messageId: string) {
+    const removedEventIds: Array<number | string> = [];
+    const removedLogIds: Array<number | string> = [];
+    const removedActivityIds: Array<number | string> = [];
     const optimisticMotion = optimisticMotionByMessageId.get(messageId);
     if (optimisticMotion) {
       optimisticMotionByMessageId.delete(messageId);
@@ -286,6 +293,8 @@ export function createRuntimeCache(
       snapshot.activities = snapshot.activities.filter(
         (activity) => activity.id !== optimisticMotion.activity.id,
       );
+      removedEventIds.push(optimisticMotion.event.id);
+      removedActivityIds.push(optimisticMotion.activity.id);
       trimPerDeviceActivities(optimisticMotion.activity.deviceId);
     }
 
@@ -296,8 +305,16 @@ export function createRuntimeCache(
       snapshot.activities = snapshot.activities.filter(
         (activity) => activity.id !== optimisticLog.activity.id,
       );
+      removedLogIds.push(optimisticLog.log.id);
+      removedActivityIds.push(optimisticLog.activity.id);
       trimPerDeviceActivities(optimisticLog.activity.deviceId);
     }
+
+    return {
+      removedEventIds,
+      removedLogIds,
+      removedActivityIds,
+    };
   }
 
   function updateGateway(
