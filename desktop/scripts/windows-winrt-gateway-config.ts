@@ -12,6 +12,13 @@ export function createGatewayConfig() {
     runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
     runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
     heartbeatMinIntervalMs: Number(process.env.GATEWAY_HEARTBEAT_DEDUPE_MS ?? 10_000),
+    historySyncStabilityWindowMs: Number(
+      process.env.GATEWAY_HISTORY_SYNC_STABILITY_MS ?? 5_000,
+    ),
+    historySyncPageSize: Number(process.env.GATEWAY_HISTORY_SYNC_PAGE_SIZE ?? 3),
+    historySyncInterPageDelayMs: Number(
+      process.env.GATEWAY_HISTORY_SYNC_INTER_PAGE_DELAY_MS ?? 2_000,
+    ),
     startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
     sidecarPath:
       process.env.GATEWAY_SIDECAR_PATH ??

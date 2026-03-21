@@ -451,7 +451,12 @@ function handleSidecarEvent(event) {
       emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
     case "node_connection_state":
-      runtimeBridge.handleNodeConnectionState(event);
+      void runtimeBridge.handleNodeConnectionState(event).catch((error) => {
+        console.error("[gateway-winrt] failed to handle node connection state", error);
+        setRuntimeIssue(
+          error instanceof Error ? error.message : "Node connection-state handling failed.",
+        );
+      });
       emitGatewayState();
       emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
@@ -485,13 +490,30 @@ function handleSidecarEvent(event) {
       break;
     }
     case "history_record":
-      runtimeBridge.handleHistoryRecord({
+      log("received history record", {
+        deviceId: event.device_id ?? null,
+        sequence: event.record?.sequence ?? null,
+        kind: event.record?.kind ?? null,
+      });
+      void runtimeBridge.handleHistoryRecord({
         device_id: event.device_id,
         node: event.node ?? {},
         record: event.record,
+      }).catch((error) => {
+        console.error("[gateway-winrt] failed to buffer history record", error);
+        setRuntimeIssue(error instanceof Error ? error.message : "History record buffering failed.");
       });
       break;
     case "history_sync_complete":
+      log("received history sync completion", {
+        deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
+        latestSequence:
+          event.payload?.latest_sequence ?? event.payload?.latestSequence ?? null,
+        highWaterSequence:
+          event.payload?.high_water_sequence ?? event.payload?.highWaterSequence ?? null,
+        sentCount: event.payload?.sent_count ?? event.payload?.sentCount ?? null,
+        hasMore: event.payload?.has_more ?? event.payload?.hasMore ?? null,
+      });
       void runtimeBridge
         .handleHistorySyncComplete({
           node: event.node ?? {},
