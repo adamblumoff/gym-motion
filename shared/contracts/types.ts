@@ -194,6 +194,10 @@ export type MotionEventSummary = {
   hardwareId: string | null;
 };
 
+export function getMotionEventTimelineTimestamp(event: Pick<MotionEventSummary, "receivedAt">) {
+  return Date.parse(event.receivedAt);
+}
+
 export type DeviceLogSummary = {
   id: number;
   deviceId: string;

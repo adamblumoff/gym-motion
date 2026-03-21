@@ -272,4 +272,68 @@ describeDb("motion event repository", () => {
       }),
     ]);
   });
+
+  it("builds daily rollups from received-at time instead of device-relative timestamps", async () => {
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1_000,
+      delta: 1,
+      sequence: 1,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await recordMotionEvent({
+      deviceId: "stack-001",
+      state: "still",
+      timestamp: 31_000,
+      delta: 0,
+      sequence: 2,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+
+    const db = getDb();
+    const client = await db.connect();
+
+    try {
+      await client.query(
+        `update motion_events
+         set received_at = case sequence
+           when 1 then '2026-03-18T23:59:50.000Z'::timestamptz
+           when 2 then '2026-03-19T00:00:20.000Z'::timestamptz
+         end
+         where device_id = $1`,
+        ["stack-001"],
+      );
+      await client.query("delete from motion_rollups_hourly where device_id = $1", ["stack-001"]);
+      await client.query("delete from motion_rollups_daily where device_id = $1", ["stack-001"]);
+      await rebuildMotionRollups(client, "stack-001");
+    } finally {
+      client.release();
+    }
+
+    const dayStart = Date.parse("2026-03-18T00:00:00.000Z");
+    const buckets = await listMotionRollupBuckets({
+      deviceId: "stack-001",
+      window: "7d",
+      startBucket: dayStart,
+      endBucketExclusive: dayStart + 2 * 24 * 60 * 60 * 1000,
+    });
+
+    expect(buckets).toEqual([
+      expect.objectContaining({
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
+        movementCount: 1,
+        movingSeconds: 10,
+      }),
+      expect.objectContaining({
+        bucketStart: Date.parse("2026-03-19T00:00:00.000Z"),
+        movementCount: 0,
+        movingSeconds: 20,
+      }),
+    ]);
+  });
 });

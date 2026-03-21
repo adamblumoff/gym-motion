@@ -15,6 +15,7 @@ import type {
   GetDeviceAnalyticsInput,
   MotionEventSummary,
 } from "@core/contracts";
+import { getMotionEventTimelineTimestamp } from "@core/contracts";
 
 const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v1";
 
@@ -179,10 +180,6 @@ function countMovementStart(
   }
 }
 
-function eventTimelineTimestamp(event: MotionEventSummary) {
-  return Date.parse(event.receivedAt);
-}
-
 function summarizeMotionRollupBuckets(
   buckets: DeviceAnalyticsBucket[],
   rollupBuckets: Awaited<ReturnType<typeof listMotionRollupBuckets>>,
@@ -241,7 +238,7 @@ export function summarizeMotionEventsInBuckets(args: {
   let currentSegmentStart = Math.max(windowStart, segmentStart ?? windowStart);
 
   for (const event of events) {
-    const timelineTimestamp = eventTimelineTimestamp(event);
+    const timelineTimestamp = getMotionEventTimelineTimestamp(event);
 
     if (!Number.isFinite(timelineTimestamp)) {
       continue;
@@ -517,7 +514,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
   function pruneLiveMotionEvents(deviceId: string, nowTimestamp: number) {
     const retained = (liveMotionEvents.get(deviceId) ?? []).filter((event) => {
-      const timestamp = eventTimelineTimestamp(event);
+      const timestamp = getMotionEventTimelineTimestamp(event);
       return Number.isFinite(timestamp) && timestamp >= nowTimestamp - 8 * 24 * 60 * 60 * 1000;
     });
 
@@ -551,12 +548,12 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     const overlayStart = Math.max(windowStart, Date.parse(snapshot.generatedAt));
     const nowTimestamp = Date.now();
     const relevantEvents = liveEvents.filter((event) => {
-      const timestamp = eventTimelineTimestamp(event);
+      const timestamp = getMotionEventTimelineTimestamp(event);
       return Number.isFinite(timestamp) && timestamp > overlayStart && timestamp <= nowTimestamp;
     });
     const precedingEvent = [...liveEvents]
       .reverse()
-      .find((event) => eventTimelineTimestamp(event) <= overlayStart);
+      .find((event) => getMotionEventTimelineTimestamp(event) <= overlayStart);
     const overlaySummary = summarizeMotionEventsInBuckets({
       buckets: snapshot.buckets.map((bucket) => ({
         ...bucket,
@@ -794,7 +791,10 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     recordLiveMotion(event) {
       const events = liveMotionEvents.get(event.deviceId) ?? [];
       const nextEvents = [...events.filter((currentEvent) => currentEvent.id !== event.id), event]
-        .sort((left, right) => eventTimelineTimestamp(left) - eventTimelineTimestamp(right));
+        .sort(
+          (left, right) =>
+            getMotionEventTimelineTimestamp(left) - getMotionEventTimelineTimestamp(right),
+        );
       liveMotionEvents.set(event.deviceId, nextEvents);
       pruneLiveMotionEvents(event.deviceId, Date.now());
       emitMergedCachedSnapshots(event.deviceId);

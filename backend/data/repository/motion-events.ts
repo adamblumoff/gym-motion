@@ -6,6 +6,7 @@ import type {
   MotionEventSummary,
   MotionStreamPayload,
 } from "../motion";
+import { getMotionEventTimelineTimestamp } from "../motion";
 import {
   DEVICE_SELECT_COLUMNS,
   type DeviceRow,
@@ -144,10 +145,10 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
            hardware_id
          from motion_events
          where device_id = $1
-           and event_timestamp < $2
-         order by event_timestamp desc, id desc
+           and received_at < $2
+         order by received_at desc, id desc
          limit 1`,
-        [payload.deviceId, storedEvent.event_timestamp],
+        [payload.deviceId, storedEvent.received_at],
       );
       const nextEvent = await client.query<MotionEventRow>(
         `select
@@ -163,17 +164,17 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
            hardware_id
          from motion_events
          where device_id = $1
-           and event_timestamp > $2
-         order by event_timestamp asc, id asc
+           and received_at > $2
+         order by received_at asc, id asc
          limit 1`,
-        [payload.deviceId, storedEvent.event_timestamp],
+        [payload.deviceId, storedEvent.received_at],
       );
       const rangeStart = previousEvent.rows[0]
-        ? Number(previousEvent.rows[0].event_timestamp)
-        : Number(storedEvent.event_timestamp);
+        ? getMotionEventTimelineTimestamp(mapMotionEventRow(previousEvent.rows[0]))
+        : getMotionEventTimelineTimestamp(mapMotionEventRow(storedEvent));
       const rangeEndExclusive = nextEvent.rows[0]
-        ? Number(nextEvent.rows[0].event_timestamp)
-        : Number(storedEvent.event_timestamp) + 1;
+        ? getMotionEventTimelineTimestamp(mapMotionEventRow(nextEvent.rows[0]))
+        : getMotionEventTimelineTimestamp(mapMotionEventRow(storedEvent)) + 1;
 
       await refreshMotionRollupsForDeviceRange({
         client,

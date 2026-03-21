@@ -5,6 +5,7 @@ import type {
   DeviceSyncStateSummary,
   FirmwareHistorySyncStateSummary,
 } from "../motion";
+import { getMotionEventTimelineTimestamp } from "../motion";
 import {
   DEVICE_SELECT_COLUMNS,
   type DeviceLogRow,
@@ -352,7 +353,6 @@ export async function recordBackfillBatch(
 
     const insertedEvents = [];
     const insertedLogs = [];
-    const motionTimestamps: number[] = [];
     const maxBatchTimestamp = input.records.reduce((highest, record) => {
       const recordTimestamp = "timestamp" in record ? record.timestamp ?? null : null;
       return recordTimestamp === null ? highest : Math.max(highest, recordTimestamp);
@@ -402,7 +402,6 @@ export async function recordBackfillBatch(
       }));
 
     if (motionRecords.length > 0) {
-      motionTimestamps.push(...motionRecords.map((record) => record.timestamp));
       const eventResult = await client.query<MotionEventRow>(
         `insert into motion_events (
            device_id,
@@ -512,16 +511,24 @@ export async function recordBackfillBatch(
       insertedLogs.push(...logResult.rows.map(mapDeviceLogRow));
     }
 
-    if (motionTimestamps.length > 0) {
-      const rangeStart = Math.min(...motionTimestamps);
-      const rangeEndExclusive = Math.max(...motionTimestamps) + 1;
+    if (motionRecords.length > 0) {
+      const motionReceivedAtTimestamps = motionRecords
+        .map((record) => getMotionEventTimelineTimestamp({
+          receivedAt: record.received_at,
+        }))
+        .filter((timestamp) => Number.isFinite(timestamp));
 
-      await refreshMotionRollupsForDeviceRange({
-        client,
-        deviceId: input.deviceId,
-        rangeStart,
-        rangeEndExclusive,
-      });
+      if (motionReceivedAtTimestamps.length > 0) {
+        const rangeStart = Math.min(...motionReceivedAtTimestamps);
+        const rangeEndExclusive = Math.max(...motionReceivedAtTimestamps) + 1;
+
+        await refreshMotionRollupsForDeviceRange({
+          client,
+          deviceId: input.deviceId,
+          rangeStart,
+          rangeEndExclusive,
+        });
+      }
     }
 
     const expectedBySequence = buildExpectedBackfillSequenceKinds({

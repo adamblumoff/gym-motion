@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { getDb } from "../db";
-import type { AnalyticsWindow, MotionEventSummary } from "../motion";
+import { getMotionEventTimelineTimestamp, type AnalyticsWindow, type MotionEventSummary } from "../motion";
 import { type MotionEventRow, mapMotionEventRow } from "./shared";
 
 type Queryable = Pick<PoolClient, "query">;
@@ -201,7 +201,11 @@ function summarizeEventsWithinWindow(args: {
   let currentTimestamp = args.windowStart;
 
   for (const event of args.events) {
-    const eventTimestamp = event.eventTimestamp;
+    const eventTimestamp = getMotionEventTimelineTimestamp(event);
+
+    if (!Number.isFinite(eventTimestamp)) {
+      continue;
+    }
 
     if (currentState === "moving" && eventTimestamp > currentTimestamp) {
       addMovingDuration(
@@ -250,8 +254,8 @@ async function findLatestEventBefore(
        hardware_id
      from motion_events
      where device_id = $1
-       and event_timestamp < $2
-     order by event_timestamp desc, id desc
+       and received_at < to_timestamp($2::double precision / 1000.0)
+     order by received_at desc, id desc
      limit 1`,
     [deviceId, beforeTimestamp],
   );
@@ -278,8 +282,8 @@ async function findFirstEventAtOrAfter(
        hardware_id
      from motion_events
      where device_id = $1
-       and event_timestamp >= $2
-     order by event_timestamp asc, id asc
+       and received_at >= to_timestamp($2::double precision / 1000.0)
+     order by received_at asc, id asc
      limit 1`,
     [deviceId, fromTimestamp],
   );
@@ -307,9 +311,9 @@ async function listEventsBetween(
        hardware_id
      from motion_events
      where device_id = $1
-       and event_timestamp >= $2
-       and event_timestamp < $3
-     order by event_timestamp asc, id asc`,
+       and received_at >= to_timestamp($2::double precision / 1000.0)
+       and received_at < to_timestamp($3::double precision / 1000.0)
+     order by received_at asc, id asc`,
     [deviceId, startTimestamp, endTimestampExclusive],
   );
 
@@ -407,14 +411,20 @@ function summarizeWholeTimeline(
   let currentTimestamp = 0;
 
   for (const event of events) {
-    if (currentState === "moving" && event.eventTimestamp > currentTimestamp) {
+    const eventTimestamp = getMotionEventTimelineTimestamp(event);
+
+    if (!Number.isFinite(eventTimestamp)) {
+      continue;
+    }
+
+    if (currentState === "moving" && eventTimestamp > currentTimestamp) {
       addMovingDuration(
         bucketMap,
         bucketMs,
-        floorBucketStart(events[0]!.eventTimestamp, bucketMs),
+        floorBucketStart(getMotionEventTimelineTimestamp(events[0]!), bucketMs),
         Number.MAX_SAFE_INTEGER,
         currentTimestamp,
-        event.eventTimestamp,
+        eventTimestamp,
       );
     }
 
@@ -422,14 +432,14 @@ function summarizeWholeTimeline(
       addMovementCount(
         bucketMap,
         bucketMs,
-        floorBucketStart(events[0]!.eventTimestamp, bucketMs),
+        floorBucketStart(getMotionEventTimelineTimestamp(events[0]!), bucketMs),
         Number.MAX_SAFE_INTEGER,
-        event.eventTimestamp,
+        eventTimestamp,
       );
     }
 
     currentState = event.state;
-    currentTimestamp = event.eventTimestamp;
+    currentTimestamp = eventTimestamp;
   }
 
   return bucketMap;
@@ -489,7 +499,7 @@ export async function rebuildMotionRollups(client: Queryable, deviceId?: string)
        hardware_id
      from motion_events
      ${deviceId ? "where device_id = $1" : ""}
-     order by device_id asc, event_timestamp asc, id asc`,
+     order by device_id asc, received_at asc, id asc`,
     deviceId ? [deviceId] : [],
   );
 

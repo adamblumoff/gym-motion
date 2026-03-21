@@ -9,7 +9,8 @@ import type {
 import { mergeGatewayDeviceUpdate } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 import { app } from "electron";
-import { listDevices } from "../../backend/data";
+import { hasMotionRollupTables, listDevices, rebuildMotionRollups } from "../../backend/data";
+import { getDb } from "../../backend/data/db";
 
 import { createDesktopApiServer } from "./desktop-api-server";
 import {
@@ -51,6 +52,7 @@ import { createAnalyticsService } from "./managed-gateway-runtime/analytics-serv
 import { createE2eRuntimeStore } from "./managed-gateway-runtime/e2e-runtime-store";
 
 const APPROVED_NODES_KEY = "gym-motion.desktop.approved-nodes";
+const RECEIVED_AT_ROLLUP_REBUILD_KEY = "gym-motion.desktop.rollups.received-at-v1";
 
 export function createManagedGatewayRuntime(
   store: PreferencesStore,
@@ -71,6 +73,31 @@ export function createManagedGatewayRuntime(
   let windowsScanRequested = false;
   const intentionalChildExits = new WeakSet<ChildProcess>();
   const loadPersistedDevices = e2eRuntimeStore?.listDevices ?? listDevices;
+
+  function ensureReceivedAtRollupsInBackground() {
+    if (isE2E || store.getString(RECEIVED_AT_ROLLUP_REBUILD_KEY) === "done") {
+      return;
+    }
+
+    void (async () => {
+      try {
+        if (!(await hasMotionRollupTables())) {
+          return;
+        }
+
+        const client = await getDb().connect();
+        try {
+          console.warn("[runtime] rebuilding motion rollups with received-at timeline semantics");
+          await rebuildMotionRollups(client);
+          store.setString(RECEIVED_AT_ROLLUP_REBUILD_KEY, "done");
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error("[runtime] failed to rebuild motion rollups for received-at semantics", error);
+      }
+    })();
+  }
 
   async function sendGatewayCommand(command: Record<string, unknown>) {
     await runtimeBridge.sendGatewayCommand(command);
@@ -124,6 +151,7 @@ export function createManagedGatewayRuntime(
       e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
     getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
+  ensureReceivedAtRollupsInBackground();
 
   function emitSetup() {
     emit({
