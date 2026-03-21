@@ -13,7 +13,11 @@ import {
   YAxis,
 } from "recharts";
 
-import type { AnalyticsWindow } from "@core/contracts";
+import {
+  mergeActivityUpdate,
+  type AnalyticsWindow,
+  type DeviceActivitySummary,
+} from "@core/contracts";
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
@@ -32,6 +36,7 @@ function analyticsKey(deviceId: string, window: AnalyticsWindow) {
 }
 
 const ANALYTICS_WINDOWS: AnalyticsWindow[] = ["24h", "7d"];
+const ACTIVITY_LIMIT = 60;
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) {
@@ -136,10 +141,13 @@ export function AnalyticsPage() {
     snapshot,
     analyticsByKey,
     getDeviceAnalytics,
+    getDeviceActivity,
   } = useDesktopRuntime();
   const [selectedWindow, setSelectedWindow] = useState<AnalyticsWindow>("24h");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+  const [deviceActivities, setDeviceActivities] = useState<DeviceActivitySummary[]>([]);
+  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const nodes = useMemo(
     () => sortAnalyticsNodes(snapshot ? buildDashboardNodes(snapshot) : []),
     [snapshot],
@@ -170,6 +178,9 @@ export function AnalyticsPage() {
       window,
     }),
   );
+  const loadDeviceActivity = useEffectEvent((deviceId: string) =>
+    getDeviceActivity(deviceId, ACTIVITY_LIMIT),
+  );
 
   useEffect(() => {
     if (!selectedNodeId) {
@@ -194,6 +205,36 @@ export function AnalyticsPage() {
     };
   }, [hasAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
 
+  useEffect(() => {
+    if (!selectedNodeId) {
+      setDeviceActivities([]);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingActivity(true);
+
+    void loadDeviceActivity(selectedNodeId)
+      .then((activities) => {
+        if (!cancelled) {
+          setDeviceActivities(activities);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingActivity(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentAnalytics?.sync.lastSyncCompletedAt,
+    loadDeviceActivity,
+    selectedNodeId,
+  ]);
+
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
@@ -206,6 +247,27 @@ export function AnalyticsPage() {
     () => buildAnalyticsOverview(currentAnalytics),
     [currentAnalytics],
   );
+  const activityLogs = useMemo(() => {
+    if (!selectedNodeId) {
+      return [];
+    }
+
+    let activities = deviceActivities;
+    for (const activity of snapshot?.activities ?? []) {
+      if (activity.deviceId !== selectedNodeId) {
+        continue;
+      }
+
+      activities = mergeActivityUpdate(activities, activity, ACTIVITY_LIMIT);
+    }
+
+    return activities.map((activity) => ({
+      id: activity.id,
+      timestamp: new Date(activity.receivedAt),
+      message: activity.message,
+      isMoving: activity.state === "moving",
+    }));
+  }, [deviceActivities, selectedNodeId, snapshot?.activities]);
   const syncBanner = currentAnalytics
     ? syncBannerCopy(currentAnalytics.sync.state, currentAnalytics.sync.detail)
     : null;
@@ -269,6 +331,14 @@ export function AnalyticsPage() {
                 className="border-zinc-800 bg-zinc-950 text-zinc-300"
               >
                 {currentAnalytics.source === "cache" ? "Cached snapshot" : "Canonical snapshot"}
+              </Badge>
+            ) : null}
+            {currentAnalytics?.liveOverlay?.active ? (
+              <Badge
+                variant="outline"
+                className="border-emerald-800 bg-emerald-950/40 text-emerald-200"
+              >
+                Live overlay active
               </Badge>
             ) : null}
           </div>
@@ -430,7 +500,9 @@ export function AnalyticsPage() {
                   variant="outline"
                   className="border-zinc-800 bg-zinc-950 text-zinc-300"
                 >
-                  {syncStateLabel(currentAnalytics?.sync.state ?? "idle")}
+                  {currentAnalytics?.liveOverlay?.active
+                    ? `${syncStateLabel(currentAnalytics?.sync.state ?? "idle")} + live`
+                    : syncStateLabel(currentAnalytics?.sync.state ?? "idle")}
                 </Badge>
                 <Badge
                   variant="outline"
@@ -538,14 +610,14 @@ export function AnalyticsPage() {
                 variant="outline"
                 className="border-zinc-800 bg-zinc-950 text-zinc-300"
               >
-                {selectedNode.logs.length} recent events
+                {activityLogs.length} recent events
               </Badge>
             </div>
 
             <ScrollArea className="mt-5 h-56">
               <div className="space-y-2 pr-4">
-                {selectedNode.logs.length > 0 ? (
-                  selectedNode.logs.map((log) => (
+                {activityLogs.length > 0 ? (
+                  activityLogs.map((log) => (
                     <div
                       key={log.id}
                       className="flex items-start gap-3 rounded-lg border border-zinc-900 bg-zinc-950/70 px-3 py-2"
@@ -565,7 +637,9 @@ export function AnalyticsPage() {
                   ))
                 ) : (
                   <div className="flex h-full min-h-40 items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
-                    Live activity will appear here as the runtime reports motion and device events.
+                    {isLoadingActivity
+                      ? "Loading machine activity…"
+                      : "Machine activity will appear here as canonical history and live runtime events arrive."}
                   </div>
                 )}
               </div>

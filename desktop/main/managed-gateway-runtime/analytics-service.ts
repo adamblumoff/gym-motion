@@ -19,6 +19,7 @@ import type {
 const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v1";
 
 type CachedAnalyticsMap = Record<string, DeviceAnalyticsSnapshot>;
+type LiveMotionEventMap = Map<string, MotionEventSummary[]>;
 
 type AnalyticsServiceDeps = {
   store: PreferencesStore;
@@ -37,6 +38,10 @@ type WindowDefinition = {
   bucketCount: number;
   labelFormatter: (timestamp: number) => string;
 };
+
+function isAnalyticsWindow(value: unknown): value is AnalyticsWindow {
+  return value === "24h" || value === "7d";
+}
 
 const WINDOW_DEFINITIONS: Record<AnalyticsWindow, WindowDefinition> = {
   "24h": {
@@ -63,6 +68,41 @@ const WINDOW_DEFINITIONS: Record<AnalyticsWindow, WindowDefinition> = {
 
 function cacheKey(deviceId: string, window: AnalyticsWindow) {
   return `${deviceId}::${window}`;
+}
+
+function isDeviceAnalyticsBucket(value: unknown): value is DeviceAnalyticsBucket {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const bucket = value as Record<string, unknown>;
+  return (
+    typeof bucket.key === "string" &&
+    typeof bucket.label === "string" &&
+    typeof bucket.startAt === "string" &&
+    typeof bucket.endAt === "string" &&
+    typeof bucket.movementCount === "number" &&
+    typeof bucket.movingSeconds === "number"
+  );
+}
+
+function isDeviceAnalyticsSnapshot(value: unknown): value is DeviceAnalyticsSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const snapshot = value as Record<string, unknown>;
+  return (
+    typeof snapshot.deviceId === "string" &&
+    isAnalyticsWindow(snapshot.window) &&
+    typeof snapshot.generatedAt === "string" &&
+    Array.isArray(snapshot.buckets) &&
+    snapshot.buckets.every(isDeviceAnalyticsBucket) &&
+    typeof snapshot.totalMovementCount === "number" &&
+    typeof snapshot.totalMovingSeconds === "number" &&
+    !!snapshot.sync &&
+    typeof snapshot.sync === "object"
+  );
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -186,6 +226,7 @@ export function summarizeMotionEventsInBuckets(args: {
   windowEnd: number;
   precedingState: MotionEventSummary["state"] | null;
   events: MotionEventSummary[];
+  segmentStart?: number;
 }) {
   const {
     buckets,
@@ -194,9 +235,10 @@ export function summarizeMotionEventsInBuckets(args: {
     windowEnd,
     precedingState,
     events,
+    segmentStart,
   } = args;
   let currentState = precedingState ?? "still";
-  let currentSegmentStart = windowStart;
+  let currentSegmentStart = Math.max(windowStart, segmentStart ?? windowStart);
 
   for (const event of events) {
     const timelineTimestamp = eventTimelineTimestamp(event);
@@ -222,6 +264,17 @@ export function summarizeMotionEventsInBuckets(args: {
 
     currentState = event.state;
     currentSegmentStart = timelineTimestamp;
+  }
+
+  if (currentState === "moving") {
+    addMovingDuration(
+      buckets,
+      bucketMs,
+      windowStart,
+      windowEnd,
+      currentSegmentStart,
+      windowEnd,
+    );
   }
 
   return {
@@ -331,25 +384,23 @@ async function buildAnalyticsSnapshot(args: {
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
   const { start, end, buckets } = createBuckets(definition, Date.now());
+  const windowStartAt = new Date(start).toISOString();
+  const windowEndAt = new Date(end).toISOString();
   const syncSummary = await args.getDeviceSyncState(
     args.deviceId,
     args.runtimeDevice?.bootId ?? null,
   );
+  const provisionalSync = hydrateSyncState(
+    args.deviceId,
+    args.runtimeDevice,
+    null,
+    syncSummary,
+    args.failureDetail,
+  );
   let summary:
     | ReturnType<typeof summarizeMotionEventsInBuckets>
     | ReturnType<typeof summarizeMotionRollupBuckets>;
-
-  if (await args.hasMotionRollupTables()) {
-    const rollupBuckets = await args.listMotionRollupBuckets({
-      deviceId: args.deviceId,
-      window: args.window,
-      startBucket: start,
-      endBucketExclusive: end,
-    });
-    summary = summarizeMotionRollupBuckets(buckets, rollupBuckets);
-  } else {
-    const windowStartAt = new Date(start).toISOString();
-    const windowEndAt = new Date(end).toISOString();
+  const loadRawMotionSummary = async () => {
     const [events, precedingEvent] = await Promise.all([
       args.listDeviceMotionEventsByReceivedAt({
         deviceId: args.deviceId,
@@ -361,27 +412,46 @@ async function buildAnalyticsSnapshot(args: {
         beforeReceivedAt: windowStartAt,
       }),
     ]);
-    summary = summarizeMotionEventsInBuckets({
-      buckets,
+
+    return summarizeMotionEventsInBuckets({
+      buckets: buckets.map((bucket) => ({
+        ...bucket,
+        movementCount: 0,
+        movingSeconds: 0,
+      })),
       bucketMs: definition.bucketMs,
       windowStart: start,
       windowEnd: end,
       precedingState: precedingEvent?.state ?? null,
       events,
     });
+  };
+
+  if ((await args.hasMotionRollupTables()) && provisionalSync.state === "idle") {
+    const rollupBuckets = await args.listMotionRollupBuckets({
+      deviceId: args.deviceId,
+      window: args.window,
+      startBucket: start,
+      endBucketExclusive: end,
+    });
+    const rollupSummary = summarizeMotionRollupBuckets(buckets, rollupBuckets);
+    if (rollupSummary.totalMovementCount > 0 || rollupSummary.totalMovingSeconds > 0) {
+      summary = rollupSummary;
+    } else {
+      summary = await loadRawMotionSummary();
+    }
+  } else {
+    summary = await loadRawMotionSummary();
   }
 
   const totalMovementCount = summary.totalMovementCount;
   const totalMovingSeconds = summary.totalMovingSeconds;
 
   const generatedAt = new Date().toISOString();
-  const sync = hydrateSyncState(
-    args.deviceId,
-    args.runtimeDevice,
-    generatedAt,
-    syncSummary,
-    args.failureDetail,
-  );
+  const sync = {
+    ...provisionalSync,
+    lastCanonicalAt: generatedAt,
+  };
   const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>();
 
   if (sync.lastOverflowDetectedAt) {
@@ -412,11 +482,13 @@ export type AnalyticsService = {
   scheduleRefresh: (deviceId: string, delayMs?: number) => void;
   markSyncFailure: (deviceId: string, detail: string) => void;
   clearSyncFailure: (deviceId: string) => void;
+  recordLiveMotion: (event: MotionEventSummary) => void;
 };
 
 export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsService {
   const refreshTimers = new Map<string, NodeJS.Timeout>();
   const syncFailures = new Map<string, string>();
+  const liveMotionEvents: LiveMotionEventMap = new Map();
   const checkHasMotionRollups = deps.hasMotionRollupTables ?? hasMotionRollupTables;
   const loadMotionRollupBuckets = deps.listMotionRollupBuckets ?? listMotionRollupBuckets;
   const loadMotionEventsByReceivedAt =
@@ -427,11 +499,124 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
   const loadDeviceSyncState = deps.getDeviceSyncState ?? getDeviceSyncState;
 
   function readCache(): CachedAnalyticsMap {
-    return deps.store.getJson<CachedAnalyticsMap>(ANALYTICS_CACHE_KEY) ?? {};
+    const rawCache = deps.store.getJson<Record<string, unknown>>(ANALYTICS_CACHE_KEY) ?? {};
+    const cache: CachedAnalyticsMap = {};
+
+    for (const [key, value] of Object.entries(rawCache)) {
+      if (isDeviceAnalyticsSnapshot(value)) {
+        cache[key] = value;
+      }
+    }
+
+    return cache;
   }
 
   function writeCache(cache: CachedAnalyticsMap) {
     deps.store.setJson(ANALYTICS_CACHE_KEY, cache);
+  }
+
+  function pruneLiveMotionEvents(deviceId: string, nowTimestamp: number) {
+    const retained = (liveMotionEvents.get(deviceId) ?? []).filter((event) => {
+      const timestamp = eventTimelineTimestamp(event);
+      return Number.isFinite(timestamp) && timestamp >= nowTimestamp - 8 * 24 * 60 * 60 * 1000;
+    });
+
+    if (retained.length === 0) {
+      liveMotionEvents.delete(deviceId);
+      return;
+    }
+
+    liveMotionEvents.set(deviceId, retained);
+  }
+
+  function mergeLiveOverlayIntoSnapshot(
+    snapshot: DeviceAnalyticsSnapshot,
+    deviceId: string,
+  ): DeviceAnalyticsSnapshot {
+    const liveEvents = liveMotionEvents.get(deviceId) ?? [];
+    const definition = WINDOW_DEFINITIONS[snapshot.window];
+    if (!definition || liveEvents.length === 0 || snapshot.buckets.length === 0) {
+      return {
+        ...snapshot,
+        liveOverlay: {
+          active: false,
+          generatedAt: null,
+          totalMovementCount: 0,
+          totalMovingSeconds: 0,
+          lastEventReceivedAt: null,
+        },
+      };
+    }
+    const windowStart = Date.parse(snapshot.buckets[0]?.startAt ?? snapshot.generatedAt);
+    const overlayStart = Math.max(windowStart, Date.parse(snapshot.generatedAt));
+    const nowTimestamp = Date.now();
+    const relevantEvents = liveEvents.filter((event) => {
+      const timestamp = eventTimelineTimestamp(event);
+      return Number.isFinite(timestamp) && timestamp > overlayStart && timestamp <= nowTimestamp;
+    });
+    const precedingEvent = [...liveEvents]
+      .reverse()
+      .find((event) => eventTimelineTimestamp(event) <= overlayStart);
+    const overlaySummary = summarizeMotionEventsInBuckets({
+      buckets: snapshot.buckets.map((bucket) => ({
+        ...bucket,
+        movementCount: 0,
+        movingSeconds: 0,
+      })),
+      bucketMs: definition.bucketMs,
+      windowStart,
+      windowEnd: nowTimestamp,
+      segmentStart: overlayStart,
+      precedingState: precedingEvent?.state ?? null,
+      events: relevantEvents,
+    });
+    const lastEventReceivedAt =
+      relevantEvents.length > 0 ? relevantEvents[relevantEvents.length - 1]?.receivedAt ?? null : null;
+    const overlayActive =
+      overlaySummary.totalMovementCount > 0 || overlaySummary.totalMovingSeconds > 0;
+
+    if (!overlayActive) {
+      return {
+        ...snapshot,
+        liveOverlay: {
+          active: false,
+          generatedAt: null,
+          totalMovementCount: 0,
+          totalMovingSeconds: 0,
+          lastEventReceivedAt,
+        },
+      };
+    }
+
+    return {
+      ...snapshot,
+      buckets: snapshot.buckets.map((bucket, index) => ({
+        ...bucket,
+        movementCount: bucket.movementCount + overlaySummary.buckets[index].movementCount,
+        movingSeconds: bucket.movingSeconds + overlaySummary.buckets[index].movingSeconds,
+      })),
+      totalMovementCount: snapshot.totalMovementCount + overlaySummary.totalMovementCount,
+      totalMovingSeconds: snapshot.totalMovingSeconds + overlaySummary.totalMovingSeconds,
+      liveOverlay: {
+        active: true,
+        generatedAt: new Date(nowTimestamp).toISOString(),
+        totalMovementCount: overlaySummary.totalMovementCount,
+        totalMovingSeconds: overlaySummary.totalMovingSeconds,
+        lastEventReceivedAt,
+      },
+    };
+  }
+
+  function emitMergedCachedSnapshots(deviceId: string) {
+    const cache = readCache();
+    for (const window of Object.keys(WINDOW_DEFINITIONS) as AnalyticsWindow[]) {
+      const cached = cache[cacheKey(deviceId, window)];
+      if (!cached) {
+        continue;
+      }
+
+      deps.onUpdated(mergeLiveOverlayIntoSnapshot(cached, deviceId));
+    }
   }
 
   async function emitCachedSnapshots(deviceId: string) {
@@ -464,17 +649,22 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
           syncSummary,
           failureDetail,
         );
-        deps.onUpdated(buildCachedSnapshotFromSync(cached, sync));
+        deps.onUpdated(
+          mergeLiveOverlayIntoSnapshot(buildCachedSnapshotFromSync(cached, sync), deviceId),
+        );
         continue;
       }
 
       deps.onUpdated(
-        buildCachedSnapshotFromSync(
-          cached,
-          buildFailedCachedSyncState(
+        mergeLiveOverlayIntoSnapshot(
+          buildCachedSnapshotFromSync(
             cached,
-            cachedSyncErrorDetail ?? "Analytics sync state refresh failed.",
+            buildFailedCachedSyncState(
+              cached,
+              cachedSyncErrorDetail ?? "Analytics sync state refresh failed.",
+            ),
           ),
+          deviceId,
         ),
       );
     }
@@ -501,7 +691,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         getDeviceSyncState: loadDeviceSyncState,
       });
       nextCache[cacheKey(deviceId, window)] = analytics;
-      deps.onUpdated(analytics);
+      deps.onUpdated(mergeLiveOverlayIntoSnapshot(analytics, deviceId));
     }
 
     writeCache(nextCache);
@@ -544,17 +734,23 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
             syncSummary,
             syncFailures.get(input.deviceId) ?? null,
           );
-          return buildCachedSnapshotFromSync(cached, sync, {
-            markStaleWhileSyncing: true,
-          });
+          return mergeLiveOverlayIntoSnapshot(
+            buildCachedSnapshotFromSync(cached, sync, {
+              markStaleWhileSyncing: true,
+            }),
+            input.deviceId,
+          );
         } catch (error) {
           const detail =
             syncFailures.get(input.deviceId) ??
             (error instanceof Error ? error.message : "Analytics sync state refresh failed.");
           console.error("[runtime] failed to load cached analytics sync state", error);
-          return buildCachedSnapshotFromSync(
-            cached,
-            buildFailedCachedSyncState(cached, detail),
+          return mergeLiveOverlayIntoSnapshot(
+            buildCachedSnapshotFromSync(
+              cached,
+              buildFailedCachedSyncState(cached, detail),
+            ),
+            input.deviceId,
           );
         }
       }
@@ -577,7 +773,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         [cacheKey(input.deviceId, input.window)]: analytics,
       });
 
-      return analytics;
+      return mergeLiveOverlayIntoSnapshot(analytics, input.deviceId);
     },
 
     scheduleRefresh,
@@ -593,6 +789,15 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
       }
 
       scheduleRefresh(deviceId);
+    },
+
+    recordLiveMotion(event) {
+      const events = liveMotionEvents.get(event.deviceId) ?? [];
+      const nextEvents = [...events.filter((currentEvent) => currentEvent.id !== event.id), event]
+        .sort((left, right) => eventTimelineTimestamp(left) - eventTimelineTimestamp(right));
+      liveMotionEvents.set(event.deviceId, nextEvents);
+      pruneLiveMotionEvents(event.deviceId, Date.now());
+      emitMergedCachedSnapshots(event.deviceId);
     },
   };
 }

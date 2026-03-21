@@ -1,6 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ApprovedNodeRule, GetDeviceAnalyticsInput } from "@core/contracts";
+import type {
+  ApprovedNodeRule,
+  DeviceActivitySummary,
+  GetDeviceAnalyticsInput,
+} from "@core/contracts";
 import type { ThemeState } from "@core/services";
 
 import { applyThemeState } from "../../lib/theme";
@@ -61,6 +65,9 @@ export function createDesktopAppActions(
       const analytics = await window.gymMotionDesktop.getDeviceAnalytics(input);
       setState((current) => replaceDeviceAnalytics(current, analytics));
       return analytics;
+    },
+    async getDeviceActivity(deviceId: string, limit?: number): Promise<DeviceActivitySummary[]> {
+      return window.gymMotionDesktop.getDeviceActivity(deviceId, limit);
     },
   };
 }

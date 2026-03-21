@@ -31,6 +31,7 @@ describe("createDataEventHandler", () => {
     const emittedEvents: string[] = [];
     const refreshAnalyticsNowCalls: string[] = [];
     const scheduleAnalyticsRefreshCalls: string[] = [];
+    const recordLiveMotionCalls: string[] = [];
     let snapshot = createEmptySnapshot();
 
     const applyDataEvent = createDataEventHandler({
@@ -44,6 +45,11 @@ describe("createDataEventHandler", () => {
       refreshDeviceHistory: async () => {},
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
+      recordLiveMotion: (event) => {
+        if (event) {
+          recordLiveMotionCalls.push(event.deviceId);
+        }
+      },
       reportHistoryRefreshFailure: () => {},
       clearHistoryRefreshFailure: () => {},
     });
@@ -69,6 +75,7 @@ describe("createDataEventHandler", () => {
 
     expect(refreshAnalyticsNowCalls).toEqual(["stack-001"]);
     expect(scheduleAnalyticsRefreshCalls).toEqual([]);
+    expect(recordLiveMotionCalls).toEqual(["stack-001"]);
     expect(emittedEvents).toEqual(["device-upserted", "event-recorded", "activity-recorded"]);
     expect(snapshot.events).toHaveLength(1);
     expect(snapshot.activities).toHaveLength(1);
@@ -79,6 +86,7 @@ describe("createDataEventHandler", () => {
     const scheduleAnalyticsRefreshCalls: string[] = [];
     const emittedEvents: string[] = [];
     const refreshedDevices: string[] = [];
+    const callOrder: string[] = [];
     let snapshot = createEmptySnapshot();
 
     const applyDataEvent = createDataEventHandler({
@@ -93,9 +101,14 @@ describe("createDataEventHandler", () => {
       },
       refreshDeviceHistory: async (deviceId) => {
         refreshedDevices.push(deviceId);
+        callOrder.push(`history:${deviceId}`);
       },
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
-      scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
+      scheduleAnalyticsRefresh: (deviceId) => {
+        scheduleAnalyticsRefreshCalls.push(deviceId);
+        callOrder.push(`analytics:${deviceId}`);
+      },
+      recordLiveMotion: () => {},
       reportHistoryRefreshFailure: () => {},
       clearHistoryRefreshFailure: () => {},
     });
@@ -112,6 +125,7 @@ describe("createDataEventHandler", () => {
     expect(refreshAnalyticsNowCalls).toEqual([]);
     expect(scheduleAnalyticsRefreshCalls).toEqual(["stack-001"]);
     expect(refreshedDevices).toEqual(["stack-001"]);
+    expect(callOrder).toEqual(["history:stack-001", "analytics:stack-001"]);
     expect(emittedEvents).toContain("snapshot");
   });
 });

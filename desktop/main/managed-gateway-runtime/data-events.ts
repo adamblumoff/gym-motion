@@ -25,6 +25,7 @@ type DataEventHandlerDeps = {
   refreshDeviceHistory: (deviceId: string) => Promise<void>;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
+  recordLiveMotion: (event: MotionStreamPayload["event"]) => void;
   reportHistoryRefreshFailure: (detail: string) => void;
   clearHistoryRefreshFailure: () => void;
 };
@@ -73,6 +74,7 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         });
 
         if (payload.event) {
+          deps.recordLiveMotion(payload.event);
           deps.setSnapshot({
             ...deps.getSnapshot(),
             events: mergeEventUpdate(deps.getSnapshot().events, payload.event, 14),
@@ -157,10 +159,10 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         logBackfillEvent("backfill recorded; scheduling history and analytics refresh", {
           deviceId: event.deviceId,
         });
-        deps.scheduleAnalyticsRefresh(event.deviceId);
         void refreshWithRetry(() => deps.refreshDeviceHistory(event.deviceId))
           .then(() => {
             deps.clearHistoryRefreshFailure();
+            deps.scheduleAnalyticsRefresh(event.deviceId);
             logBackfillEvent("backfill device history refresh completed", {
               deviceId: event.deviceId,
             });

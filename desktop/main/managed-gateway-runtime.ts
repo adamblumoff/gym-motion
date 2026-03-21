@@ -415,6 +415,11 @@ export function createManagedGatewayRuntime(
     refreshDeviceHistory: (deviceId) => runtimeSync.refreshDeviceHistory(deviceId),
     refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
+    recordLiveMotion: (event) => {
+      if (event) {
+        analyticsService.recordLiveMotion(event);
+      }
+    },
     reportHistoryRefreshFailure,
     clearHistoryRefreshFailure,
   });

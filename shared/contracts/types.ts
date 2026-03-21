@@ -266,6 +266,13 @@ export type DeviceAnalyticsSnapshot = {
   totalMovingSeconds: number;
   warningFlags: AnalyticsWarningFlag[];
   sync: DeviceAnalyticsSyncState;
+  liveOverlay?: {
+    active: boolean;
+    generatedAt: string | null;
+    totalMovementCount: number;
+    totalMovingSeconds: number;
+    lastEventReceivedAt: string | null;
+  };
 };
 
 export type DesktopSnapshot = {
