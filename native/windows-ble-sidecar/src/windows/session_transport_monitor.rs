@@ -9,7 +9,7 @@ use btleplug::api::Peripheral as _;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{
-    sync::{mpsc, watch, RwLock},
+    sync::{mpsc, watch, Mutex, RwLock},
     time::sleep,
 };
 
@@ -26,6 +26,7 @@ use super::{
     config::Config,
     handshake::{send_app_session_bootstrap, send_app_session_lease, write_chunked_json_command},
     session_lease::{is_closed_handle_error_message, spawn_lease_task},
+    session::ActiveSessionControl,
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
     session_transport_setup::PreparedSession,
@@ -47,6 +48,7 @@ pub(super) async fn monitor_active_session(
     writer: EventWriter,
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
+    active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     reconnect: Option<ReconnectStatus>,
     mut session_shutdown: watch::Receiver<bool>,
@@ -56,6 +58,26 @@ pub(super) async fn monitor_active_session(
     reconnect_started_at: Instant,
     monitor_config: MonitorSessionConfig,
 ) -> Result<Option<String>> {
+    async fn remember_active_session_control(
+        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+        device_id: &str,
+        control: &ActiveSessionControl,
+    ) {
+        active_session_controls
+            .lock()
+            .await
+            .insert(device_id.to_string(), control.clone());
+    }
+
+    async fn remove_active_session_control(
+        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+        device_id: Option<&str>,
+    ) {
+        if let Some(device_id) = device_id {
+            active_session_controls.lock().await.remove(device_id);
+        }
+    }
+
     emit_handshake_step(
         &writer,
         config.verbose_logging,
@@ -77,10 +99,14 @@ pub(super) async fn monitor_active_session(
     let mut session_bootstrap_retry_count = 0_u32;
     let mut session_telemetry_confirm_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
-    let mut current_control_characteristic = prepared.control_characteristic;
+    let mut current_session_device_id: Option<String> = None;
+    let mut current_control = ActiveSessionControl {
+        peripheral: prepared.peripheral.clone(),
+        characteristic: prepared.control_characteristic,
+        write_lock: std::sync::Arc::new(Mutex::new(())),
+    };
     let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) = spawn_lease_task(
-        prepared.peripheral.clone(),
-        current_control_characteristic.clone(),
+        current_control.clone(),
         app_session_id.clone(),
     );
 
@@ -184,13 +210,15 @@ pub(super) async fn monitor_active_session(
                                     "sending sync-now",
                                 )
                                 .await?;
-                                if let Err(error) = write_chunked_json_command(
-                                    &prepared.peripheral,
-                                    &current_control_characteristic,
+                                let write_guard = current_control.write_lock.lock().await;
+                                let sync_now_result = write_chunked_json_command(
+                                    &current_control.peripheral,
+                                    &current_control.characteristic,
                                     r#"{"type":"sync-now"}"#,
                                 )
-                                .await
-                                {
+                                .await;
+                                drop(write_guard);
+                                if let Err(error) = sync_now_result {
                                     writer
                                         .send(&Event::Log {
                                             level: "warn".to_string(),
@@ -203,6 +231,35 @@ pub(super) async fn monitor_active_session(
                                             })),
                                         })
                                         .await?;
+                                }
+                                if let Some(device_id) = status.device_id.as_deref() {
+                                    current_session_device_id = Some(device_id.to_string());
+                                    remember_active_session_control(
+                                        &active_session_controls,
+                                        device_id,
+                                        &current_control,
+                                    )
+                                    .await;
+                                }
+                                if !session_healthy_reported {
+                                    if let Some(completed_node) = telemetry_fallback_node
+                                        .clone()
+                                        .or_else(|| ack_confirmed_node.clone())
+                                    {
+                                        session_healthy_reported = true;
+                                        report_reconnect_completed(
+                                            &writer,
+                                            &command_sender,
+                                            &completed_node,
+                                            &reconnect,
+                                            prepared.transport_ready_at,
+                                            prepared.gatt_ready_at,
+                                            reconnect_started_at,
+                                            telemetry_fallback_node.is_some(),
+                                        )
+                                        .await?;
+                                        continue;
+                                    }
                                 }
                                 session_health_sleep.as_mut().reset(
                                     (Instant::now()
@@ -227,6 +284,13 @@ pub(super) async fn monitor_active_session(
                                             .await
                                             .insert(peripheral_id, status.device_id.clone());
                                     }
+                                    current_session_device_id = Some(status.device_id.clone());
+                                    remember_active_session_control(
+                                        &active_session_controls,
+                                        &status.device_id,
+                                        &current_control,
+                                    )
+                                    .await;
                                     let mut enriched = node.clone();
                                     enriched.known_device_id = Some(status.device_id.clone());
                                     writer
@@ -254,6 +318,13 @@ pub(super) async fn monitor_active_session(
                                             .await
                                             .insert(peripheral_id, status.device_id.clone());
                                     }
+                                    current_session_device_id = Some(status.device_id.clone());
+                                    remember_active_session_control(
+                                        &active_session_controls,
+                                        &status.device_id,
+                                        &current_control,
+                                    )
+                                    .await;
                                     let mut enriched = node.clone();
                                     enriched.known_device_id = Some(status.device_id.clone());
                                     writer
@@ -291,6 +362,13 @@ pub(super) async fn monitor_active_session(
                                     .await
                                     .insert(peripheral_id, payload.device_id.clone());
                             }
+                            current_session_device_id = Some(payload.device_id.clone());
+                            remember_active_session_control(
+                                &active_session_controls,
+                                &payload.device_id,
+                                &current_control,
+                            )
+                            .await;
                             let mut enriched = node.clone();
                             enriched.known_device_id = Some(payload.device_id.clone());
                             if telemetry_fallback_node.is_none() {
@@ -355,13 +433,16 @@ pub(super) async fn monitor_active_session(
                                 })),
                             })
                             .await?;
-                        write_chunked_json_command(
-                            &prepared.peripheral,
-                            &current_control_characteristic,
+                        let write_guard = current_control.write_lock.lock().await;
+                        let sync_now_retry_result = write_chunked_json_command(
+                            &current_control.peripheral,
+                            &current_control.characteristic,
                             r#"{"type":"sync-now"}"#,
                         )
-                        .await
-                        .with_context(|| format!("sync-now retry failed for {}", node.label))?;
+                        .await;
+                        drop(write_guard);
+                        sync_now_retry_result
+                            .with_context(|| format!("sync-now retry failed for {}", node.label))?;
                         session_health_sleep.as_mut().reset(
                             (Instant::now()
                                 + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
@@ -396,22 +477,26 @@ pub(super) async fn monitor_active_session(
                             })),
                         })
                         .await?;
-                    send_app_session_bootstrap(
-                        &prepared.peripheral,
-                        &current_control_characteristic,
+                    let write_guard = current_control.write_lock.lock().await;
+                    let bootstrap_result = send_app_session_bootstrap(
+                        &current_control.peripheral,
+                        &current_control.characteristic,
                         &app_session_nonce,
                     )
-                    .await
-                    .with_context(|| {
+                    .await;
+                    bootstrap_result.with_context(|| {
                         format!("app-session-bootstrap retry failed for {}", node.label)
                     })?;
-                    send_app_session_lease(
-                        &prepared.peripheral,
-                        &current_control_characteristic,
+                    let lease_result = send_app_session_lease(
+                        &current_control.peripheral,
+                        &current_control.characteristic,
                         &app_session_id,
                     )
-                    .await
-                    .with_context(|| format!("app-session-lease retry failed for {}", node.label))?;
+                    .await;
+                    drop(write_guard);
+                    lease_result.with_context(|| {
+                        format!("app-session-lease retry failed for {}", node.label)
+                    })?;
                     session_health_sleep.as_mut().reset(
                         (Instant::now()
                             + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
@@ -484,10 +569,21 @@ pub(super) async fn monitor_active_session(
                     .await
                     {
                         Ok(recovered_control_characteristic) => {
-                            current_control_characteristic = recovered_control_characteristic;
+                            current_control = ActiveSessionControl {
+                                peripheral: prepared.peripheral.clone(),
+                                characteristic: recovered_control_characteristic,
+                                write_lock: current_control.write_lock.clone(),
+                            };
+                            if let Some(device_id) = current_session_device_id.as_deref() {
+                                remember_active_session_control(
+                                    &active_session_controls,
+                                    device_id,
+                                    &current_control,
+                                )
+                                .await;
+                            }
                             let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                prepared.peripheral.clone(),
-                                current_control_characteristic.clone(),
+                                current_control.clone(),
                                 app_session_id.clone(),
                             );
                             lease_shutdown_tx = new_shutdown_tx;
@@ -523,6 +619,8 @@ pub(super) async fn monitor_active_session(
 
     let _ = lease_shutdown_tx.send(true);
     let _ = lease_task.await;
+    remove_active_session_control(&active_session_controls, current_session_device_id.as_deref())
+        .await;
 
     if prepared.peripheral.is_connected().await.unwrap_or(false) {
         let _ = prepared.peripheral.disconnect().await;

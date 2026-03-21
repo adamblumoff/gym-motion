@@ -16,7 +16,7 @@ use super::{
     writer::EventWriter,
 };
 
-pub(super) const APP_SESSION_HEARTBEAT_MS: u64 = 5_000;
+pub(super) const APP_SESSION_HEARTBEAT_MS: u64 = 2_500;
 const CONNECTION_HEALTH_POLL_MS: u64 = 2_000;
 const SESSION_HEALTH_ACK_TIMEOUT_MS: u64 = 1_000;
 const GATT_SETUP_RETRY_ATTEMPTS: u32 = 2;
@@ -36,6 +36,7 @@ pub(super) async fn connect_and_stream(
     writer: EventWriter,
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
+    active_session_controls: Arc<tokio::sync::Mutex<HashMap<String, super::session::ActiveSessionControl>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     reconnect: Option<ReconnectStatus>,
     session_shutdown: watch::Receiver<bool>,
@@ -85,6 +86,7 @@ pub(super) async fn connect_and_stream(
         writer,
         config,
         allowed_nodes,
+        active_session_controls,
         known_device_ids,
         reconnect,
         session_shutdown,

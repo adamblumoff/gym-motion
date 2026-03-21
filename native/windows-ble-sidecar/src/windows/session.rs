@@ -7,8 +7,8 @@ use std::{
 
 use anyhow::Result;
 use btleplug::{
-    api::{Central, CentralState, Peripheral as _},
-    platform::Adapter,
+    api::{Central, CentralState, Characteristic, Peripheral as _},
+    platform::{Adapter, Peripheral},
 };
 use futures::StreamExt;
 use serde_json::json;
@@ -39,6 +39,13 @@ use super::{
 
 pub(super) const SCAN_WINDOW_SECS: u64 = 15;
 
+#[derive(Clone)]
+pub(super) struct ActiveSessionControl {
+    pub(super) peripheral: Peripheral,
+    pub(super) characteristic: Characteristic,
+    pub(super) write_lock: Arc<Mutex<()>>,
+}
+
 pub(super) struct SessionContext {
     pub(super) adapter: Adapter,
     pub(super) selected_adapter_id: String,
@@ -46,6 +53,7 @@ pub(super) struct SessionContext {
     pub(super) config: Config,
     pub(super) allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     pub(super) active_connections: Arc<Mutex<HashMap<String, DiscoveredNode>>>,
+    pub(super) active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
     pub(super) known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     pub(super) command_sender: mpsc::UnboundedSender<SessionCommand>,
 }
@@ -261,6 +269,7 @@ pub(super) async fn run_session(
         config,
         allowed_nodes,
         active_connections: Arc::new(Mutex::new(HashMap::new())),
+        active_session_controls: Arc::new(Mutex::new(HashMap::new())),
         known_device_ids: Arc::new(RwLock::new(HashMap::new())),
         command_sender,
     };

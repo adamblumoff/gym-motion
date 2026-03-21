@@ -209,6 +209,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
     let config_clone = context.config.clone();
     let allowed_nodes_clone = context.allowed_nodes.clone();
     let active_connections_clone = context.active_connections.clone();
+    let active_session_controls_clone = context.active_session_controls.clone();
     let known_device_ids_clone = context.known_device_ids.clone();
     let command_tx_clone = context.command_sender.clone();
     let shutdown_clone = shutdown.clone();
@@ -221,6 +222,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
             writer_clone.clone(),
             config_clone,
             allowed_nodes_clone,
+            active_session_controls_clone,
             known_device_ids_clone,
             Some(ReconnectStatus {
                 attempt: next_attempt,
@@ -350,6 +352,7 @@ pub(super) async fn spawn_manual_pair_for_candidate(
     let config_clone = context.config.clone();
     let allowed_nodes_clone = context.allowed_nodes.clone();
     let active_connections_clone = context.active_connections.clone();
+    let active_session_controls_clone = context.active_session_controls.clone();
     let known_device_ids_clone = context.known_device_ids.clone();
     let command_tx_clone = context.command_sender.clone();
     let shutdown_clone = shutdown.clone();
@@ -362,6 +365,7 @@ pub(super) async fn spawn_manual_pair_for_candidate(
             writer_clone.clone(),
             config_clone,
             allowed_nodes_clone,
+            active_session_controls_clone,
             known_device_ids_clone,
             None,
             shutdown_clone,
