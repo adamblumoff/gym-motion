@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  createRuntimeServer,
+  flushBackgroundWork,
+} from "./windows-winrt-gateway-runtime-bridge.test-support";
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("windows winrt gateway runtime bridge", () => {
   it("serializes telemetry forwarding per device while allowing other devices to continue", async () => {
@@ -11,7 +19,7 @@ describe("windows winrt gateway runtime bridge", () => {
       config: {
         heartbeatMinIntervalMs: 10_000,
       },
-      runtimeServer: {
+      runtimeServer: createRuntimeServer({
         noteTelemetry(payload) {
           if (payload.deviceId === "stack-001" && payload.sequence === 1) {
             return new Promise((resolve) => {
@@ -40,10 +48,7 @@ describe("windows winrt gateway runtime bridge", () => {
             },
           });
         },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      }),
       debug() {},
       sendToDesktop(message) {
         messages.push(message);
@@ -82,8 +87,7 @@ describe("windows winrt gateway runtime bridge", () => {
       hardwareId: "hw-2",
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushBackgroundWork();
 
     expect(messages).toEqual([
       {
@@ -158,17 +162,7 @@ describe("windows winrt gateway runtime bridge", () => {
       config: {
         heartbeatMinIntervalMs: 10_000,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      runtimeServer: createRuntimeServer(),
       debug() {},
       sendToDesktop(message) {
         messages.push(message);
@@ -187,23 +181,7 @@ describe("windows winrt gateway runtime bridge", () => {
       config: {
         heartbeatMinIntervalMs: 10_000,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: {
-              gatewayConnectionState: "connected",
-              telemetryFreshness: "fresh",
-              lastTelemetryAt: 1,
-              lastConnectedAt: null,
-              lastDisconnectedAt: null,
-            },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      runtimeServer: createRuntimeServer(),
       debug() {},
       sendToDesktop(message) {
         messages.push(message);
@@ -238,20 +216,14 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
-  it("only persists connected and disconnected lifecycle logs", () => {
+  it("only persists connected and disconnected lifecycle logs", async () => {
     const messages = [];
 
     const bridge = createRuntimeBridge({
       config: {
         heartbeatMinIntervalMs: 10_000,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
+      runtimeServer: createRuntimeServer({
         resolveKnownDeviceId(input) {
           if (input?.peripheralId === "AA:BB") {
             return "esp32-known";
@@ -259,38 +231,7 @@ describe("windows winrt gateway runtime bridge", () => {
 
           return null;
         },
-        noteDiscovery() {},
-        upsertManualScanCandidate() {},
-        noteConnecting() {
-          return {
-            before: { gatewayConnectionState: "disconnected" },
-            after: { gatewayConnectionState: "connecting" },
-          };
-        },
-        noteConnected() {
-          return {
-            before: { gatewayConnectionState: "connecting" },
-            after: {
-              gatewayConnectionState: "connected",
-              lastTelemetryAt: null,
-              lastConnectedAt: null,
-              lastDisconnectedAt: null,
-            },
-          };
-        },
-        noteDisconnected() {
-          return {
-            applied: true,
-            before: { gatewayConnectionState: "connected", lastTelemetryAt: null },
-            after: {
-              gatewayConnectionState: "disconnected",
-              lastTelemetryAt: null,
-              lastConnectedAt: null,
-              lastDisconnectedAt: null,
-            },
-          };
-        },
-      },
+      }),
       debug() {},
       sendToDesktop(message) {
         messages.push(message);
@@ -304,7 +245,7 @@ describe("windows winrt gateway runtime bridge", () => {
       localName: "GymMotion-aabb",
     });
 
-    bridge.handleNodeConnectionState({
+    await bridge.handleNodeConnectionState({
       gatewayConnectionState: "connecting",
       node: {
         peripheralId: "AA:BB",
@@ -312,7 +253,7 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     });
 
-    bridge.handleNodeConnectionState({
+    await bridge.handleNodeConnectionState({
       gatewayConnectionState: "connected",
       node: {
         peripheralId: "AA:BB",
@@ -320,7 +261,7 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     });
 
-    bridge.handleNodeConnectionState({
+    await bridge.handleNodeConnectionState({
       gatewayConnectionState: "disconnected",
       reason: "ble-disconnected",
       node: {
@@ -384,7 +325,9 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
-  it("requests history sync from the stored ack sequence for the current boot", async () => {
+  it("waits for a stable live window before requesting history sync", async () => {
+    vi.useFakeTimers();
+
     const sidecarCommands = [];
     const fetchCalls = [];
 
@@ -392,18 +335,16 @@ describe("windows winrt gateway runtime bridge", () => {
       config: {
         heartbeatMinIntervalMs: 10_000,
         desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 5_000,
       },
-      runtimeServer: {
+      runtimeServer: createRuntimeServer({
         noteTelemetry() {
           return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
+            before: { gatewayConnectionState: "disconnected" },
             after: { gatewayConnectionState: "connected" },
           });
         },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      }),
       debug() {},
       sendToDesktop() {
         return true;
@@ -413,7 +354,7 @@ describe("windows winrt gateway runtime bridge", () => {
         return Promise.resolve();
       },
       fetchImpl(url) {
-        fetchCalls.push(url);
+        fetchCalls.push(String(url));
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -422,6 +363,12 @@ describe("windows winrt gateway runtime bridge", () => {
               deviceId: "stack-001",
               lastAckedSequence: 12,
               lastAckedBootId: "boot-1",
+            },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 12,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
             },
           }),
         });
@@ -439,77 +386,25 @@ describe("windows winrt gateway runtime bridge", () => {
       hardwareId: "hw-1",
     });
 
+    await flushBackgroundWork();
+    expect(fetchCalls).toEqual([]);
+    expect(sidecarCommands).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushBackgroundWork();
+
     expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
-    expect(sidecarCommands[0]).toEqual({
-      type: "begin_history_sync",
-      device_id: "stack-001",
-      after_sequence: 12,
-      max_records: 0,
-    });
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 12,
+        max_records: 3,
+      },
+    ]);
   });
 
-  it("requests history sync from zero for a new boot", async () => {
-    const sidecarCommands = [];
-
-    const bridge = createRuntimeBridge({
-      config: {
-        heartbeatMinIntervalMs: 10_000,
-        desktopApiBaseUrl: "http://127.0.0.1:4111",
-      },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
-      debug() {},
-      sendToDesktop() {
-        return true;
-      },
-      sendSidecarCommand(command) {
-        sidecarCommands.push(command);
-        return Promise.resolve();
-      },
-      fetchImpl() {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            ok: true,
-            syncState: {
-              deviceId: "stack-001",
-              lastAckedSequence: 0,
-              lastAckedBootId: null,
-            },
-          }),
-        });
-      },
-    });
-
-    await bridge.forwardTelemetry({
-      deviceId: "stack-001",
-      state: "moving",
-      timestamp: 1,
-      delta: 8,
-      sequence: 1,
-      bootId: "boot-2",
-      firmwareVersion: "0.5.3",
-      hardwareId: "hw-1",
-    });
-
-    expect(sidecarCommands[0]).toEqual({
-      type: "begin_history_sync",
-      device_id: "stack-001",
-      after_sequence: 0,
-      max_records: 0,
-    });
-  });
-
-  it("persists a history page and acks the repository-proven sequence", async () => {
+  it("persists one history page and acks the repository-proven sequence", async () => {
     const sidecarCommands = [];
     const persistedBodies = [];
 
@@ -517,18 +412,10 @@ describe("windows winrt gateway runtime bridge", () => {
       config: {
         heartbeatMinIntervalMs: 10_000,
         desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 0,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      runtimeServer: createRuntimeServer(),
       debug() {},
       sendToDesktop() {
         return true;
@@ -548,6 +435,12 @@ describe("windows winrt gateway runtime bridge", () => {
                 lastAckedSequence: 4,
                 lastAckedBootId: "boot-1",
               },
+              historySyncState: {
+                deviceId: "stack-001",
+                lastAckedHistorySequence: 4,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
+              },
             }),
           });
         }
@@ -561,6 +454,12 @@ describe("windows winrt gateway runtime bridge", () => {
               deviceId: "stack-001",
               lastAckedSequence: 6,
               lastAckedBootId: "boot-1",
+            },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 6,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
             },
           }),
         });
@@ -577,6 +476,7 @@ describe("windows winrt gateway runtime bridge", () => {
       firmwareVersion: "0.5.3",
       hardwareId: "hw-1",
     });
+    await flushBackgroundWork();
 
     bridge.handleHistoryRecord({
       device_id: "stack-001",
@@ -652,7 +552,7 @@ describe("windows winrt gateway runtime bridge", () => {
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 4,
-        max_records: 0,
+        max_records: 3,
       },
       {
         type: "acknowledge_history_sync",
@@ -662,25 +562,19 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
-  it("requests the next history page from the repository-proven ack sequence", async () => {
+  it("requests the next page only after durable persist and ack", async () => {
+    vi.useFakeTimers();
+
     const sidecarCommands = [];
 
     const bridge = createRuntimeBridge({
       config: {
         heartbeatMinIntervalMs: 10_000,
         desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 1_000,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      runtimeServer: createRuntimeServer(),
       debug() {},
       sendToDesktop() {
         return true;
@@ -700,6 +594,12 @@ describe("windows winrt gateway runtime bridge", () => {
                 lastAckedSequence: 4,
                 lastAckedBootId: "boot-1",
               },
+              historySyncState: {
+                deviceId: "stack-001",
+                lastAckedHistorySequence: 4,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
+              },
             }),
           });
         }
@@ -712,6 +612,12 @@ describe("windows winrt gateway runtime bridge", () => {
               deviceId: "stack-001",
               lastAckedSequence: 6,
               lastAckedBootId: "boot-1",
+            },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 6,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
             },
           }),
         });
@@ -728,26 +634,15 @@ describe("windows winrt gateway runtime bridge", () => {
       firmwareVersion: "0.5.3",
       hardwareId: "hw-1",
     });
+    await flushBackgroundWork();
 
     bridge.handleHistoryRecord({
       device_id: "stack-001",
-      record: {
-        kind: "motion",
-        sequence: 5,
-        state: "moving",
-        delta: 8,
-        timestamp: 1,
-      },
+      record: { kind: "motion", sequence: 5, state: "moving", delta: 8, timestamp: 1 },
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
-      record: {
-        kind: "motion",
-        sequence: 8,
-        state: "still",
-        delta: 0,
-        timestamp: 2,
-      },
+      record: { kind: "motion", sequence: 8, state: "still", delta: 0, timestamp: 2 },
     });
 
     await bridge.handleHistorySyncComplete({
@@ -766,7 +661,24 @@ describe("windows winrt gateway runtime bridge", () => {
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 4,
-        max_records: 0,
+        max_records: 3,
+      },
+      {
+        type: "acknowledge_history_sync",
+        device_id: "stack-001",
+        sequence: 6,
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushBackgroundWork();
+
+    expect(sidecarCommands).toEqual([
+      {
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 4,
+        max_records: 3,
       },
       {
         type: "acknowledge_history_sync",
@@ -777,31 +689,27 @@ describe("windows winrt gateway runtime bridge", () => {
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 6,
-        max_records: 0,
+        max_records: 3,
       },
     ]);
   });
 
-  it("does not persist or ack an empty history sync completion", async () => {
+  it("persists a completed page before processing a same-device disconnect that arrives right after it", async () => {
+    const persistedBodies = [];
     const sidecarCommands = [];
-    const fetchCalls = [];
 
     const bridge = createRuntimeBridge({
       config: {
         heartbeatMinIntervalMs: 10_000,
         desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 0,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
+      runtimeServer: createRuntimeServer({
         resolveKnownDeviceId() {
-          return null;
+          return "stack-001";
         },
-      },
+      }),
       debug() {},
       sendToDesktop() {
         return true;
@@ -810,16 +718,42 @@ describe("windows winrt gateway runtime bridge", () => {
         sidecarCommands.push(command);
         return Promise.resolve();
       },
-      fetchImpl(url) {
-        fetchCalls.push(String(url));
+      fetchImpl(url, init) {
+        if (String(url).includes("/api/device-sync/")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              ok: true,
+              syncState: {
+                deviceId: "stack-001",
+                lastAckedSequence: 0,
+                lastAckedBootId: null,
+              },
+              historySyncState: {
+                deviceId: "stack-001",
+                lastAckedHistorySequence: 0,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
+              },
+            }),
+          });
+        }
+
+        persistedBodies.push(JSON.parse(init.body));
         return Promise.resolve({
           ok: true,
           json: async () => ({
             ok: true,
             syncState: {
               deviceId: "stack-001",
-              lastAckedSequence: 0,
-              lastAckedBootId: null,
+              lastAckedSequence: 2,
+              lastAckedBootId: "boot-1",
+            },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 2,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
             },
           }),
         });
@@ -836,48 +770,78 @@ describe("windows winrt gateway runtime bridge", () => {
       firmwareVersion: "0.5.3",
       hardwareId: "hw-1",
     });
+    await flushBackgroundWork();
 
-    await bridge.handleHistorySyncComplete({
+    const recordPromise = bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 },
+    });
+    const secondRecordPromise = bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      record: { kind: "motion", sequence: 2, state: "still", delta: 0, timestamp: 2 },
+    });
+    const completePromise = bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
-        latest_sequence: 0,
-        high_water_sequence: 0,
-        sent_count: 0,
+        latest_sequence: 2,
+        high_water_sequence: 2,
+        sent_count: 2,
         has_more: false,
         overflowed: false,
       },
     });
+    const disconnectPromise = bridge.handleNodeConnectionState({
+      gatewayConnectionState: "disconnected",
+      reason: "ble-disconnected",
+      node: {
+        knownDeviceId: "stack-001",
+        peripheralId: "ble-001",
+        localName: "GymMotion-f4e9d4",
+      },
+    });
 
-    expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
+    await Promise.all([
+      recordPromise,
+      secondRecordPromise,
+      completePromise,
+      disconnectPromise,
+    ]);
+
+    expect(persistedBodies).toEqual([
+      {
+        deviceId: "stack-001",
+        records: [
+          { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 },
+          { kind: "motion", sequence: 2, state: "still", delta: 0, timestamp: 2 },
+        ],
+        ackSequence: 2,
+      },
+    ]);
     expect(sidecarCommands).toEqual([
       {
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 0,
-        max_records: 0,
+        max_records: 3,
+      },
+      {
+        type: "acknowledge_history_sync",
+        device_id: "stack-001",
+        sequence: 2,
       },
     ]);
   });
 
-  it("does not ack history when persistence fails", async () => {
+  it("pauses backfill after persistence failure without acking", async () => {
     const sidecarCommands = [];
-
     const bridge = createRuntimeBridge({
       config: {
         heartbeatMinIntervalMs: 10_000,
         desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 0,
       },
-      runtimeServer: {
-        noteTelemetry() {
-          return Promise.resolve({
-            before: { gatewayConnectionState: "connected" },
-            after: { gatewayConnectionState: "connected" },
-          });
-        },
-        resolveKnownDeviceId() {
-          return null;
-        },
-      },
+      runtimeServer: createRuntimeServer(),
       debug() {},
       sendToDesktop() {
         return true;
@@ -892,10 +856,12 @@ describe("windows winrt gateway runtime bridge", () => {
             ok: true,
             json: async () => ({
               ok: true,
-              syncState: {
+              syncState: { deviceId: "stack-001", lastAckedSequence: 0, lastAckedBootId: null },
+              historySyncState: {
                 deviceId: "stack-001",
-                lastAckedSequence: 0,
-                lastAckedBootId: null,
+                lastAckedHistorySequence: 0,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
               },
             }),
           });
@@ -907,29 +873,9 @@ describe("windows winrt gateway runtime bridge", () => {
         });
       },
     });
-
-    await bridge.forwardTelemetry({
-      deviceId: "stack-001",
-      state: "moving",
-      timestamp: 1,
-      delta: 8,
-      sequence: 1,
-      bootId: "boot-1",
-      firmwareVersion: "0.5.3",
-      hardwareId: "hw-1",
-    });
-
-    bridge.handleHistoryRecord({
-      device_id: "stack-001",
-      record: {
-        kind: "motion",
-        sequence: 1,
-        state: "moving",
-        delta: 8,
-        timestamp: 1,
-      },
-    });
-
+    await bridge.forwardTelemetry({ deviceId: "stack-001", state: "moving", timestamp: 1, delta: 8, sequence: 1, bootId: "boot-1", firmwareVersion: "0.5.3", hardwareId: "hw-1" });
+    await flushBackgroundWork();
+    bridge.handleHistoryRecord({ device_id: "stack-001", record: { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 } });
     await bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
@@ -940,14 +886,69 @@ describe("windows winrt gateway runtime bridge", () => {
         overflowed: false,
       },
     });
-
     expect(sidecarCommands).toEqual([
-      {
-        type: "begin_history_sync",
-        device_id: "stack-001",
-        after_sequence: 0,
-        max_records: 0,
-      },
+      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 0, max_records: 3 },
     ]);
   });
+
+  it("drops an in-flight buffered page on disconnect and resumes from stored ack on reconnect", async () => {
+    const sidecarCommands = [];
+    const fetchCalls = [];
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 0,
+      },
+      runtimeServer: createRuntimeServer({
+        resolveKnownDeviceId() {
+          return "stack-001";
+        },
+      }),
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        fetchCalls.push(String(url));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: { deviceId: "stack-001", lastAckedSequence: 6, lastAckedBootId: "boot-1" },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 6,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
+            },
+          }),
+        });
+      },
+    });
+    await bridge.forwardTelemetry({ deviceId: "stack-001", state: "moving", timestamp: 1, delta: 8, sequence: 7, bootId: "boot-1", firmwareVersion: "0.5.3", hardwareId: "hw-1" });
+    await flushBackgroundWork();
+    bridge.handleHistoryRecord({ device_id: "stack-001", record: { kind: "motion", sequence: 7, state: "moving", delta: 8, timestamp: 1 } });
+    bridge.handleNodeConnectionState({
+      gatewayConnectionState: "disconnected",
+      reason: "ble-disconnected",
+      node: { peripheralId: "AA:BB", knownDeviceId: "stack-001" },
+    });
+    await bridge.forwardTelemetry({ deviceId: "stack-001", state: "still", timestamp: 2, delta: 0, sequence: 8, bootId: "boot-1", firmwareVersion: "0.5.3", hardwareId: "hw-1" });
+    await flushBackgroundWork();
+    expect(fetchCalls).toEqual([
+      "http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1",
+      "http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1",
+    ]);
+    expect(sidecarCommands).toEqual([
+      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 6, max_records: 3 },
+      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 6, max_records: 3 },
+    ]);
+  });
+
 });

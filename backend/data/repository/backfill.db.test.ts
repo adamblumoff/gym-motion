@@ -1,6 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getDeviceSyncState, recordBackfillBatch } from "./backfill";
+import {
+  getDeviceSyncState,
+  getFirmwareHistorySyncState,
+  recordBackfillBatch,
+} from "./backfill";
 import { listDeviceMotionEventsByReceivedAt } from "./motion-events";
 import { recordMotionEvent } from "./motion-events";
 import { listMotionRollupBuckets } from "./rollups";
@@ -181,6 +185,56 @@ describeDb("backfill repository", () => {
       deviceId: "stack-001",
       lastAckedSequence: 1,
       lastAckedBootId: "boot-2",
+    });
+  });
+
+  it("advances the global firmware history cursor across mixed-boot pages", async () => {
+    const result = await recordBackfillBatch({
+      deviceId: "stack-001",
+      ackSequence: 767,
+      records: [
+        {
+          kind: "node-log",
+          sequence: 765,
+          level: "info",
+          code: "device.boot",
+          message: "BLE node booted.",
+          timestamp: 1,
+          bootId: "boot-a",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "motion",
+          sequence: 766,
+          state: "still",
+          delta: 0,
+          timestamp: 2,
+          bootId: "boot-a",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+        {
+          kind: "node-log",
+          sequence: 767,
+          level: "info",
+          code: "runtime.app_session.online",
+          message: "Windows app session lease is active.",
+          timestamp: 3,
+          bootId: "boot-b",
+          firmwareVersion: "0.5.3",
+          hardwareId: "hw-1",
+        },
+      ],
+    });
+
+    expect(result.historySyncState).toMatchObject({
+      deviceId: "stack-001",
+      lastAckedHistorySequence: 767,
+    });
+    expect(await getFirmwareHistorySyncState("stack-001")).toMatchObject({
+      deviceId: "stack-001",
+      lastAckedHistorySequence: 767,
     });
   });
 

@@ -166,6 +166,12 @@ describe("createDataIngestController", () => {
             lastSyncCompletedAt: null,
             lastOverflowDetectedAt: null,
           },
+          historySyncState: {
+            deviceId: payload.deviceId,
+            lastAckedHistorySequence: payload.ackSequence,
+            lastHistorySyncCompletedAt: null,
+            lastHistoryOverflowDetectedAt: null,
+          },
         };
       },
     });
@@ -236,6 +242,12 @@ describe("createDataIngestController", () => {
                 lastAckedBootId: payload.bootId ?? null,
                 lastSyncCompletedAt: null,
                 lastOverflowDetectedAt: null,
+              },
+              historySyncState: {
+                deviceId: payload.deviceId,
+                lastAckedHistorySequence: payload.ackSequence,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
               },
             });
         });

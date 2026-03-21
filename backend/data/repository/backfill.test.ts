@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { computeProvenBackfillAckSequence } from "./backfill";
+import {
+  computeProvenBackfillAckSequence,
+  computeProvenFirmwareHistoryAckSequence,
+  durableBackfillRecordKey,
+} from "./backfill";
 
 describe("computeProvenBackfillAckSequence", () => {
   it("advances to the requested ack when the batch is fully contiguous", () => {
@@ -121,5 +125,89 @@ describe("computeProvenBackfillAckSequence", () => {
         durableLogSequences: [3],
       }),
     ).toBe(0);
+  });
+});
+
+describe("computeProvenFirmwareHistoryAckSequence", () => {
+  it("advances to the latest record sequence when every record in the page is durable", () => {
+    expect(
+      computeProvenFirmwareHistoryAckSequence({
+        previousAckSequence: 0,
+        records: [
+          {
+            kind: "node-log",
+            sequence: 765,
+            level: "info",
+            code: "device.boot",
+            message: "BLE node booted.",
+            bootId: "boot-a",
+          },
+          {
+            kind: "motion",
+            sequence: 766,
+            state: "still",
+            timestamp: 1,
+            bootId: "boot-a",
+          },
+          {
+            kind: "node-log",
+            sequence: 767,
+            level: "info",
+            code: "runtime.app_session.online",
+            message: "Windows app session lease is active.",
+            bootId: "boot-a",
+          },
+        ],
+        durableRecordKeys: [
+          durableBackfillRecordKey({
+            kind: "node-log",
+            bootId: "boot-a",
+            sequence: 765,
+          }),
+          durableBackfillRecordKey({
+            kind: "motion",
+            bootId: "boot-a",
+            sequence: 766,
+          }),
+          durableBackfillRecordKey({
+            kind: "node-log",
+            bootId: "boot-a",
+            sequence: 767,
+          }),
+        ],
+      }),
+    ).toBe(767);
+  });
+
+  it("stops at the first non-durable record in page order", () => {
+    expect(
+      computeProvenFirmwareHistoryAckSequence({
+        previousAckSequence: 766,
+        records: [
+          {
+            kind: "node-log",
+            sequence: 767,
+            level: "info",
+            code: "runtime.app_session.online",
+            message: "Windows app session lease is active.",
+            bootId: "boot-a",
+          },
+          {
+            kind: "motion",
+            sequence: 768,
+            state: "moving",
+            timestamp: 2,
+            bootId: "boot-a",
+          },
+        ],
+        durableRecordKeys: [
+          durableBackfillRecordKey({
+            kind: "node-log",
+            bootId: "boot-a",
+            sequence: 767,
+          }),
+        ],
+      }),
+    ).toBe(767);
   });
 });
