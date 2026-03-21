@@ -307,10 +307,18 @@ export type DeviceSyncStateSummary = {
   lastOverflowDetectedAt: string | null;
 };
 
+export type FirmwareHistorySyncStateSummary = {
+  deviceId: string;
+  lastAckedHistorySequence: number;
+  lastHistorySyncCompletedAt: string | null;
+  lastHistoryOverflowDetectedAt: string | null;
+};
+
 export type BackfillBatchResult = {
   insertedEvents: MotionEventSummary[];
   insertedLogs: DeviceLogSummary[];
   syncState: DeviceSyncStateSummary;
+  historySyncState: FirmwareHistorySyncStateSummary;
 };
 
 export type GetDeviceAnalyticsInput = {

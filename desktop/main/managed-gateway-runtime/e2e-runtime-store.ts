@@ -7,6 +7,7 @@ import type {
   DeviceLogSummary,
   DeviceSummary,
   DeviceSyncStateSummary,
+  FirmwareHistorySyncStateSummary,
   HeartbeatPayload,
   IngestPayload,
   MotionEventSummary,
@@ -105,6 +106,7 @@ export function createE2eRuntimeStore() {
   const motionEvents = new Map<string, MotionEventSummary[]>();
   const deviceLogs = new Map<string, DeviceLogSummary[]>();
   const syncStates = new Map<string, DeviceSyncStateSummary>();
+  const historySyncStates = new Map<string, FirmwareHistorySyncStateSummary>();
   let nextMotionEventId = 1;
   let nextDeviceLogId = 1;
 
@@ -269,12 +271,20 @@ export function createE2eRuntimeStore() {
       lastSyncCompletedAt: isoNow(),
       lastOverflowDetectedAt: input.overflowDetectedAt ?? null,
     };
+    const historySyncState: FirmwareHistorySyncStateSummary = {
+      deviceId: input.deviceId,
+      lastAckedHistorySequence: input.ackSequence,
+      lastHistorySyncCompletedAt: isoNow(),
+      lastHistoryOverflowDetectedAt: input.overflowDetectedAt ?? null,
+    };
     syncStates.set(input.deviceId, clone(syncState));
+    historySyncStates.set(input.deviceId, clone(historySyncState));
 
     return {
       insertedEvents,
       insertedLogs,
       syncState,
+      historySyncState,
     };
   }
 
@@ -491,6 +501,17 @@ export function createE2eRuntimeStore() {
           lastAckedBootId: null,
           lastSyncCompletedAt: null,
           lastOverflowDetectedAt: null,
+        },
+      );
+    },
+
+    async getFirmwareHistorySyncState(deviceId: string) {
+      return clone(
+        historySyncStates.get(deviceId) ?? {
+          deviceId,
+          lastAckedHistorySequence: 0,
+          lastHistorySyncCompletedAt: null,
+          lastHistoryOverflowDetectedAt: null,
         },
       );
     },

@@ -3,6 +3,7 @@ import http from "node:http";
 import {
   createOrUpdateDeviceRegistration,
   formatZodError,
+  getFirmwareHistorySyncState,
   getDeviceSyncState,
   listDeviceActivity,
   listDeviceLogs,
@@ -161,6 +162,7 @@ export async function handleDeviceRoutes(args: {
     json(response, 200, {
       ok: true,
       syncState: await getDeviceSyncState(deviceId, bootId),
+      historySyncState: await getFirmwareHistorySyncState(deviceId),
     });
     return true;
   }

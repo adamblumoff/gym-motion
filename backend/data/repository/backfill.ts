@@ -3,15 +3,18 @@ import type {
   BackfillBatchInput,
   BackfillBatchResult,
   DeviceSyncStateSummary,
+  FirmwareHistorySyncStateSummary,
 } from "../motion";
 import {
   DEVICE_SELECT_COLUMNS,
   type DeviceLogRow,
   type DeviceRow,
   type DeviceSyncStateRow,
+  type FirmwareHistorySyncStateRow,
   type MotionEventRow,
   mapDeviceLogRow,
   mapDeviceSyncStateRow,
+  mapFirmwareHistorySyncStateRow,
   mapMotionEventRow,
 } from "./shared";
 import { refreshMotionRollupsForDeviceRange } from "./rollups";
@@ -162,6 +165,67 @@ export async function getDeviceSyncState(
   return mapDeviceSyncStateRow(result.rows[0]);
 }
 
+export async function getFirmwareHistorySyncState(
+  deviceId: string,
+): Promise<FirmwareHistorySyncStateSummary> {
+  const result = await getDb().query<FirmwareHistorySyncStateRow>(
+    `select
+       device_id,
+       last_acked_history_sequence,
+       last_history_sync_completed_at,
+       last_history_overflow_detected_at
+     from firmware_history_sync_state
+     where device_id = $1
+     limit 1`,
+    [deviceId],
+  );
+
+  if (!result.rows[0]) {
+    return {
+      deviceId,
+      lastAckedHistorySequence: 0,
+      lastHistorySyncCompletedAt: null,
+      lastHistoryOverflowDetectedAt: null,
+    };
+  }
+
+  return mapFirmwareHistorySyncStateRow(result.rows[0]);
+}
+
+export function durableBackfillRecordKey(args: {
+  kind: BackfillBatchInput["records"][number]["kind"];
+  bootId: string | null | undefined;
+  sequence: number;
+}) {
+  return `${args.kind}:${normalizeBootId(args.bootId)}:${args.sequence}`;
+}
+
+export function computeProvenFirmwareHistoryAckSequence(args: {
+  previousAckSequence: number;
+  records: BackfillBatchInput["records"];
+  durableRecordKeys: Iterable<string>;
+  defaultBootId?: string | null;
+}) {
+  const durableRecordKeys = new Set(args.durableRecordKeys);
+  let provenAckSequence = args.previousAckSequence;
+
+  for (const record of args.records) {
+    const durableKey = durableBackfillRecordKey({
+      kind: record.kind,
+      bootId: record.bootId ?? args.defaultBootId ?? null,
+      sequence: record.sequence,
+    });
+
+    if (!durableRecordKeys.has(durableKey)) {
+      break;
+    }
+
+    provenAckSequence = Math.max(provenAckSequence, record.sequence);
+  }
+
+  return provenAckSequence;
+}
+
 export async function recordBackfillBatch(
   input: BackfillBatchInput,
 ): Promise<BackfillBatchResult> {
@@ -184,6 +248,18 @@ export async function recordBackfillBatch(
     );
     const previousAckSequence = existingBootSyncStateResult.rows[0]
       ? Number(existingBootSyncStateResult.rows[0].last_acked_sequence)
+      : 0;
+    const existingFirmwareHistorySyncStateResult = await client.query<{
+      last_acked_history_sequence: string | number;
+    }>(
+      `select last_acked_history_sequence
+       from firmware_history_sync_state
+       where device_id = $1
+       limit 1`,
+      [input.deviceId],
+    );
+    const previousHistoryAckSequence = existingFirmwareHistorySyncStateResult.rows[0]
+      ? Number(existingFirmwareHistorySyncStateResult.rows[0].last_acked_history_sequence)
       : 0;
 
     const maxTimestamp = input.records.reduce(
@@ -489,6 +565,57 @@ export async function recordBackfillBatch(
       durableMotionSequences: durableMotionSequenceRows.rows.map((row) => Number(row.sequence)),
       durableLogSequences: durableLogSequenceRows.rows.map((row) => Number(row.sequence)),
     });
+    const durableMotionRecords =
+      motionRecords.length > 0
+        ? await client.query<{ sequence: string | number; boot_id: string | null }>(
+            `select distinct records.sequence, records.boot_id
+             from jsonb_to_recordset($2::jsonb) as records(
+               sequence bigint,
+               boot_id text
+             )
+             join motion_events events
+               on events.device_id = $1
+              and events.sequence = records.sequence
+              and coalesce(events.boot_id, '') = coalesce(records.boot_id, '')`,
+            [input.deviceId, JSON.stringify(motionRecords)],
+          )
+        : { rows: [] };
+    const durableLogRecords =
+      logRecords.length > 0
+        ? await client.query<{ sequence: string | number; boot_id: string | null }>(
+            `select distinct records.sequence, records.boot_id
+             from jsonb_to_recordset($2::jsonb) as records(
+               sequence bigint,
+               boot_id text
+             )
+             join device_logs logs
+               on logs.device_id = $1
+              and logs.sequence = records.sequence
+              and coalesce(logs.boot_id, '') = coalesce(records.boot_id, '')`,
+            [input.deviceId, JSON.stringify(logRecords)],
+          )
+        : { rows: [] };
+    const provenHistoryAckSequence = computeProvenFirmwareHistoryAckSequence({
+      previousAckSequence: previousHistoryAckSequence,
+      records: input.records,
+      defaultBootId: activeBootId ?? null,
+      durableRecordKeys: [
+        ...durableMotionRecords.rows.map((row) =>
+          durableBackfillRecordKey({
+            kind: "motion",
+            bootId: row.boot_id,
+            sequence: Number(row.sequence),
+          }),
+        ),
+        ...durableLogRecords.rows.map((row) =>
+          durableBackfillRecordKey({
+            kind: "node-log",
+            bootId: row.boot_id,
+            sequence: Number(row.sequence),
+          }),
+        ),
+      ],
+    });
 
     const syncResult = await client.query<DeviceSyncStateRow>(
       `insert into device_sync_state (
@@ -522,6 +649,30 @@ export async function recordBackfillBatch(
         input.overflowDetectedAt ?? null,
       ],
     );
+    const historySyncResult = await client.query<FirmwareHistorySyncStateRow>(
+      `insert into firmware_history_sync_state (
+         device_id,
+         last_acked_history_sequence,
+         last_history_sync_completed_at,
+         last_history_overflow_detected_at,
+         updated_at
+       )
+       values ($1, $2, now(), $3, now())
+       on conflict (device_id) do update
+       set last_acked_history_sequence = excluded.last_acked_history_sequence,
+           last_history_sync_completed_at = now(),
+           last_history_overflow_detected_at = coalesce(
+             excluded.last_history_overflow_detected_at,
+             firmware_history_sync_state.last_history_overflow_detected_at
+           ),
+           updated_at = now()
+       returning
+         device_id,
+         last_acked_history_sequence,
+         last_history_sync_completed_at,
+         last_history_overflow_detected_at`,
+      [input.deviceId, provenHistoryAckSequence, input.overflowDetectedAt ?? null],
+    );
 
     await client.query("COMMIT");
 
@@ -529,6 +680,7 @@ export async function recordBackfillBatch(
       insertedEvents,
       insertedLogs,
       syncState: mapDeviceSyncStateRow(syncResult.rows[0]),
+      historySyncState: mapFirmwareHistorySyncStateRow(historySyncResult.rows[0]),
     };
   } catch (error) {
     await client.query("ROLLBACK");

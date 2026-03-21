@@ -4,6 +4,7 @@ import type {
   DeviceLogSummary,
   DeviceSummary,
   DeviceSyncStateSummary,
+  FirmwareHistorySyncStateSummary,
   FirmwareReleaseSummary,
   MotionEventSummary,
   ProvisioningState,
@@ -65,6 +66,13 @@ export type DeviceSyncStateRow = {
   last_acked_boot_id: string | null;
   last_sync_completed_at: Date | null;
   last_overflow_detected_at: Date | null;
+};
+
+export type FirmwareHistorySyncStateRow = {
+  device_id: string;
+  last_acked_history_sequence: string | number;
+  last_history_sync_completed_at: Date | null;
+  last_history_overflow_detected_at: Date | null;
 };
 
 export type FirmwareReleaseRow = {
@@ -176,6 +184,18 @@ export function mapDeviceSyncStateRow(row: DeviceSyncStateRow): DeviceSyncStateS
     lastAckedBootId: row.last_acked_boot_id,
     lastSyncCompletedAt: row.last_sync_completed_at?.toISOString() ?? null,
     lastOverflowDetectedAt: row.last_overflow_detected_at?.toISOString() ?? null,
+  };
+}
+
+export function mapFirmwareHistorySyncStateRow(
+  row: FirmwareHistorySyncStateRow,
+): FirmwareHistorySyncStateSummary {
+  return {
+    deviceId: row.device_id,
+    lastAckedHistorySequence: toSafeNumber(row.last_acked_history_sequence),
+    lastHistorySyncCompletedAt: row.last_history_sync_completed_at?.toISOString() ?? null,
+    lastHistoryOverflowDetectedAt:
+      row.last_history_overflow_detected_at?.toISOString() ?? null,
   };
 }
 

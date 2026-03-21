@@ -203,7 +203,8 @@ export function createDataIngestController(deps: DataIngestDeps) {
           ackSequence: message.payload.ackSequence,
           insertedEventCount: payload.insertedEvents.length,
           insertedLogCount: payload.insertedLogs.length,
-          provenAckSequence: payload.syncState.lastAckedSequence,
+          provenAckSequence:
+            payload.historySyncState?.lastAckedHistorySequence ?? payload.syncState.lastAckedSequence,
         });
         deps.applyDataEvent({
           type: "backfill-recorded",
