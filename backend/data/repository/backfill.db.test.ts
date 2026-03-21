@@ -7,10 +7,37 @@ import {
 } from "./backfill";
 import { listDeviceMotionEventsByReceivedAt } from "./motion-events";
 import { recordMotionEvent } from "./motion-events";
-import { listMotionRollupBuckets } from "./rollups";
+import { listMotionRollupBuckets, rebuildMotionRollups } from "./rollups";
 import { closeDatabase, hasDatabaseTestEnv, resetDatabaseSchema } from "../test-helpers";
+import { getDb } from "../db";
 
 const describeDb = hasDatabaseTestEnv() ? describe : describe.skip;
+
+async function rewriteBackfillReceivedAt(deviceId: string, receivedAtBySequence: Record<number, string>) {
+  const client = await getDb().connect();
+
+  try {
+    const whenClauses = Object.entries(receivedAtBySequence)
+      .map(([sequence, iso]) => `when ${sequence} then '${iso}'::timestamptz`)
+      .join("\n");
+    const sequences = Object.keys(receivedAtBySequence).map(Number);
+
+    await client.query(
+      `update motion_events
+       set received_at = case sequence
+         ${whenClauses}
+       end
+       where device_id = $1
+         and sequence = any($2::bigint[])`,
+      [deviceId, sequences],
+    );
+    await client.query("delete from motion_rollups_hourly where device_id = $1", [deviceId]);
+    await client.query("delete from motion_rollups_daily where device_id = $1", [deviceId]);
+    await rebuildMotionRollups(client, deviceId);
+  } finally {
+    client.release();
+  }
+}
 
 describeDb("backfill repository", () => {
   beforeEach(async () => {
@@ -92,16 +119,21 @@ describeDb("backfill repository", () => {
       hardwareId: "hw-1",
     });
 
+    await rewriteBackfillReceivedAt("stack-001", {
+      1: "2026-03-18T00:01:40.000Z",
+      3: "2026-03-18T00:05:00.000Z",
+    });
+
     expect(
       await listMotionRollupBuckets({
         deviceId: "stack-001",
         window: "24h",
-        startBucket: 0,
-        endBucketExclusive: 60 * 60 * 1000,
+        startBucket: Date.parse("2026-03-18T00:00:00.000Z"),
+        endBucketExclusive: Date.parse("2026-03-18T01:00:00.000Z"),
       }),
     ).toEqual([
       expect.objectContaining({
-        bucketStart: 0,
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
         movementCount: 1,
         movingSeconds: 200,
       }),
@@ -125,16 +157,22 @@ describeDb("backfill repository", () => {
       ],
     });
 
+    await rewriteBackfillReceivedAt("stack-001", {
+      1: "2026-03-18T00:01:40.000Z",
+      2: "2026-03-18T00:03:20.000Z",
+      3: "2026-03-18T00:05:00.000Z",
+    });
+
     expect(
       await listMotionRollupBuckets({
         deviceId: "stack-001",
         window: "24h",
-        startBucket: 0,
-        endBucketExclusive: 60 * 60 * 1000,
+        startBucket: Date.parse("2026-03-18T00:00:00.000Z"),
+        endBucketExclusive: Date.parse("2026-03-18T01:00:00.000Z"),
       }),
     ).toEqual([
       expect.objectContaining({
-        bucketStart: 0,
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
         movementCount: 1,
         movingSeconds: 100,
       }),

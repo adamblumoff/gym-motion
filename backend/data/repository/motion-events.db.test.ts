@@ -11,6 +11,35 @@ import { closeDatabase, hasDatabaseTestEnv, resetDatabaseSchema } from "../test-
 import { getDb } from "../db";
 
 const describeDb = hasDatabaseTestEnv() ? describe : describe.skip;
+async function rewriteReceivedAtAndRebuildRollups(
+  deviceId: string,
+  receivedAtBySequence: Record<number, string>,
+) {
+  const db = getDb();
+  const client = await db.connect();
+
+  try {
+    const whenClauses = Object.entries(receivedAtBySequence)
+      .map(([sequence, iso]) => `when ${sequence} then '${iso}'::timestamptz`)
+      .join("\n");
+    const sequences = Object.keys(receivedAtBySequence).map(Number);
+
+    await client.query(
+      `update motion_events
+       set received_at = case sequence
+         ${whenClauses}
+       end
+       where device_id = $1
+         and sequence = any($2::bigint[])`,
+      [deviceId, sequences],
+    );
+    await client.query("delete from motion_rollups_hourly where device_id = $1", [deviceId]);
+    await client.query("delete from motion_rollups_daily where device_id = $1", [deviceId]);
+    await rebuildMotionRollups(client, deviceId);
+  } finally {
+    client.release();
+  }
+}
 
 describeDb("motion event repository", () => {
   beforeEach(async () => {
@@ -116,16 +145,21 @@ describeDb("motion event repository", () => {
       hardwareId: "hw-1",
     });
 
+    await rewriteReceivedAtAndRebuildRollups("stack-001", {
+      4: "2026-03-18T00:01:40.000Z",
+      5: "2026-03-18T00:01:50.000Z",
+    });
+
     const buckets = await listMotionRollupBuckets({
       deviceId: "stack-001",
       window: "24h",
-      startBucket: 0,
-      endBucketExclusive: 60 * 60 * 1000,
+      startBucket: Date.parse("2026-03-18T00:00:00.000Z"),
+      endBucketExclusive: Date.parse("2026-03-18T01:00:00.000Z"),
     });
 
     expect(buckets).toEqual([
       expect.objectContaining({
-        bucketStart: 0,
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
         movementCount: 1,
         movingSeconds: 10,
       }),
@@ -154,21 +188,26 @@ describeDb("motion event repository", () => {
       hardwareId: "hw-1",
     });
 
+    await rewriteReceivedAtAndRebuildRollups("stack-001", {
+      1: "2026-03-18T00:55:00.000Z",
+      2: "2026-03-18T01:05:00.000Z",
+    });
+
     const buckets = await listMotionRollupBuckets({
       deviceId: "stack-001",
       window: "24h",
-      startBucket: 0,
-      endBucketExclusive: 2 * 60 * 60 * 1000,
+      startBucket: Date.parse("2026-03-18T00:00:00.000Z"),
+      endBucketExclusive: Date.parse("2026-03-18T02:00:00.000Z"),
     });
 
     expect(buckets).toEqual([
       expect.objectContaining({
-        bucketStart: 0,
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
         movementCount: 1,
         movingSeconds: 5 * 60,
       }),
       expect.objectContaining({
-        bucketStart: 60 * 60 * 1000,
+        bucketStart: Date.parse("2026-03-18T01:00:00.000Z"),
         movementCount: 0,
         movingSeconds: 5 * 60,
       }),
@@ -246,27 +285,21 @@ describeDb("motion event repository", () => {
       hardwareId: "hw-1",
     });
 
-    const db = getDb();
-    const client = await db.connect();
-
-    try {
-      await client.query("delete from motion_rollups_hourly where device_id = $1", ["stack-001"]);
-      await client.query("delete from motion_rollups_daily where device_id = $1", ["stack-001"]);
-      await rebuildMotionRollups(client, "stack-001");
-    } finally {
-      client.release();
-    }
+    await rewriteReceivedAtAndRebuildRollups("stack-001", {
+      1: "2026-03-18T00:01:40.000Z",
+      2: "2026-03-18T00:02:10.000Z",
+    });
 
     const buckets = await listMotionRollupBuckets({
       deviceId: "stack-001",
       window: "24h",
-      startBucket: 0,
-      endBucketExclusive: 60 * 60 * 1000,
+      startBucket: Date.parse("2026-03-18T00:00:00.000Z"),
+      endBucketExclusive: Date.parse("2026-03-18T01:00:00.000Z"),
     });
 
     expect(buckets).toEqual([
       expect.objectContaining({
-        bucketStart: 0,
+        bucketStart: Date.parse("2026-03-18T00:00:00.000Z"),
         movementCount: 1,
         movingSeconds: 30,
       }),
@@ -295,25 +328,10 @@ describeDb("motion event repository", () => {
       hardwareId: "hw-1",
     });
 
-    const db = getDb();
-    const client = await db.connect();
-
-    try {
-      await client.query(
-        `update motion_events
-         set received_at = case sequence
-           when 1 then '2026-03-18T23:59:50.000Z'::timestamptz
-           when 2 then '2026-03-19T00:00:20.000Z'::timestamptz
-         end
-         where device_id = $1`,
-        ["stack-001"],
-      );
-      await client.query("delete from motion_rollups_hourly where device_id = $1", ["stack-001"]);
-      await client.query("delete from motion_rollups_daily where device_id = $1", ["stack-001"]);
-      await rebuildMotionRollups(client, "stack-001");
-    } finally {
-      client.release();
-    }
+    await rewriteReceivedAtAndRebuildRollups("stack-001", {
+      1: "2026-03-18T23:59:50.000Z",
+      2: "2026-03-19T00:00:20.000Z",
+    });
 
     const dayStart = Date.parse("2026-03-18T00:00:00.000Z");
     const buckets = await listMotionRollupBuckets({
