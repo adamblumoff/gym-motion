@@ -442,14 +442,24 @@ export function createRuntimeBridge({
 
     const records = state.records.splice(0);
 
-    if (records.length !== (payload.sent_count ?? 0)) {
-      pauseBackfill(context, state, "history sync record count mismatch", {
+    const expectedRecordCount = payload.sent_count ?? 0;
+    if (records.length < expectedRecordCount) {
+      pauseBackfill(context, state, "history sync record count underflow", {
         deviceId,
         bootId: state.bootId,
-        expectedRecordCount: payload.sent_count ?? 0,
+        expectedRecordCount,
         actualRecordCount: records.length,
       });
       return;
+    }
+
+    if (records.length > expectedRecordCount) {
+      logBackfill("history sync recovered additional records from malformed payload", {
+        deviceId,
+        bootId: state.bootId,
+        expectedRecordCount,
+        actualRecordCount: records.length,
+      });
     }
 
     setBackfillStatus(context, state, "persisting_page", {
