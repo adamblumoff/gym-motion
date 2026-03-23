@@ -1,3 +1,7 @@
+int readSeatForce() {
+  return analogRead(FSR_PIN);
+}
+
 void writeRegister(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(ADXL345_ADDR);
   Wire.write(reg);
@@ -32,48 +36,55 @@ void setupADXL345() {
 }
 
 void updateMotionState() {
-  int16_t x, y, z;
-  readAccel(x, y, z);
+  const int seatReading = readSeatForce();
+  const unsigned long now = millis();
+  const bool occupied = seatReading >= FSR_OCCUPIED_THRESHOLD;
+  static unsigned long lastSeatDebugAt = 0;
 
-  if (!haveLastReading) {
-    haveLastReading = true;
-    lastMotionTime = millis();
-    lastX = x;
-    lastY = y;
-    lastZ = z;
-    Serial.println("Calibrating...");
-    return;
+  if (lastSeatDebugAt == 0 || now - lastSeatDebugAt >= 1000) {
+    Serial.print("FSR reading=");
+    Serial.print(seatReading);
+    Serial.print(" threshold=");
+    Serial.print(FSR_OCCUPIED_THRESHOLD);
+    Serial.print(" occupied=");
+    Serial.println(occupied ? "true" : "false");
+    lastSeatDebugAt = now;
   }
 
-  const int delta = abs(x - lastX) + abs(y - lastY) + abs(z - lastZ);
-  const unsigned long now = millis();
+  if (!haveSeatReading) {
+    haveSeatReading = true;
 
-  if (delta > MOTION_THRESHOLD) {
-    lastMotionTime = now;
+    if (occupied) {
+      lastOccupiedTime = now;
+      currentDetectedState = "moving";
+      pendingMotionUpdate = true;
+      journalMotionState(currentDetectedState, seatReading, now);
+      Serial.println("Detected seat occupancy -> MOVING");
+    }
+  }
+
+  if (occupied) {
+    lastOccupiedTime = now;
 
     if (strcmp(currentDetectedState, "moving") != 0) {
       currentDetectedState = "moving";
       pendingMotionUpdate = true;
-      journalMotionState(currentDetectedState, delta, now);
-      Serial.println("Detected -> MOVING");
+      journalMotionState(currentDetectedState, seatReading, now);
+      Serial.println("Detected seat occupancy -> MOVING");
     }
   } else if (
     strcmp(currentDetectedState, "moving") == 0 &&
-    now - lastMotionTime > STOP_TIMEOUT_MS
+    now - lastOccupiedTime > UNOCCUPIED_HOLD_MS
   ) {
     currentDetectedState = "still";
     pendingMotionUpdate = true;
-    journalMotionState(currentDetectedState, delta, now);
-    Serial.println("Detected -> STILL");
+    journalMotionState(currentDetectedState, seatReading, now);
+    Serial.println("Detected seat release -> STILL");
   }
 
   if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
-    sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
+    sendTelemetry(seatReading, now, pendingMotionUpdate, pendingMotionUpdate);
   }
-
-  lastX = x;
-  lastY = y;
-  lastZ = z;
 }
 
 void logConnectedRuntimeHeartbeat() {

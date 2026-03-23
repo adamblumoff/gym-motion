@@ -36,9 +36,9 @@ const char* RUNTIME_OTA_DATA_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7005";
 const uint8_t ADXL345_ADDR = 0x53;
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
-
-const int MOTION_THRESHOLD = 70;
-const unsigned long STOP_TIMEOUT_MS = 600;
+const int FSR_PIN = 34;
+const int FSR_OCCUPIED_THRESHOLD = 500;
+const unsigned long UNOCCUPIED_HOLD_MS = 400;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
 // The current desktop runtime talks to this node through the Windows WinRT
@@ -56,11 +56,8 @@ const size_t STATUS_CHUNK_SIZE = 120;
 const char* HISTORY_LOG_PATH = "/history.log";
 const char* HISTORY_TEMP_PATH = "/history.tmp";
 
-int16_t lastX = 0;
-int16_t lastY = 0;
-int16_t lastZ = 0;
-bool haveLastReading = false;
-unsigned long lastMotionTime = 0;
+bool haveSeatReading = false;
+unsigned long lastOccupiedTime = 0;
 
 Preferences preferences;
 BLEServer* bleServer = nullptr;
@@ -309,8 +306,7 @@ void setup() {
     clearProvisioningConfig();
   }
 
-  Wire.begin(SDA_PIN, SCL_PIN);
-  setupADXL345();
+  pinMode(FSR_PIN, INPUT);
   SPIFFS.begin(true);
   setupBle();
   finalizePendingRollback(true);
