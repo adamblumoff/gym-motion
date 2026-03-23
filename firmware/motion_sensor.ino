@@ -39,17 +39,6 @@ void updateMotionState() {
   const int seatReading = readSeatForce();
   const unsigned long now = millis();
   const bool occupied = seatReading >= FSR_OCCUPIED_THRESHOLD;
-  static unsigned long lastSeatDebugAt = 0;
-
-  if (lastSeatDebugAt == 0 || now - lastSeatDebugAt >= 1000) {
-    Serial.print("FSR reading=");
-    Serial.print(seatReading);
-    Serial.print(" threshold=");
-    Serial.print(FSR_OCCUPIED_THRESHOLD);
-    Serial.print(" occupied=");
-    Serial.println(occupied ? "true" : "false");
-    lastSeatDebugAt = now;
-  }
 
   if (!haveSeatReading) {
     haveSeatReading = true;
