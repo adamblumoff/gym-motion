@@ -170,6 +170,7 @@ export function createDataIngestController(deps: DataIngestDeps) {
         deps.applyDataEvent({
           type: "motion-update",
           payload,
+          sourceMessageId: message.messageId,
         });
         return;
       }
@@ -186,6 +187,7 @@ export function createDataIngestController(deps: DataIngestDeps) {
         deps.applyDataEvent({
           type: "device-log",
           payload,
+          sourceMessageId: message.messageId,
         });
         return;
       }

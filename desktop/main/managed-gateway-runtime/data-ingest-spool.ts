@@ -29,6 +29,7 @@ export type DataIngestSpool = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   enqueue: (message: GatewayChildPersistMessage) => Promise<void>;
+  enqueueValidated: (message: ValidatedGatewayChildPersistMessage) => Promise<void>;
   enqueueAndDrain: (message: GatewayChildPersistMessage) => Promise<void>;
 };
 
@@ -323,8 +324,8 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
     }
   }
 
-  async function enqueueInternal(
-    message: GatewayChildPersistMessage,
+async function enqueueInternal(
+    validated: ValidatedGatewayChildPersistMessage,
     options?: { waitForDrain?: boolean },
   ) {
     if (state !== "running") {
@@ -336,7 +337,6 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       throw new Error(STOPPING_ERROR_MESSAGE);
     }
 
-    const validated = validateGatewayChildPersistMessage(message);
     const timestamp = nowIso();
 
     insertRow.run(
@@ -400,10 +400,13 @@ export function createDataIngestSpool(deps: DataIngestSpoolDeps): DataIngestSpoo
       await stopPromise;
     },
     async enqueue(message) {
+      await enqueueInternal(validateGatewayChildPersistMessage(message));
+    },
+    async enqueueValidated(message) {
       await enqueueInternal(message);
     },
     async enqueueAndDrain(message) {
-      await enqueueInternal(message, { waitForDrain: true });
+      await enqueueInternal(validateGatewayChildPersistMessage(message), { waitForDrain: true });
     },
   };
 }

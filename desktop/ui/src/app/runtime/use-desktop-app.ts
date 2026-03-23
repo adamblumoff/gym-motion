@@ -48,7 +48,11 @@ export function useDesktopApp() {
         return;
       }
 
-      if (event.type === "gateway-updated" || event.type === "device-upserted") {
+      if (
+        event.type === "gateway-updated" ||
+        event.type === "device-upserted" ||
+        event.type === "runtime-batch"
+      ) {
         setState((current) => applyRuntimeEventToState(current, event));
         return;
       }

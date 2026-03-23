@@ -54,6 +54,30 @@ export function buildNodeLogs(
     }));
 }
 
+export function indexNodeLogs(
+  activities: DeviceActivitySummary[],
+  limit = 15,
+): Map<string, NodeLog[]> {
+  const logsByDeviceId = new Map<string, NodeLog[]>();
+
+  for (const activity of activities) {
+    const existing = logsByDeviceId.get(activity.deviceId) ?? [];
+    if (existing.length >= limit) {
+      continue;
+    }
+
+    existing.push({
+      id: activity.id,
+      timestamp: new Date(activity.receivedAt),
+      message: activity.message,
+      isMoving: activity.state === "moving",
+    });
+    logsByDeviceId.set(activity.deviceId, existing);
+  }
+
+  return logsByDeviceId;
+}
+
 export function shouldDisplayDashboardDevice(
   device: GatewayRuntimeDeviceSummary,
   approvedNodes?: ApprovedNodeRule[],

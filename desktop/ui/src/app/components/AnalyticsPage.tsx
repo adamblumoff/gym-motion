@@ -7,7 +7,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -545,23 +544,27 @@ export function AnalyticsPage() {
                 </p>
               </div>
               {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                    <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                    <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Area
-                      type="monotone"
-                      dataKey="movingMinutes"
-                      name="Moving minutes"
-                      stroke="#22d3ee"
-                      fill="#22d3ee"
-                      fillOpacity={0.15}
-                      strokeWidth={2}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <AreaChart
+                  data={chartData}
+                  height={280}
+                  responsive
+                  style={{ width: "100%", maxWidth: "100%" }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
+                  <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="movingMinutes"
+                    name="Moving minutes"
+                    stroke="#22d3ee"
+                    fill="#22d3ee"
+                    fillOpacity={0.15}
+                    strokeWidth={2}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
               ) : (
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
                   {isLoadingAnalytics
@@ -579,15 +582,24 @@ export function AnalyticsPage() {
                 </p>
               </div>
               {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                    <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                    <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="movements" name="Movement starts" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <BarChart
+                  data={chartData}
+                  height={280}
+                  responsive
+                  style={{ width: "100%", maxWidth: "100%" }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
+                  <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar
+                    dataKey="movements"
+                    name="Movement starts"
+                    fill="#f59e0b"
+                    radius={[4, 4, 0, 0]}
+                    isAnimationActive={false}
+                  />
+                </BarChart>
               ) : (
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
                   {isLoadingAnalytics

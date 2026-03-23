@@ -40,6 +40,23 @@ export const DESKTOP_TEST_CHANNELS = {
   step: "desktop-test:step",
 } as const;
 
+export type DesktopRuntimeBatchPatch = {
+  devices?: GatewayRuntimeDeviceSummary[];
+  events?: MotionEventSummary[];
+  removedEventIds?: Array<number | string>;
+  logs?: DeviceLogSummary[];
+  removedLogIds?: Array<number | string>;
+  activities?: DeviceActivitySummary[];
+  removedActivityIds?: Array<number | string>;
+  gateway?: {
+    gateway: GatewayStatusSummary;
+    liveStatus: string;
+    runtimeState: DesktopSnapshot["runtimeState"];
+    gatewayIssue: string | null;
+  };
+  replaceSnapshot?: DesktopSnapshot;
+};
+
 export type DesktopTestStepName =
   | "announceCandidate"
   | "connectApprovedNode"
@@ -89,6 +106,10 @@ export type DesktopRuntimeEvent =
   | {
       type: "activity-recorded";
       activity: DeviceActivitySummary;
+    }
+  | {
+      type: "runtime-batch";
+      patch: DesktopRuntimeBatchPatch;
     }
   | {
       type: "analytics-updated";
