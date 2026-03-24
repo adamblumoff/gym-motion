@@ -325,6 +325,49 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
+  it("treats reconnecting transport events as connect-in-progress", async () => {
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+      },
+      runtimeServer: createRuntimeServer({
+        resolveKnownDeviceId(input) {
+          if (input?.peripheralId === "AA:BB") {
+            return "esp32-known";
+          }
+
+          return null;
+        },
+      }),
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+    });
+
+    bridge.handleNodeDiscovered({
+      id: "candidate-1",
+      peripheralId: "AA:BB",
+      localName: "GymMotion-aabb",
+    });
+
+    await bridge.handleNodeConnectionState({
+      gatewayConnectionState: "reconnecting",
+      node: {
+        peripheralId: "AA:BB",
+        localName: "GymMotion-aabb",
+      },
+    });
+
+    await bridge.handleNodeConnectionState({
+      gatewayConnectionState: "connected",
+      node: {
+        peripheralId: "AA:BB",
+        localName: "GymMotion-aabb",
+      },
+    });
+  });
+
   it("waits for a stable live window before requesting history sync", async () => {
     vi.useFakeTimers();
 

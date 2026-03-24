@@ -37,10 +37,19 @@ test("approved reconnect stays disconnected until connect begins and cleans up o
     await expect
       .poll(async () => {
         const snapshot = await app.getSnapshot();
-        return snapshot.devices.find((device) => device.id === DEFAULT_APPROVED_RULE.knownDeviceId)
-          ?.gatewayConnectionState;
+        return {
+          deviceState:
+            snapshot.devices.find((device) => device.id === DEFAULT_APPROVED_RULE.knownDeviceId)
+              ?.gatewayConnectionState ?? null,
+          reconnectingCount: snapshot.gateway.reconnectingNodeCount,
+          scanReason: snapshot.gateway.scanReason ?? null,
+        };
       })
-      .toBe("reconnecting");
+      .toEqual({
+        deviceState: "reconnecting",
+        reconnectingCount: 1,
+        scanReason: "approved-reconnect",
+      });
     await expect(
       app.page.locator('[data-slot="badge"]').filter({ hasText: /^Reconnecting$/ }).first(),
     ).toBeVisible();
@@ -50,10 +59,19 @@ test("approved reconnect stays disconnected until connect begins and cleans up o
     await expect
       .poll(async () => {
         const snapshot = await app.getSnapshot();
-        return snapshot.devices.find((device) => device.id === DEFAULT_APPROVED_RULE.knownDeviceId)
-          ?.gatewayConnectionState;
+        return {
+          deviceState:
+            snapshot.devices.find((device) => device.id === DEFAULT_APPROVED_RULE.knownDeviceId)
+              ?.gatewayConnectionState ?? null,
+          reconnectingCount: snapshot.gateway.reconnectingNodeCount,
+          scanReason: snapshot.gateway.scanReason ?? null,
+        };
       })
-      .toBe("connected");
+      .toEqual({
+        deviceState: "connected",
+        reconnectingCount: 0,
+        scanReason: null,
+      });
     await expect(app.page.getByText("1 devices configured")).toBeVisible();
     await expect(
       app.page.locator('[data-slot="badge"]').filter({ hasText: /^Connected$/ }).first(),

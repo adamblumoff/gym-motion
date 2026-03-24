@@ -732,7 +732,7 @@ export function createRuntimeBridge({
     const connectionState =
       event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
-    if (connectionState === "connecting") {
+    if (connectionState === "connecting" || connectionState === "reconnecting") {
       runtimeServer.noteConnecting({
         ...peripheralInfo,
         reconnectAttempt: event.reconnect?.attempt ?? null,
