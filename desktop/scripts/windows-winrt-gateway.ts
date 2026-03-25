@@ -497,11 +497,13 @@ function handleSidecarEvent(event) {
     case "history_record":
       log("received history record", {
         deviceId: event.device_id ?? null,
+        requestId: event.request_id ?? null,
         sequence: event.record?.sequence ?? null,
         kind: event.record?.kind ?? null,
       });
       void runtimeBridge.handleHistoryRecord({
         device_id: event.device_id,
+        request_id: event.request_id,
         node: event.node ?? {},
         record: event.record,
       }).catch((error) => {
@@ -514,6 +516,7 @@ function handleSidecarEvent(event) {
         deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
         latestSequence:
           event.payload?.latest_sequence ?? event.payload?.latestSequence ?? null,
+        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
         highWaterSequence:
           event.payload?.high_water_sequence ?? event.payload?.highWaterSequence ?? null,
         sentCount: event.payload?.sent_count ?? event.payload?.sentCount ?? null,

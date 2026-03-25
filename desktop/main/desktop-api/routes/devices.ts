@@ -181,6 +181,7 @@ export async function handleDeviceRoutes(args: {
       type: "backfill-recorded",
       payload: result,
       deviceId: parsed.data.deviceId,
+      syncComplete: parsed.data.syncComplete ?? false,
     });
     json(response, 200, { ok: true, ...result });
     return true;

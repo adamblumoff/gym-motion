@@ -477,6 +477,7 @@ async function buildAnalyticsSnapshot(args: {
 export type AnalyticsService = {
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
   scheduleRefresh: (deviceId: string, delayMs?: number) => void;
+  refreshSyncStateOnly: (deviceId: string) => Promise<void>;
   markSyncFailure: (deviceId: string, detail: string) => void;
   clearSyncFailure: (deviceId: string) => void;
   recordLiveMotion: (event: MotionEventSummary) => void;
@@ -774,6 +775,10 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     },
 
     scheduleRefresh,
+
+    async refreshSyncStateOnly(deviceId: string) {
+      await emitCachedSnapshots(deviceId);
+    },
 
     markSyncFailure(deviceId, detail) {
       syncFailures.set(deviceId, detail);

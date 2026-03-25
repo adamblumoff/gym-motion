@@ -45,6 +45,7 @@ function createHistorySyncState({
     requestedAfterSequence: null,
     latestSequence: 0,
     highWaterSequence: 0,
+    requestId: null,
     records: [],
     nextEligibleAt,
     timerHandle: null,
@@ -332,6 +333,7 @@ export function createRuntimeBridge({
     }
 
     setBackfillStatus(context, state, "buffering_page", {
+      requestId: `${state.deviceId}:${state.bootId}:${state.requestedAfterSequence ?? 0}:${nowFn()}`,
       records: [],
       pausedReason: null,
       nextEligibleAt: null,
@@ -342,6 +344,7 @@ export function createRuntimeBridge({
       bootId: state.bootId,
       afterSequence: state.requestedAfterSequence,
       maxRecords: historySyncPageSize,
+      requestId: state.requestId,
     });
 
     await sendSidecarCommand({
@@ -349,6 +352,7 @@ export function createRuntimeBridge({
       device_id: state.deviceId,
       after_sequence: state.requestedAfterSequence,
       max_records: historySyncPageSize,
+      request_id: state.requestId,
     });
   }
 
@@ -419,6 +423,7 @@ export function createRuntimeBridge({
       latestSequence: payload.latest_sequence ?? null,
       highWaterSequence: payload.high_water_sequence ?? null,
       hasMore: payload.has_more ?? null,
+      requestId: payload.request_id ?? null,
     });
 
     if (!deviceId || !state || !context) {
@@ -436,6 +441,15 @@ export function createRuntimeBridge({
         contextBootId: context.bootId ?? null,
         stateBootId: state.bootId ?? null,
         status: state.status,
+      });
+      return;
+    }
+
+    if (payload.request_id !== state.requestId) {
+      logBackfill("ignoring history sync completion for stale request", {
+        deviceId,
+        expectedRequestId: state.requestId ?? null,
+        requestId: payload.request_id ?? null,
       });
       return;
     }
@@ -497,6 +511,7 @@ export function createRuntimeBridge({
           ...(pageBootId ? { bootId: pageBootId } : {}),
           records,
           ackSequence: payload.latest_sequence ?? 0,
+          syncComplete: payload.has_more !== true,
           ...(payload.overflowed ? { overflowDetectedAt: new Date().toISOString() } : {}),
         }),
       });
@@ -519,6 +534,7 @@ export function createRuntimeBridge({
         type: "acknowledge_history_sync",
         device_id: deviceId,
         sequence: provenAckSequence,
+        request_id: payload.request_id,
       });
 
       const noProgress = provenAckSequence <= (state.requestedAfterSequence ?? 0);
@@ -542,6 +558,7 @@ export function createRuntimeBridge({
 
       setBackfillStatus(context, state, "requesting_page", {
         requestedAfterSequence: provenAckSequence,
+        requestId: null,
         nextEligibleAt: nowFn() + historySyncInterPageDelayMs,
         pausedReason: null,
       });
@@ -660,6 +677,16 @@ export function createRuntimeBridge({
         status: state?.status ?? null,
         sequence: event.record?.sequence ?? null,
         kind: event.record?.kind ?? null,
+      });
+      return;
+    }
+
+    if (event.request_id !== state.requestId) {
+      logBackfill("dropping history record for stale request", {
+        deviceId: deviceId ?? null,
+        expectedRequestId: state.requestId ?? null,
+        requestId: event.request_id ?? null,
+        sequence: event.record?.sequence ?? null,
       });
       return;
     }

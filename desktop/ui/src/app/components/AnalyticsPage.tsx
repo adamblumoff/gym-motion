@@ -74,25 +74,25 @@ function connectionLabel(connectionState: string) {
 
 function syncBannerCopy(state: "idle" | "syncing" | "failed", detail: string | null) {
   if (state === "syncing") {
-    return "History catch-up is running in the background. Cached analytics stays visible while canonical history catches up.";
+    return "History is still catching up in the background. Live updates stay current while analytics may still be rendering from cached history.";
   }
 
   if (state === "failed") {
-    return detail ?? "History sync failed. Cached analytics remains available until the next successful refresh.";
+    return detail ?? "History sync failed. Live updates can continue while analytics waits for the next successful history refresh.";
   }
 
-  return null;
+  return "History is current for this device.";
 }
 
 function syncStateLabel(state: "idle" | "syncing" | "failed") {
   switch (state) {
     case "syncing":
-      return "Syncing";
+      return "Sync in progress";
     case "failed":
-      return "Needs attention";
+      return "Sync failed";
     case "idle":
     default:
-      return "Up to date";
+      return "History up to date";
   }
 }
 

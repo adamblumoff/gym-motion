@@ -130,6 +130,7 @@ impl Sidecar {
                 device_id,
                 after_sequence,
                 max_records,
+                request_id,
             } => {
                 if self.session.is_none() {
                     self.start_session().await?;
@@ -140,10 +141,15 @@ impl Sidecar {
                         device_id,
                         after_sequence,
                         max_records,
+                        request_id,
                     });
                 }
             }
-            Command::AcknowledgeHistorySync { device_id, sequence } => {
+            Command::AcknowledgeHistorySync {
+                device_id,
+                sequence,
+                request_id,
+            } => {
                 if self.session.is_none() {
                     self.start_session().await?;
                 }
@@ -151,7 +157,11 @@ impl Sidecar {
                 if let Some(session) = &self.session {
                     let _ = session
                         .commands
-                        .send(SessionCommand::AcknowledgeHistorySync { device_id, sequence });
+                        .send(SessionCommand::AcknowledgeHistorySync {
+                            device_id,
+                            sequence,
+                            request_id,
+                        });
                 }
             }
             Command::RecoverApprovedNode { rule_id } => {

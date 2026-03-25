@@ -96,6 +96,8 @@ pub struct HistoryRecordPayload {
     pub status_type: String,
     #[serde(alias = "deviceId")]
     pub device_id: String,
+    #[serde(alias = "requestId")]
+    pub request_id: String,
     pub record: Value,
 }
 
@@ -105,6 +107,8 @@ pub struct HistorySyncCompletePayload {
     pub status_type: String,
     #[serde(alias = "deviceId")]
     pub device_id: String,
+    #[serde(alias = "requestId")]
+    pub request_id: String,
     #[serde(alias = "latestSequence")]
     pub latest_sequence: u64,
     #[serde(alias = "highWaterSequence")]
@@ -116,6 +120,20 @@ pub struct HistorySyncCompletePayload {
     pub overflowed: Option<bool>,
     #[serde(alias = "droppedCount")]
     pub dropped_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryErrorPayload {
+    #[serde(rename = "type")]
+    pub status_type: String,
+    #[serde(alias = "deviceId")]
+    pub device_id: String,
+    #[serde(alias = "sessionId")]
+    pub session_id: Option<String>,
+    #[serde(alias = "requestId")]
+    pub request_id: Option<String>,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -133,10 +151,12 @@ pub enum Command {
         device_id: String,
         after_sequence: u64,
         max_records: usize,
+        request_id: String,
     },
     AcknowledgeHistorySync {
         device_id: String,
         sequence: u64,
+        request_id: String,
     },
     PairManualCandidate { candidate_id: String },
     RecoverApprovedNode { rule_id: String },
@@ -179,6 +199,7 @@ pub enum Event {
     HistoryRecord {
         node: DiscoveredNode,
         device_id: String,
+        request_id: String,
         record: Value,
     },
     HistorySyncComplete {
@@ -229,6 +250,7 @@ mod tests {
             device_id: "device-1".to_string(),
             after_sequence: 12,
             max_records: 0,
+            request_id: "req-1".to_string(),
         })
         .expect("command should serialize");
 
@@ -236,6 +258,7 @@ mod tests {
         assert_eq!(value["device_id"], "device-1");
         assert_eq!(value["after_sequence"], 12);
         assert_eq!(value["max_records"], 0);
+        assert_eq!(value["request_id"], "req-1");
     }
 
     #[test]
@@ -243,12 +266,14 @@ mod tests {
         let value = serde_json::to_value(Command::AcknowledgeHistorySync {
             device_id: "device-1".to_string(),
             sequence: 17,
+            request_id: "req-1".to_string(),
         })
         .expect("command should serialize");
 
         assert_eq!(value["type"], "acknowledge_history_sync");
         assert_eq!(value["device_id"], "device-1");
         assert_eq!(value["sequence"], 17);
+        assert_eq!(value["request_id"], "req-1");
     }
 
     #[test]
@@ -427,6 +452,7 @@ mod tests {
                 last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
             },
             device_id: "device-1".to_string(),
+            request_id: "req-1".to_string(),
             record: json!({
                 "kind": "motion",
                 "sequence": 8,
@@ -438,6 +464,7 @@ mod tests {
 
         assert_eq!(value["type"], "history_record");
         assert_eq!(value["device_id"], "device-1");
+        assert_eq!(value["request_id"], "req-1");
         assert_eq!(value["record"]["sequence"], 8);
     }
 
@@ -455,8 +482,9 @@ mod tests {
                 last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
             },
             payload: HistorySyncCompletePayload {
-                status_type: "history-sync-complete".to_string(),
+                status_type: "history-page-complete".to_string(),
                 device_id: "device-1".to_string(),
+                request_id: "req-1".to_string(),
                 latest_sequence: 20,
                 high_water_sequence: 24,
                 sent_count: 4,
@@ -469,6 +497,7 @@ mod tests {
 
         assert_eq!(value["type"], "history_sync_complete");
         assert_eq!(value["payload"]["device_id"], "device-1");
+        assert_eq!(value["payload"]["request_id"], "req-1");
         assert_eq!(value["payload"]["latest_sequence"], 20);
         assert_eq!(value["payload"]["has_more"], true);
     }

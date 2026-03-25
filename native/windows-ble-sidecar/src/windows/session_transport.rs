@@ -36,7 +36,7 @@ pub(super) async fn connect_and_stream(
     writer: EventWriter,
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
-    active_session_controls: Arc<tokio::sync::Mutex<HashMap<String, super::session::ActiveSessionControl>>>,
+    active_session_controls: Arc<tokio::sync::Mutex<HashMap<String, super::session::ActiveSessionChannels>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     reconnect: Option<ReconnectStatus>,
     session_shutdown: watch::Receiver<bool>,

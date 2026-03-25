@@ -106,6 +106,7 @@ export type GatewayChildHistoryRecordMessage = {
     last_seen_at?: string | null;
   };
   device_id: string;
+  request_id: string;
   record: unknown;
 };
 
@@ -115,6 +116,7 @@ export type GatewayChildHistorySyncCompleteMessage = {
   payload: {
     status_type: string;
     device_id: string;
+    request_id: string;
     latest_sequence: number;
     high_water_sequence: number;
     sent_count: number;

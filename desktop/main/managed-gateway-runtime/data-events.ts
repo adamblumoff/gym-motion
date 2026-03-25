@@ -28,6 +28,7 @@ type DataEventHandlerDeps = {
   emit: (event: DesktopRuntimeEvent) => void;
   refreshHistory: () => Promise<void>;
   refreshDeviceHistory: (deviceId: string) => Promise<void>;
+  refreshSyncStateOnly: (deviceId: string) => Promise<void>;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
   recordLiveMotion: (event: MotionStreamPayload["event"]) => void;
@@ -186,15 +187,23 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         }
         break;
       case "backfill-recorded":
-        logBackfillEvent("backfill recorded; scheduling history and analytics refresh", {
+        logBackfillEvent("backfill recorded; updating history state", {
           deviceId: event.deviceId,
+          syncComplete: event.syncComplete ?? false,
         });
-        void refreshWithRetry(() => deps.refreshDeviceHistory(event.deviceId))
+        void refreshWithRetry(() =>
+          event.syncComplete
+            ? deps.refreshDeviceHistory(event.deviceId)
+            : deps.refreshSyncStateOnly(event.deviceId),
+        )
           .then(() => {
             deps.clearHistoryRefreshFailure();
-            deps.scheduleAnalyticsRefresh(event.deviceId);
-            logBackfillEvent("backfill device history refresh completed", {
+            if (event.syncComplete) {
+              deps.scheduleAnalyticsRefresh(event.deviceId);
+            }
+            logBackfillEvent("backfill history state refresh completed", {
               deviceId: event.deviceId,
+              syncComplete: event.syncComplete ?? false,
             });
             deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
           })

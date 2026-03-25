@@ -16,7 +16,7 @@ use tokio::{
 use crate::{
     json_decoder::JsonObjectDecoder,
     protocol::{
-        ApprovedNodeRule, DiscoveredNode, Event, HistoryRecordPayload,
+        ApprovedNodeRule, DiscoveredNode, Event, HistoryErrorPayload, HistoryRecordPayload,
         HistorySyncCompletePayload, ReconnectStatus, RuntimeStatusPayload, TelemetryPayload,
     },
 };
@@ -26,7 +26,7 @@ use super::{
     config::Config,
     handshake::{send_app_session_bootstrap, send_app_session_lease, write_chunked_json_command},
     session_lease::{is_closed_handle_error_message, spawn_lease_task},
-    session::ActiveSessionControl,
+    session::{ActiveHistoryControl, ActiveLiveControl, ActiveSessionChannels},
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
     session_transport_setup::PreparedSession,
@@ -48,7 +48,7 @@ pub(super) async fn monitor_active_session(
     writer: EventWriter,
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
-    active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+    active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
     known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     reconnect: Option<ReconnectStatus>,
     mut session_shutdown: watch::Receiver<bool>,
@@ -59,18 +59,25 @@ pub(super) async fn monitor_active_session(
     monitor_config: MonitorSessionConfig,
 ) -> Result<Option<String>> {
     async fn remember_active_session_control(
-        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
         device_id: &str,
-        control: &ActiveSessionControl,
+        live: &ActiveLiveControl,
+        history: &ActiveHistoryControl,
     ) {
         active_session_controls
             .lock()
             .await
-            .insert(device_id.to_string(), control.clone());
+            .insert(
+                device_id.to_string(),
+                ActiveSessionChannels {
+                    live: live.clone(),
+                    history: history.clone(),
+                },
+            );
     }
 
     async fn remove_active_session_control(
-        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
         device_id: Option<&str>,
     ) {
         if let Some(device_id) = device_id {
@@ -88,6 +95,7 @@ pub(super) async fn monitor_active_session(
     .await?;
     let mut decoder = JsonObjectDecoder::new(format!("telemetry:{}", node.label));
     let mut status_decoder = JsonObjectDecoder::new(format!("status:{}", node.label));
+    let mut history_decoder = JsonObjectDecoder::new(format!("history:{}", node.label));
     let mut session_healthy_reported = false;
     let session_health_deadline =
         Instant::now() + Duration::from_millis(monitor_config.session_health_ack_timeout_ms);
@@ -100,13 +108,19 @@ pub(super) async fn monitor_active_session(
     let mut session_telemetry_confirm_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
     let mut current_session_device_id: Option<String> = None;
-    let mut current_control = ActiveSessionControl {
+    let mut current_live_control = ActiveLiveControl {
         peripheral: prepared.peripheral.clone(),
-        characteristic: prepared.control_characteristic,
+        characteristic: prepared.live_control_characteristic,
         write_lock: std::sync::Arc::new(Mutex::new(())),
     };
+    let current_history_control = ActiveHistoryControl {
+        peripheral: prepared.peripheral.clone(),
+        characteristic: prepared.history_control_characteristic,
+        write_lock: std::sync::Arc::new(Mutex::new(())),
+        app_session_id: app_session_id.clone(),
+    };
     let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) = spawn_lease_task(
-        current_control.clone(),
+        current_live_control.clone(),
         app_session_id.clone(),
     );
 
@@ -210,10 +224,10 @@ pub(super) async fn monitor_active_session(
                                     "sending sync-now",
                                 )
                                 .await?;
-                                let write_guard = current_control.write_lock.lock().await;
+                                let write_guard = current_live_control.write_lock.lock().await;
                                 let sync_now_result = write_chunked_json_command(
-                                    &current_control.peripheral,
-                                    &current_control.characteristic,
+                                    &current_live_control.peripheral,
+                                    &current_live_control.characteristic,
                                     r#"{"type":"sync-now"}"#,
                                 )
                                 .await;
@@ -237,7 +251,8 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         device_id,
-                                        &current_control,
+                                        &current_live_control,
+                                        &current_history_control,
                                     )
                                     .await;
                                 }
@@ -276,6 +291,21 @@ pub(super) async fn monitor_active_session(
                                     .await;
                             }
                             },
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+
+                if notification.uuid == config.history_status_uuid {
+                    for payload in history_decoder.push_bytes(&notification.value)? {
+                        let status_type = payload
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+
+                        match status_type.as_str() {
                             "history-record" => match serde_json::from_value::<HistoryRecordPayload>(payload) {
                                 Ok(status) => {
                                     if let Some(peripheral_id) = node.peripheral_id.clone() {
@@ -288,7 +318,8 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         &status.device_id,
-                                        &current_control,
+                                        &current_live_control,
+                                        &current_history_control,
                                     )
                                     .await;
                                     let mut enriched = node.clone();
@@ -297,6 +328,7 @@ pub(super) async fn monitor_active_session(
                                         .send(&Event::HistoryRecord {
                                             node: enriched,
                                             device_id: status.device_id,
+                                            request_id: status.request_id,
                                             record: status.record,
                                         })
                                         .await?;
@@ -310,7 +342,7 @@ pub(super) async fn monitor_active_session(
                                         .await;
                                 }
                             },
-                            "history-sync-complete" => match serde_json::from_value::<HistorySyncCompletePayload>(payload) {
+                            "history-page-complete" => match serde_json::from_value::<HistorySyncCompletePayload>(payload) {
                                 Ok(status) => {
                                     if let Some(peripheral_id) = node.peripheral_id.clone() {
                                         known_device_ids
@@ -322,7 +354,8 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         &status.device_id,
-                                        &current_control,
+                                        &current_live_control,
+                                        &current_history_control,
                                     )
                                     .await;
                                     let mut enriched = node.clone();
@@ -338,6 +371,30 @@ pub(super) async fn monitor_active_session(
                                     writer
                                         .error(
                                             format!("Failed to parse history sync completion payload: {error}"),
+                                            Some(json!({ "node": node.id })),
+                                        )
+                                        .await;
+                                }
+                            },
+                            "history-error" => match serde_json::from_value::<HistoryErrorPayload>(payload) {
+                                Ok(status) => {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "warn".to_string(),
+                                            message: format!("History channel reported {}", status.code),
+                                            details: Some(json!({
+                                                "node": node.id,
+                                                "deviceId": status.device_id,
+                                                "requestId": status.request_id,
+                                                "detail": status.message,
+                                            })),
+                                        })
+                                        .await?;
+                                }
+                                Err(error) => {
+                                    writer
+                                        .error(
+                                            format!("Failed to parse history error payload: {error}"),
                                             Some(json!({ "node": node.id })),
                                         )
                                         .await;
@@ -366,7 +423,8 @@ pub(super) async fn monitor_active_session(
                             remember_active_session_control(
                                 &active_session_controls,
                                 &payload.device_id,
-                                &current_control,
+                                &current_live_control,
+                                &current_history_control,
                             )
                             .await;
                             let mut enriched = node.clone();
@@ -433,10 +491,10 @@ pub(super) async fn monitor_active_session(
                                 })),
                             })
                             .await?;
-                        let write_guard = current_control.write_lock.lock().await;
+                        let write_guard = current_live_control.write_lock.lock().await;
                         let sync_now_retry_result = write_chunked_json_command(
-                            &current_control.peripheral,
-                            &current_control.characteristic,
+                            &current_live_control.peripheral,
+                            &current_live_control.characteristic,
                             r#"{"type":"sync-now"}"#,
                         )
                         .await;
@@ -477,10 +535,10 @@ pub(super) async fn monitor_active_session(
                             })),
                         })
                         .await?;
-                    let write_guard = current_control.write_lock.lock().await;
+                    let write_guard = current_live_control.write_lock.lock().await;
                     let bootstrap_result = send_app_session_bootstrap(
-                        &current_control.peripheral,
-                        &current_control.characteristic,
+                        &current_live_control.peripheral,
+                        &current_live_control.characteristic,
                         &app_session_nonce,
                     )
                     .await;
@@ -488,8 +546,8 @@ pub(super) async fn monitor_active_session(
                         format!("app-session-bootstrap retry failed for {}", node.label)
                     })?;
                     let lease_result = send_app_session_lease(
-                        &current_control.peripheral,
-                        &current_control.characteristic,
+                        &current_live_control.peripheral,
+                        &current_live_control.characteristic,
                         &app_session_id,
                     )
                     .await;
@@ -569,21 +627,22 @@ pub(super) async fn monitor_active_session(
                     .await
                     {
                         Ok(recovered_control_characteristic) => {
-                            current_control = ActiveSessionControl {
+                            current_live_control = ActiveLiveControl {
                                 peripheral: prepared.peripheral.clone(),
                                 characteristic: recovered_control_characteristic,
-                                write_lock: current_control.write_lock.clone(),
+                                write_lock: current_live_control.write_lock.clone(),
                             };
                             if let Some(device_id) = current_session_device_id.as_deref() {
                                 remember_active_session_control(
                                     &active_session_controls,
                                     device_id,
-                                    &current_control,
+                                    &current_live_control,
+                                    &current_history_control,
                                 )
                                 .await;
                             }
                             let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                current_control.clone(),
+                                current_live_control.clone(),
                                 app_session_id.clone(),
                             );
                             lease_shutdown_tx = new_shutdown_tx;

@@ -80,41 +80,44 @@ TEST_CASE("evaluateAppSessionLease reports bootstrap and lease expiry regression
   }
 }
 
-TEST_CASE("parseRuntimeControlCommand validates session and history payload defaults") {
+TEST_CASE("parseRuntimeControlCommand validates runtime session payload defaults") {
   const auto bootstrap = parseRuntimeControlCommand(
     R"({"type":"app-session-bootstrap","sessionNonce":"nonce-1"})",
-    15'000,
-    80
+    15'000
   );
   CHECK(bootstrap.type == ControlCommandType::AppSessionBootstrap);
   CHECK(bootstrap.sessionNonce == "nonce-1");
 
   const auto lease = parseRuntimeControlCommand(
     R"({"type":"app-session-lease","sessionId":"session-1"})",
-    15'000,
-    80
+    15'000
   );
   CHECK(lease.type == ControlCommandType::AppSessionLease);
   CHECK(lease.sessionId == "session-1");
   CHECK(lease.expiresInMs == 15'000);
+}
 
-  const auto historySync = parseRuntimeControlCommand(
-    R"({"type":"history-sync-begin","afterSequence":12,"maxRecords":0})",
-    15'000,
+TEST_CASE("parseHistoryControlCommand validates request and ack payload defaults") {
+  const auto historySync = parseHistoryControlCommand(
+    R"({"type":"history-page-request","sessionId":"session-1","requestId":"req-1","afterSequence":12,"maxRecords":0})",
     80
   );
   const auto syncRequest = createHistorySyncRequest(historySync, 80);
-  CHECK(historySync.type == ControlCommandType::HistorySyncBegin);
+  CHECK(historySync.type == HistoryControlCommandType::HistoryPageRequest);
+  CHECK(syncRequest.sessionId == "session-1");
+  CHECK(syncRequest.requestId == "req-1");
   CHECK(syncRequest.afterSequence == 12);
   CHECK(syncRequest.maxRecords == 80);
 
-  const auto historyAck = parseRuntimeControlCommand(
-    R"({"type":"history-ack","sequence":99})",
-    15'000,
+  const auto historyAck = parseHistoryControlCommand(
+    R"({"type":"history-page-ack","sessionId":"session-1","requestId":"req-1","sequence":99})",
     80
   );
-  CHECK(historyAck.type == ControlCommandType::HistoryAck);
-  CHECK(historyAck.sequence == 99);
+  const auto ackRequest = createHistoryAckRequest(historyAck);
+  CHECK(historyAck.type == HistoryControlCommandType::HistoryPageAck);
+  CHECK(ackRequest.sessionId == "session-1");
+  CHECK(ackRequest.requestId == "req-1");
+  CHECK(ackRequest.sequence == 99);
 }
 
 TEST_CASE("history helpers advance sequence and clear overflow after ack") {

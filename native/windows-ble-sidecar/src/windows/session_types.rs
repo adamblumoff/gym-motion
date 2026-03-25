@@ -18,10 +18,12 @@ pub(super) enum SessionCommand {
         device_id: String,
         after_sequence: u64,
         max_records: usize,
+        request_id: String,
     },
     AcknowledgeHistorySync {
         device_id: String,
         sequence: u64,
+        request_id: String,
     },
     PairManualCandidate {
         candidate_id: String,
