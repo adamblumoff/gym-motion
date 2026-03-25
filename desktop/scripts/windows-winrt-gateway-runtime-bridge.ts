@@ -68,8 +68,8 @@ export function createRuntimeBridge({
 }) {
   const historySyncStabilityWindowMs =
     config.historySyncStabilityWindowMs ?? config.historySyncDelayMs ?? 5_000;
-  const historySyncPageSize = config.historySyncPageSize ?? 3;
-  const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 2_000;
+  const historySyncPageSize = config.historySyncPageSize ?? 256;
+  const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 0;
   const deviceContexts = new Map();
   const pendingNodeLogs = new Map();
   const liveTaskChains = new Map();

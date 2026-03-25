@@ -15,9 +15,9 @@ export function createGatewayConfig() {
     historySyncStabilityWindowMs: Number(
       process.env.GATEWAY_HISTORY_SYNC_STABILITY_MS ?? 5_000,
     ),
-    historySyncPageSize: Number(process.env.GATEWAY_HISTORY_SYNC_PAGE_SIZE ?? 3),
+    historySyncPageSize: Number(process.env.GATEWAY_HISTORY_SYNC_PAGE_SIZE ?? 256),
     historySyncInterPageDelayMs: Number(
-      process.env.GATEWAY_HISTORY_SYNC_INTER_PAGE_DELAY_MS ?? 2_000,
+      process.env.GATEWAY_HISTORY_SYNC_INTER_PAGE_DELAY_MS ?? 0,
     ),
     startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
     sidecarPath:
