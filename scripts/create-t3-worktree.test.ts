@@ -302,4 +302,122 @@ describe("create-t3-worktree git integration", () => {
     const targetEnvPath = path.join(getWorktreePath("feature-copy", deps), ".env.local");
     expect(await readFile(targetEnvPath, "utf8")).toContain("API_URL=http://example.test");
   });
+
+  it("reuses an existing matching worktree on rerun", async () => {
+    const { repoRoot, tempRoot } = await createTempRepo();
+    tempRoots.push(tempRoot);
+    await writeFile(path.join(repoRoot, ".env.local"), "API_URL=http://example.test\n", "utf8");
+
+    const t3Home = path.join(tempRoot, "home");
+    const actualCopyFile = (await import("node:fs/promises")).copyFile;
+    const actualLink = (await import("node:fs/promises")).link;
+    const actualLstat = (await import("node:fs/promises")).lstat;
+    const actualMkdir = (await import("node:fs/promises")).mkdir;
+    const actualRm = (await import("node:fs/promises")).rm;
+    const actualSymlink = (await import("node:fs/promises")).symlink;
+    const actualUnlink = (await import("node:fs/promises")).unlink;
+
+    const deps = createDeps({
+      copyFile: actualCopyFile,
+      existsSync,
+      hardLink: actualLink,
+      lstat: actualLstat,
+      mkdir: actualMkdir,
+      osHomedir: () => t3Home,
+      removeFile: actualUnlink,
+      removePath: actualRm,
+      repoRoot,
+      runGit: async (args, cwd) => {
+        const { stdout } = await execFile("git", args, { cwd });
+        return stdout.trim();
+      },
+      symlink: actualSymlink,
+    });
+
+    await runCli(["feature-rerun", "feature/rerun", "--copy-env"], deps);
+    await expect(runCli(["feature-rerun", "feature/rerun", "--copy-env"], deps)).resolves.toBeUndefined();
+
+    const worktreePath = getWorktreePath("feature-rerun", deps);
+    expect(existsSync(path.join(worktreePath, ".git"))).toBe(true);
+  });
+
+  it("cleans up an orphaned destination folder before creating the worktree", async () => {
+    const { repoRoot, tempRoot } = await createTempRepo();
+    tempRoots.push(tempRoot);
+    await writeFile(path.join(repoRoot, ".env.local"), "API_URL=http://example.test\n", "utf8");
+
+    const t3Home = path.join(tempRoot, "home");
+    const actualCopyFile = (await import("node:fs/promises")).copyFile;
+    const actualLink = (await import("node:fs/promises")).link;
+    const actualLstat = (await import("node:fs/promises")).lstat;
+    const actualMkdir = (await import("node:fs/promises")).mkdir;
+    const actualRm = (await import("node:fs/promises")).rm;
+    const actualSymlink = (await import("node:fs/promises")).symlink;
+    const actualUnlink = (await import("node:fs/promises")).unlink;
+
+    const deps = createDeps({
+      copyFile: actualCopyFile,
+      existsSync,
+      hardLink: actualLink,
+      lstat: actualLstat,
+      mkdir: actualMkdir,
+      osHomedir: () => t3Home,
+      removeFile: actualUnlink,
+      removePath: actualRm,
+      repoRoot,
+      runGit: async (args, cwd) => {
+        const { stdout } = await execFile("git", args, { cwd });
+        return stdout.trim();
+      },
+      symlink: actualSymlink,
+    });
+
+    const orphanedPath = getWorktreePath("feature-orphaned", deps);
+    await mkdir(orphanedPath, { recursive: true });
+    await writeFile(path.join(orphanedPath, "stale.txt"), "stale\n", "utf8");
+
+    await runCli(["feature-orphaned", "feature/orphaned", "--copy-env"], deps);
+
+    expect(existsSync(path.join(orphanedPath, ".git"))).toBe(true);
+    expect(existsSync(path.join(orphanedPath, "stale.txt"))).toBe(false);
+  });
+
+  it("fails with a clear error when the branch already exists in another worktree", async () => {
+    const { repoRoot, tempRoot } = await createTempRepo();
+    tempRoots.push(tempRoot);
+    await writeFile(path.join(repoRoot, ".env.local"), "API_URL=http://example.test\n", "utf8");
+
+    const firstWorktreePath = path.join(tempRoot, "existing-worktree");
+    await execFile("git", ["worktree", "add", "-b", "feature/shared", firstWorktreePath, "main"], { cwd: repoRoot });
+
+    const t3Home = path.join(tempRoot, "home");
+    const actualCopyFile = (await import("node:fs/promises")).copyFile;
+    const actualLink = (await import("node:fs/promises")).link;
+    const actualLstat = (await import("node:fs/promises")).lstat;
+    const actualMkdir = (await import("node:fs/promises")).mkdir;
+    const actualRm = (await import("node:fs/promises")).rm;
+    const actualSymlink = (await import("node:fs/promises")).symlink;
+    const actualUnlink = (await import("node:fs/promises")).unlink;
+
+    const deps = createDeps({
+      copyFile: actualCopyFile,
+      existsSync,
+      hardLink: actualLink,
+      lstat: actualLstat,
+      mkdir: actualMkdir,
+      osHomedir: () => t3Home,
+      removeFile: actualUnlink,
+      removePath: actualRm,
+      repoRoot,
+      runGit: async (args, cwd) => {
+        const { stdout } = await execFile("git", args, { cwd });
+        return stdout.trim();
+      },
+      symlink: actualSymlink,
+    });
+
+    await expect(runCli(["feature-conflict", "feature/shared", "--copy-env"], deps)).rejects.toThrow(
+      "Branch feature/shared is already checked out at",
+    );
+  });
 });

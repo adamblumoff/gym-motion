@@ -28,6 +28,18 @@ export type EnvProvisionResult = {
   warning?: string;
 };
 
+type ExistingEnvProvisionResult = {
+  mode: "existing";
+  warning?: string;
+};
+
+type WorktreeEntry = {
+  branchName?: string;
+  detached: boolean;
+  path: string;
+  prunable: boolean;
+};
+
 export type RuntimeDependencies = {
   copyFile: typeof copyFile;
   existsSync: typeof existsSync;
@@ -64,6 +76,92 @@ function usage() {
     "Usage:",
     "  bun run worktree:create:t3 -- <worktree-name> <branch-name> [--base <ref>] [--force-env] [--copy-env] [--path-only]",
   ].join("\n");
+}
+
+function normalizePathForComparison(targetPath: string) {
+  const resolvedPath = path.resolve(targetPath);
+  return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+}
+
+function parseWorktreeRef(line: string) {
+  const prefix = "branch ";
+
+  if (!line.startsWith(prefix)) {
+    return undefined;
+  }
+
+  const ref = line.slice(prefix.length);
+  const headPrefix = "refs/heads/";
+
+  return ref.startsWith(headPrefix) ? ref.slice(headPrefix.length) : undefined;
+}
+
+function parseWorktreeList(porcelainOutput: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let currentEntry: WorktreeEntry | null = null;
+
+  for (const line of porcelainOutput.split(/\r?\n/)) {
+    if (!line) {
+      if (currentEntry) {
+        entries.push(currentEntry);
+        currentEntry = null;
+      }
+      continue;
+    }
+
+    if (line.startsWith("worktree ")) {
+      if (currentEntry) {
+        entries.push(currentEntry);
+      }
+
+      currentEntry = {
+        detached: false,
+        path: line.slice("worktree ".length),
+        prunable: false,
+      };
+      continue;
+    }
+
+    if (!currentEntry) {
+      continue;
+    }
+
+    if (line.startsWith("branch ")) {
+      currentEntry.branchName = parseWorktreeRef(line);
+      continue;
+    }
+
+    if (line === "detached") {
+      currentEntry.detached = true;
+      continue;
+    }
+
+    if (line.startsWith("prunable")) {
+      currentEntry.prunable = true;
+    }
+  }
+
+  if (currentEntry) {
+    entries.push(currentEntry);
+  }
+
+  return entries;
+}
+
+async function listGitWorktrees(deps: Pick<RuntimeDependencies, "repoRoot" | "runGit">) {
+  const output = await deps.runGit(["worktree", "list", "--porcelain"], deps.repoRoot);
+  return parseWorktreeList(output);
+}
+
+function findWorktreeByPath(worktrees: WorktreeEntry[], worktreePath: string) {
+  const normalizedTargetPath = normalizePathForComparison(worktreePath);
+  return worktrees.find(
+    (worktree) => normalizePathForComparison(worktree.path) === normalizedTargetPath,
+  );
+}
+
+function findWorktreeByBranch(worktrees: WorktreeEntry[], branchName: string) {
+  return worktrees.find((worktree) => worktree.branchName === branchName);
 }
 
 export function parseCliArgs(argv: string[]): CliOptions {
@@ -215,6 +313,22 @@ export async function provisionEnvFile(
   }
 }
 
+async function ensureEnvFile(
+  sourceEnvPath: string,
+  targetEnvPath: string,
+  options: Pick<CliOptions, "copyEnv" | "forceEnv">,
+  deps: RuntimeDependencies = runtimeDependencies,
+): Promise<EnvProvisionResult | ExistingEnvProvisionResult> {
+  if ((await pathExists(targetEnvPath, deps)) && !options.forceEnv) {
+    return {
+      mode: "existing",
+      warning: `kept existing ${sourceEnvFilename} at ${targetEnvPath}; re-run with --force-env to replace it.`,
+    };
+  }
+
+  return provisionEnvFile(sourceEnvPath, targetEnvPath, options, deps);
+}
+
 async function gitBranchExists(branchName: string, deps: RuntimeDependencies) {
   try {
     await deps.runGit(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], deps.repoRoot);
@@ -254,6 +368,26 @@ function formatErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function prepareWorktreeDestination(
+  worktreePath: string,
+  deps: Pick<RuntimeDependencies, "existsSync" | "removePath" | "repoRoot" | "runGit">,
+) {
+  await deps.runGit(["worktree", "prune"], deps.repoRoot);
+
+  const worktrees = await listGitWorktrees(deps);
+  const existingWorktree = findWorktreeByPath(worktrees, worktreePath);
+
+  if (deps.existsSync(worktreePath) && !existingWorktree) {
+    await deps.removePath(worktreePath, { force: true, recursive: true });
+    return { reusedExistingWorktree: false, worktrees };
+  }
+
+  return {
+    reusedExistingWorktree: Boolean(existingWorktree),
+    worktrees,
+  };
+}
+
 export async function runCli(
   argv: string[],
   deps: RuntimeDependencies = runtimeDependencies,
@@ -271,19 +405,37 @@ export async function runCli(
     throw new Error(`Missing source ${sourceEnvFilename} at ${sourceEnvPath}.`);
   }
 
-  if (deps.existsSync(worktreePath)) {
-    throw new Error(`Destination already exists: ${worktreePath}`);
+  await deps.mkdir(path.dirname(worktreePath), { recursive: true });
+
+  const destinationPrep = await prepareWorktreeDestination(worktreePath, deps);
+  const existingWorktree = findWorktreeByPath(destinationPrep.worktrees, worktreePath);
+  const branchWorktree = findWorktreeByBranch(destinationPrep.worktrees, options.branchName);
+
+  if (branchWorktree && !existingWorktree) {
+    throw new Error(
+      `Branch ${options.branchName} is already checked out at ${branchWorktree.path}. Reuse that worktree or choose a different branch name.`,
+    );
   }
 
-  await deps.mkdir(path.dirname(worktreePath), { recursive: true });
+  if (existingWorktree && existingWorktree.branchName && existingWorktree.branchName !== options.branchName) {
+    throw new Error(
+      `Destination already exists as worktree ${worktreePath} on branch ${existingWorktree.branchName}. Choose a different worktree name or branch.`,
+    );
+  }
+
+  if (existingWorktree && existingWorktree.detached) {
+    throw new Error(`Destination already exists as detached worktree ${worktreePath}. Resolve it manually before reusing this name.`);
+  }
 
   let worktreeCreated = false;
 
   try {
-    await createGitWorktree(worktreePath, options, deps);
-    worktreeCreated = true;
+    if (!existingWorktree) {
+      await createGitWorktree(worktreePath, options, deps);
+      worktreeCreated = true;
+    }
 
-    const envProvision = await provisionEnvFile(
+    const envProvision = await ensureEnvFile(
       sourceEnvPath,
       path.join(worktreePath, sourceEnvFilename),
       options,
