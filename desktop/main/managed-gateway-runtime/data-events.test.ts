@@ -43,6 +43,10 @@ describe("createDataEventHandler", () => {
       emit: (event) => emittedEvents.push(event.type),
       refreshHistory: async () => {},
       refreshDeviceHistory: async () => {},
+      refreshSyncStateOnly: async () => {},
+      markAnalyticsSyncInProgress: () => {},
+      markAnalyticsSyncComplete: () => {},
+      markAnalyticsSyncFailure: () => {},
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
       recordLiveMotion: (event) => {
@@ -99,6 +103,10 @@ describe("createDataEventHandler", () => {
       emit: (event) => emittedEvents.push(event),
       refreshHistory: async () => {},
       refreshDeviceHistory: async () => {},
+      refreshSyncStateOnly: async () => {},
+      markAnalyticsSyncInProgress: () => {},
+      markAnalyticsSyncComplete: () => {},
+      markAnalyticsSyncFailure: () => {},
       refreshAnalyticsNow: () => {},
       scheduleAnalyticsRefresh: () => {},
       recordLiveMotion: () => {},
@@ -146,6 +154,7 @@ describe("createDataEventHandler", () => {
   it("keeps backfill on the background analytics refresh path", async () => {
     const refreshAnalyticsNowCalls: string[] = [];
     const scheduleAnalyticsRefreshCalls: string[] = [];
+    const markedSyncStates: string[] = [];
     const emittedEvents: string[] = [];
     const refreshedDevices: string[] = [];
     const callOrder: string[] = [];
@@ -165,6 +174,18 @@ describe("createDataEventHandler", () => {
         refreshedDevices.push(deviceId);
         callOrder.push(`history:${deviceId}`);
       },
+      refreshSyncStateOnly: async () => {
+        throw new Error("should not refresh sync-only state on final page");
+      },
+      markAnalyticsSyncInProgress: (deviceId) => {
+        markedSyncStates.push(`syncing:${deviceId}`);
+      },
+      markAnalyticsSyncComplete: (deviceId) => {
+        markedSyncStates.push(`complete:${deviceId}`);
+      },
+      markAnalyticsSyncFailure: (deviceId, detail) => {
+        markedSyncStates.push(`failed:${deviceId}:${detail}`);
+      },
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => {
         scheduleAnalyticsRefreshCalls.push(deviceId);
@@ -179,6 +200,7 @@ describe("createDataEventHandler", () => {
       type: "backfill-recorded",
       payload: {},
       deviceId: "stack-001",
+      syncComplete: true,
     });
 
     await Promise.resolve();
@@ -187,6 +209,7 @@ describe("createDataEventHandler", () => {
     expect(refreshAnalyticsNowCalls).toEqual([]);
     expect(scheduleAnalyticsRefreshCalls).toEqual(["stack-001"]);
     expect(refreshedDevices).toEqual(["stack-001"]);
+    expect(markedSyncStates).toEqual(["complete:stack-001"]);
     expect(callOrder).toEqual(["history:stack-001", "analytics:stack-001"]);
     expect(emittedEvents).toContain("snapshot");
   });

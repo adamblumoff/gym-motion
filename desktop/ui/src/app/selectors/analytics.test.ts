@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
+  buildAnalyticsSyncDisplay,
   formatMovingDuration,
   sortAnalyticsNodes,
 } from "./analytics";
@@ -188,6 +189,98 @@ describe("buildAnalyticsOverview", () => {
       movementStarts: 20,
       busiestPeriodLabel: "Tuesday",
       busiestPeriodDurationLabel: "2h",
+    });
+  });
+});
+
+describe("buildAnalyticsSyncDisplay", () => {
+  it("returns a quiet complete state for idle analytics sync", () => {
+    const display = buildAnalyticsSyncDisplay({
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+      source: "canonical",
+      buckets: [],
+      totalMovementCount: 0,
+      totalMovingSeconds: 0,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
+        lastAckedSequence: 12,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    });
+
+    expect(display).toEqual({
+      label: "History up to date",
+      detail: null,
+      tone: "neutral",
+      showAnimation: false,
+    });
+  });
+
+  it("returns an animated syncing state while catch-up is running", () => {
+    const display = buildAnalyticsSyncDisplay({
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+      source: "cache",
+      buckets: [],
+      totalMovementCount: 0,
+      totalMovingSeconds: 0,
+      warningFlags: ["sync-delayed"],
+      sync: {
+        deviceId: "stack-001",
+        state: "syncing",
+        detail: null,
+        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
+        lastAckedSequence: 12,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    });
+
+    expect(display).toEqual({
+      label: "Syncing history",
+      detail: "Live updates stay current while analytics catches up in the background.",
+      tone: "muted",
+      showAnimation: true,
+    });
+  });
+
+  it("returns the failure detail when sync fails", () => {
+    const display = buildAnalyticsSyncDisplay({
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+      source: "cache",
+      buckets: [],
+      totalMovementCount: 0,
+      totalMovingSeconds: 0,
+      warningFlags: ["sync-failed"],
+      sync: {
+        deviceId: "stack-001",
+        state: "failed",
+        detail: "Database unavailable",
+        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
+        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
+        lastAckedSequence: 12,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    });
+
+    expect(display).toEqual({
+      label: "History sync failed",
+      detail: "Database unavailable",
+      tone: "warning",
+      showAnimation: false,
     });
   });
 });

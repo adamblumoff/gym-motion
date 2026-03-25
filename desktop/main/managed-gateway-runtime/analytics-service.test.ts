@@ -164,6 +164,173 @@ describe("createAnalyticsService", () => {
     expect(analytics.warningFlags).toContain("stale-cache");
   });
 
+  it("honors explicit runtime sync completion over the stale timestamp heuristic", async () => {
+    const cachedSnapshot: DeviceAnalyticsSnapshot = {
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: "2026-03-18T12:30:00.000Z",
+      source: "canonical",
+      buckets: [
+        {
+          key: "24h-0",
+          label: "12",
+          startAt: "2026-03-18T12:00:00.000Z",
+          endAt: "2026-03-18T13:00:00.000Z",
+          movementCount: 1,
+          movingSeconds: 900,
+        },
+      ],
+      totalMovementCount: 1,
+      totalMovingSeconds: 900,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: "2026-03-18T12:30:00.000Z",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    };
+
+    const service = createAnalyticsService({
+      store: createStore({
+        "gym-motion.desktop.analytics-cache.v1": {
+          "stack-001::24h": cachedSnapshot,
+        },
+      }),
+      getRuntimeDevice: () => ({
+        id: "stack-001",
+        lastState: "still",
+        lastSeenAt: 1,
+        lastDelta: null,
+        updatedAt: "2026-03-18T13:00:00.000Z",
+        hardwareId: null,
+        bootId: null,
+        firmwareVersion: "1.0.0",
+        machineLabel: null,
+        siteId: null,
+        provisioningState: "provisioned",
+        updateStatus: "idle",
+        updateTargetVersion: null,
+        updateDetail: null,
+        updateUpdatedAt: null,
+        lastHeartbeatAt: null,
+        lastEventReceivedAt: null,
+        healthStatus: "online",
+        gatewayConnectionState: "connected",
+        telemetryFreshness: "fresh",
+        peripheralId: null,
+        address: null,
+        gatewayLastAdvertisementAt: null,
+        gatewayLastConnectedAt: "2026-03-18T13:00:00.000Z",
+        gatewayLastDisconnectedAt: null,
+        gatewayLastTelemetryAt: "2026-03-18T13:00:00.000Z",
+        gatewayDisconnectReason: null,
+        advertisedName: null,
+        lastRssi: null,
+        otaStatus: "idle",
+        otaTargetVersion: null,
+        otaProgressBytesSent: null,
+        otaTotalBytes: null,
+        otaLastPhase: null,
+        otaFailureDetail: null,
+        otaLastStatusMessage: null,
+        otaUpdatedAt: null,
+        reconnectAttempt: 0,
+        reconnectAttemptLimit: 3,
+        reconnectRetryExhausted: false,
+      }),
+      onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets: async () => [],
+      listDeviceMotionEventsByReceivedAt: async () => [],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      getDeviceSyncState: async () => ({
+        deviceId: "stack-001",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastOverflowDetectedAt: null,
+      }),
+    });
+
+    service.markSyncComplete("stack-001");
+
+    const analytics = await service.getDeviceAnalytics({
+      deviceId: "stack-001",
+      window: "24h",
+    });
+
+    expect(analytics.sync.state).toBe("idle");
+    expect(analytics.warningFlags).not.toContain("sync-delayed");
+  });
+
+  it("honors explicit runtime sync progress before canonical refresh catches up", async () => {
+    const cachedSnapshot: DeviceAnalyticsSnapshot = {
+      deviceId: "stack-001",
+      window: "24h",
+      generatedAt: "2026-03-18T12:30:00.000Z",
+      source: "canonical",
+      buckets: [
+        {
+          key: "24h-0",
+          label: "12",
+          startAt: "2026-03-18T12:00:00.000Z",
+          endAt: "2026-03-18T13:00:00.000Z",
+          movementCount: 1,
+          movingSeconds: 900,
+        },
+      ],
+      totalMovementCount: 1,
+      totalMovingSeconds: 900,
+      warningFlags: [],
+      sync: {
+        deviceId: "stack-001",
+        state: "idle",
+        detail: null,
+        lastCanonicalAt: "2026-03-18T12:30:00.000Z",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastOverflowDetectedAt: null,
+      },
+    };
+
+    const service = createAnalyticsService({
+      store: createStore({
+        "gym-motion.desktop.analytics-cache.v1": {
+          "stack-001::24h": cachedSnapshot,
+        },
+      }),
+      getRuntimeDevice: () => null,
+      onUpdated: vi.fn(),
+      hasMotionRollupTables: async () => true,
+      listMotionRollupBuckets: async () => [],
+      listDeviceMotionEventsByReceivedAt: async () => [],
+      findLatestDeviceMotionEventBeforeReceivedAt: async () => null,
+      getDeviceSyncState: async () => ({
+        deviceId: "stack-001",
+        lastAckedSequence: 10,
+        lastAckedBootId: "boot-1",
+        lastSyncCompletedAt: "2026-03-18T12:30:00.000Z",
+        lastOverflowDetectedAt: null,
+      }),
+    });
+
+    service.markSyncInProgress("stack-001");
+
+    const analytics = await service.getDeviceAnalytics({
+      deviceId: "stack-001",
+      window: "24h",
+    });
+
+    expect(analytics.sync.state).toBe("syncing");
+    expect(analytics.warningFlags).toContain("sync-delayed");
+  });
+
   it("falls back to raw history when rollup tables are unavailable", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-03-18T12:30:00.000Z"));
     const listDeviceMotionEventsByReceivedAt = vi.fn(async () => [
@@ -538,9 +705,10 @@ describe("createAnalyticsService", () => {
 
     service.markSyncFailure("stack-001", "db unavailable");
 
-    await vi.waitFor(() => {
-      expect(onUpdated).toHaveBeenCalledTimes(1);
-    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onUpdated).toHaveBeenCalledTimes(1);
 
     expect(onUpdated).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -699,7 +867,9 @@ describe("createAnalyticsService", () => {
 
     onUpdated.mockClear();
     service.scheduleRefresh("stack-001", 0);
-    await vi.runAllTimersAsync();
+    vi.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(onUpdated).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -29,6 +29,9 @@ type DataEventHandlerDeps = {
   refreshHistory: () => Promise<void>;
   refreshDeviceHistory: (deviceId: string) => Promise<void>;
   refreshSyncStateOnly: (deviceId: string) => Promise<void>;
+  markAnalyticsSyncInProgress: (deviceId: string) => void;
+  markAnalyticsSyncComplete: (deviceId: string) => void;
+  markAnalyticsSyncFailure: (deviceId: string, detail: string) => void;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
   recordLiveMotion: (event: MotionStreamPayload["event"]) => void;
@@ -191,6 +194,11 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
           deviceId: event.deviceId,
           syncComplete: event.syncComplete ?? false,
         });
+        if (event.syncComplete) {
+          deps.markAnalyticsSyncComplete(event.deviceId);
+        } else {
+          deps.markAnalyticsSyncInProgress(event.deviceId);
+        }
         void refreshWithRetry(() =>
           event.syncComplete
             ? deps.refreshDeviceHistory(event.deviceId)
@@ -208,15 +216,17 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
           })
           .catch((error) => {
+            const detail =
+              error instanceof Error
+                ? error.message
+                : "History refresh failed after backfill.";
             logBackfillEvent("backfill device history refresh failed", {
               deviceId: event.deviceId,
-              detail:
-                error instanceof Error
-                  ? error.message
-                  : "History refresh failed after backfill.",
+              detail,
             });
+            deps.markAnalyticsSyncFailure(event.deviceId, detail);
             deps.reportHistoryRefreshFailure(
-              error instanceof Error ? error.message : "History refresh failed after backfill.",
+              detail,
             );
           });
         break;
