@@ -20,6 +20,7 @@ export default defineConfig({
       "shared/**/*.test.ts",
       "desktop/**/*.test.ts",
       "backend/**/*.test.ts",
+      "scripts/**/*.test.ts",
     ],
     exclude: [
       "desktop/e2e/**/*.spec.ts",

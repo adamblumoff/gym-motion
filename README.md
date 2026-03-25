@@ -35,6 +35,7 @@ bun run dev
 bun run test
 bun run lint
 bun run typecheck
+bun run worktree:create:t3 -- <worktree-name> <branch-name>
 ```
 
 Windows packaging:
@@ -55,6 +56,9 @@ bun run test:windows-desktop
 - Copy `.env.local` into that Windows repo after cloning.
 - Install the Rust MSVC toolchain on Windows before running `bun run dev` or `bun run build:win`.
 - Validate the real BLE flow from Windows, not from a non-Windows bench path.
+- Create new T3 worktrees through `bun run worktree:create:t3 -- <worktree-name> <branch-name>` so `.env.local` is provisioned automatically.
+- The new worktree command shares `.env.local` live by default when links are available, so editing `.env.local` inside a linked worktree updates the shared source env file too.
+- If Windows blocks linking, the command falls back to a copy and prints that the worktree is no longer live-synced.
 
 ## Notes
 
