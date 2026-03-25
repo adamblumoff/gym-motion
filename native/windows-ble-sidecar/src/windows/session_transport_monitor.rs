@@ -61,7 +61,6 @@ pub(super) async fn monitor_active_session(
     async fn remember_active_session_control(
         active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
         device_id: &str,
-        live: &ActiveLiveControl,
         history: &ActiveHistoryControl,
     ) {
         active_session_controls
@@ -70,7 +69,6 @@ pub(super) async fn monitor_active_session(
             .insert(
                 device_id.to_string(),
                 ActiveSessionChannels {
-                    live: live.clone(),
                     history: history.clone(),
                 },
             );
@@ -251,7 +249,6 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         device_id,
-                                        &current_live_control,
                                         &current_history_control,
                                     )
                                     .await;
@@ -318,7 +315,6 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         &status.device_id,
-                                        &current_live_control,
                                         &current_history_control,
                                     )
                                     .await;
@@ -354,7 +350,6 @@ pub(super) async fn monitor_active_session(
                                     remember_active_session_control(
                                         &active_session_controls,
                                         &status.device_id,
-                                        &current_live_control,
                                         &current_history_control,
                                     )
                                     .await;
@@ -423,7 +418,6 @@ pub(super) async fn monitor_active_session(
                             remember_active_session_control(
                                 &active_session_controls,
                                 &payload.device_id,
-                                &current_live_control,
                                 &current_history_control,
                             )
                             .await;
@@ -636,7 +630,6 @@ pub(super) async fn monitor_active_session(
                                 remember_active_session_control(
                                     &active_session_controls,
                                     device_id,
-                                    &current_live_control,
                                     &current_history_control,
                                 )
                                 .await;

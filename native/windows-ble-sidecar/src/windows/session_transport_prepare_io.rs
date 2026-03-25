@@ -90,6 +90,20 @@ fn required_characteristic(
         .ok_or_else(|| anyhow!(missing_message.to_string()))
 }
 
+fn required_service(
+    peripheral: &Peripheral,
+    uuid: uuid::Uuid,
+    missing_message: &str,
+) -> Result<()> {
+    let found = peripheral
+        .services()
+        .iter()
+        .any(|service| service.uuid == uuid);
+    found
+        .then_some(())
+        .ok_or_else(|| anyhow!(missing_message.to_string()))
+}
+
 pub(super) async fn prepare_runtime_session_io(
     peripheral: &Peripheral,
     node: &DiscoveredNode,
@@ -100,6 +114,32 @@ pub(super) async fn prepare_runtime_session_io(
     app_session_nonce: &str,
     io_config: PrepareSessionIoConfig,
 ) -> Result<(NotificationStream, Characteristic, Characteristic)> {
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "verifying runtime service",
+    )
+    .await?;
+    required_service(
+        peripheral,
+        config.service_uuid,
+        "runtime service not found",
+    )?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "verifying history service",
+    )
+    .await?;
+    required_service(
+        peripheral,
+        config.history_service_uuid,
+        "history service not found",
+    )?;
     emit_handshake_step(
         writer,
         config.verbose_logging,

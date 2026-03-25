@@ -56,7 +56,6 @@ pub(super) struct ActiveHistoryControl {
 
 #[derive(Clone)]
 pub(super) struct ActiveSessionChannels {
-    pub(super) live: ActiveLiveControl,
     pub(super) history: ActiveHistoryControl,
 }
 
