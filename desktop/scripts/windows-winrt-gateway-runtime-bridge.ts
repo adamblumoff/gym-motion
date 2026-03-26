@@ -583,6 +583,48 @@ export function createRuntimeBridge({
     }
   }
 
+  function handleHistoryErrorNow(event) {
+    const payload = event.payload ?? {};
+    const deviceId = payload.device_id;
+    const state = historySyncByDevice.get(deviceId);
+    const context = deviceContexts.get(deviceId);
+
+    logBackfill("received history sync error", {
+      deviceId: deviceId ?? null,
+      code: payload.code ?? null,
+      detail: payload.message ?? null,
+      requestId: payload.request_id ?? null,
+      status: state?.status ?? null,
+    });
+
+    if (!deviceId || !state || !context) {
+      return;
+    }
+
+    if (payload.request_id && payload.request_id !== state.requestId) {
+      logBackfill("ignoring history sync error for stale request", {
+        deviceId,
+        expectedRequestId: state.requestId ?? null,
+        requestId: payload.request_id ?? null,
+      });
+      return;
+    }
+
+    state.completionPending = false;
+    pauseBackfill(
+      context,
+      state,
+      "history sync failed",
+      {
+        deviceId,
+        bootId: state.bootId,
+        code: payload.code ?? null,
+        detail: payload.message ?? null,
+        requestId: payload.request_id ?? null,
+      },
+    );
+  }
+
   async function forwardTelemetryNow(payload, node = {}) {
     let context = deviceContexts.get(payload.deviceId);
 
@@ -715,6 +757,15 @@ export function createRuntimeBridge({
     }
 
     return queueHistoryDeviceTask(deviceId, () => handleHistorySyncCompleteNow(event));
+  }
+
+  function handleHistoryError(event) {
+    const deviceId = event?.payload?.device_id;
+    if (!deviceId) {
+      return Promise.resolve();
+    }
+
+    return queueHistoryDeviceTask(deviceId, () => handleHistoryErrorNow(event));
   }
 
   function handleNodeDiscovered(node, scanReason = null) {
@@ -871,6 +922,7 @@ export function createRuntimeBridge({
     forwardTelemetry,
     handleHistoryRecord,
     handleHistorySyncComplete,
+    handleHistoryError,
     handleNodeDiscovered,
     handleNodeConnectionState,
   };

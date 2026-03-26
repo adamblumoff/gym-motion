@@ -206,6 +206,10 @@ pub enum Event {
         node: DiscoveredNode,
         payload: HistorySyncCompletePayload,
     },
+    HistoryError {
+        node: DiscoveredNode,
+        payload: HistoryErrorPayload,
+    },
     Log {
         level: String,
         message: String,
@@ -222,7 +226,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApprovedNodeRule, Command, Event, HistorySyncCompletePayload, TelemetryPayload,
+        ApprovedNodeRule, Command, Event, HistoryErrorPayload, HistorySyncCompletePayload,
+        TelemetryPayload,
     };
 
     #[test]
@@ -500,5 +505,35 @@ mod tests {
         assert_eq!(value["payload"]["request_id"], "req-1");
         assert_eq!(value["payload"]["latest_sequence"], 20);
         assert_eq!(value["payload"]["has_more"], true);
+    }
+
+    #[test]
+    fn serializes_history_error_event() {
+        let value = serde_json::to_value(Event::HistoryError {
+            node: DiscoveredNode {
+                id: "node-1".to_string(),
+                label: "GymMotion-node-1".to_string(),
+                peripheral_id: Some("AA:BB".to_string()),
+                address: Some("11:22".to_string()),
+                local_name: Some("GymMotion-node-1".to_string()),
+                known_device_id: Some("device-1".to_string()),
+                last_rssi: Some(-40),
+                last_seen_at: Some("2026-03-14T00:00:00.000Z".to_string()),
+            },
+            payload: HistoryErrorPayload {
+                status_type: "history-error".to_string(),
+                device_id: "device-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                request_id: Some("req-1".to_string()),
+                code: "history.session_unavailable".to_string(),
+                message: "History sync requires an active runtime app session.".to_string(),
+            },
+        })
+        .expect("event should serialize");
+
+        assert_eq!(value["type"], "history_error");
+        assert_eq!(value["payload"]["device_id"], "device-1");
+        assert_eq!(value["payload"]["request_id"], "req-1");
+        assert_eq!(value["payload"]["code"], "history.session_unavailable");
     }
 }

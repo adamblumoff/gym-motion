@@ -532,6 +532,32 @@ function handleSidecarEvent(event) {
           setRuntimeIssue(error instanceof Error ? error.message : "History sync failed.");
         });
       break;
+    case "history_error":
+      log("received history sync error", {
+        deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
+        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
+        code: event.payload?.code ?? null,
+        detail: event.payload?.message ?? null,
+      });
+      void runtimeBridge
+        .handleHistoryError({
+          node: event.node ?? {},
+          payload: event.payload ?? {},
+        })
+        .then(() => {
+          emitDesktopMessage({
+            type: "history_error",
+            node: event.node ?? {},
+            payload: event.payload ?? {},
+          });
+        })
+        .catch((error) => {
+          console.error("[gateway-winrt] failed to process history sync error", error);
+          setRuntimeIssue(
+            error instanceof Error ? error.message : "History sync failure handling failed.",
+          );
+        });
+      break;
     case "log":
       if (
         shouldWriteSidecarLog(event.level ?? "info", event.message ?? "sidecar log", config.verbose)

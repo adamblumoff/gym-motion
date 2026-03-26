@@ -409,6 +409,12 @@ export function createManagedGatewayRuntime(
       case "runtime-device-updated":
         applyRuntimeDevicePatch(message.device);
         break;
+      case "history_error":
+        analyticsService.markSyncFailure(
+          message.payload.device_id,
+          message.payload.message ?? "History sync failed.",
+        );
+        break;
       case "control-response":
         break;
     }

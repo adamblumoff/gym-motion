@@ -126,6 +126,19 @@ export type GatewayChildHistorySyncCompleteMessage = {
   };
 };
 
+export type GatewayChildHistoryErrorMessage = {
+  type: "history_error";
+  node: GatewayChildHistoryRecordMessage["node"];
+  payload: {
+    status_type: string;
+    device_id: string;
+    session_id?: string | null;
+    request_id?: string | null;
+    code: string;
+    message: string;
+  };
+};
+
 export type GatewayParentPersistAckMessage = {
   type: "persist-ack";
   messageId: string;
@@ -141,7 +154,8 @@ export type GatewayChildRuntimeMessage =
   | GatewayChildRuntimeReadyMessage
   | GatewayChildControlResponseMessage
   | GatewayChildHistoryRecordMessage
-  | GatewayChildHistorySyncCompleteMessage;
+  | GatewayChildHistorySyncCompleteMessage
+  | GatewayChildHistoryErrorMessage;
 
 export type GatewayChildMessage = GatewayChildPersistMessage | GatewayChildRuntimeMessage;
 
@@ -191,6 +205,7 @@ export function parseGatewayChildMessage(input: unknown): GatewayChildMessage | 
     case "control-response":
     case "history_record":
     case "history_sync_complete":
+    case "history_error":
       return input as GatewayChildRuntimeMessage;
     default:
       return null;

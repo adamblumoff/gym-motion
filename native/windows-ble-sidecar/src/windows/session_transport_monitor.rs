@@ -374,15 +374,9 @@ pub(super) async fn monitor_active_session(
                             "history-error" => match serde_json::from_value::<HistoryErrorPayload>(payload) {
                                 Ok(status) => {
                                     writer
-                                        .send(&Event::Log {
-                                            level: "warn".to_string(),
-                                            message: format!("History channel reported {}", status.code),
-                                            details: Some(json!({
-                                                "node": node.id,
-                                                "deviceId": status.device_id,
-                                                "requestId": status.request_id,
-                                                "detail": status.message,
-                                            })),
+                                        .send(&Event::HistoryError {
+                                            node: node.clone(),
+                                            payload: status,
                                         })
                                         .await?;
                                 }
