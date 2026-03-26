@@ -9,7 +9,7 @@ export const router = createHashRouter([
     Component: AppLayout,
     children: [
       {
-        path: "/",
+        index: true,
         Component: Dashboard,
       },
       {

@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Link, useLocation } from "react-router";
 
@@ -12,9 +13,20 @@ export function SidebarNavItem({ icon: Icon, label, to, collapsed }: SidebarNavI
   const { pathname } = useLocation();
   const isActive = to === "/" ? pathname === "/" : pathname.startsWith(to);
 
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (to !== "/" || pathname === "/") {
+      return;
+    }
+
+    event.preventDefault();
+    window.location.hash = "#/";
+    window.location.reload();
+  }
+
   return (
     <Link
       to={to}
+      onClick={handleClick}
       title={collapsed ? label : undefined}
       className={[
         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150",
