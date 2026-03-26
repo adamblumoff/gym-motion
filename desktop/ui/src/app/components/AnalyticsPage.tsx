@@ -294,32 +294,6 @@ export function AnalyticsPage() {
         icon={TrendingUp}
         backHref="/"
         backLabel="Back to Dashboard"
-        rightSlot={(
-          <div className="flex items-center gap-2">
-            <Badge
-              variant="outline"
-              className="border-zinc-800 bg-zinc-950 text-zinc-300"
-            >
-              {connectionLabel(selectedNode.connectionState)}
-            </Badge>
-            {currentAnalytics ? (
-              <Badge
-                variant="outline"
-                className="border-zinc-800 bg-zinc-950 text-zinc-300"
-              >
-                {currentAnalytics.source === "cache" ? "Cached snapshot" : "Canonical snapshot"}
-              </Badge>
-            ) : null}
-            {currentAnalytics?.liveOverlay?.active ? (
-              <Badge
-                variant="outline"
-                className="border-emerald-800 bg-emerald-950/40 text-emerald-200"
-              >
-                Live overlay active
-              </Badge>
-            ) : null}
-          </div>
-        )}
       />
 
       <div className="flex-1 overflow-auto p-6">
@@ -378,7 +352,7 @@ export function AnalyticsPage() {
           </Card>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.8fr)_repeat(3,minmax(0,1fr))]">
-            <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-emerald-500/5">
+            <Card className="group border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-emerald-500/5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Utilization</p>
@@ -391,7 +365,7 @@ export function AnalyticsPage() {
                   <p className="mt-3 max-w-2xl text-sm text-zinc-400">{utilizationSummary}</p>
                 </div>
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-3">
-                  <TrendingUp className="size-6 text-emerald-300" />
+                  <TrendingUp className="size-6 text-emerald-300 group-hover:-translate-y-0.5 group-hover:scale-105 transition-transform duration-300" />
                 </div>
               </div>
 
@@ -400,7 +374,7 @@ export function AnalyticsPage() {
                   <span>Utilization Meter</span>
                   <span>{overview?.movementStarts ?? 0} starts</span>
                 </div>
-                <div className="mt-3 h-3 overflow-hidden rounded-full bg-zinc-900">
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-zinc-900 group-hover:shadow-[0_0_8px_rgba(52,211,153,0.15)] transition-shadow duration-300">
                   <div
                     className="h-full rounded-full bg-gradient-to-r from-emerald-300 via-cyan-300 to-blue-300 transition-[width] duration-500"
                     style={{ width: `${overview?.utilizationPercent ?? 0}%` }}

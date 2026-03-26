@@ -38,14 +38,14 @@ export function BluetoothNode({
 
   return (
     <Card
-      className="bg-zinc-900 border-zinc-800 overflow-hidden cursor-pointer hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-blue-500/5"
+      className="group bg-zinc-900 border-zinc-800 overflow-hidden cursor-pointer hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-blue-500/5"
       onClick={onClick}
     >
       <div className="p-4 border-b border-zinc-800">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3 flex-1 min-w-0">
             <div className={`relative p-2 rounded-lg ${node.isMoving ? 'bg-blue-500/10' : 'bg-zinc-800'}`}>
-              <Bluetooth className={`size-5 ${node.isMoving ? 'text-blue-400' : 'text-zinc-500'}`} />
+              <Bluetooth className={`size-5 group-hover:rotate-12 transition-transform duration-300 ${node.isMoving ? 'text-blue-400' : 'text-zinc-500'}`} />
               {node.isMoving && (
                 <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-blue-400 animate-ping" />
               )}

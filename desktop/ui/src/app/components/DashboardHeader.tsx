@@ -18,9 +18,9 @@ export function DashboardHeader({
   return (
     <div className="bg-zinc-900 border-b border-zinc-800 px-6 py-5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="group/brand flex items-center gap-3">
           <div className="p-2.5 bg-blue-500/10 rounded-lg">
-            <Bluetooth className="size-6 text-blue-400" />
+            <Bluetooth className="size-6 text-blue-400 group-hover/brand:scale-110 transition-transform duration-300" />
           </div>
           <div>
             <h1 className="text-xl font-semibold text-zinc-100">Motion Tracking Dashboard</h1>
@@ -52,16 +52,16 @@ export function DashboardHeader({
           <Button
             asChild
             variant="ghost"
-            className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+            className="group text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
           >
             <Link to="/analytics">
-              <BarChart3 className="size-4 mr-2" />
+              <BarChart3 className="size-4 mr-2 group-hover:translate-y-[-1px] transition-transform duration-200" />
               Analytics
             </Link>
           </Button>
-          <Button asChild className="bg-blue-500 hover:bg-blue-600 text-white">
+          <Button asChild className="group bg-blue-500 hover:bg-blue-600 text-white">
             <Link to="/setup">
-              <Settings className="size-4 mr-2" />
+              <Settings className="size-4 mr-2 group-hover:rotate-90 transition-transform duration-300" />
               Setup Sensors
             </Link>
           </Button>

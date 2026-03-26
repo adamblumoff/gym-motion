@@ -46,10 +46,10 @@ export function PageHeader({
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-zinc-400 hover:text-zinc-100"
+                className="group text-zinc-400 hover:text-zinc-100"
                 onClick={handleBackClick}
               >
-                <ArrowLeft className="size-4 mr-2" />
+                <ArrowLeft className="size-4 mr-2 group-hover:-translate-x-0.5 transition-transform duration-200" />
                 {backLabel}
               </Button>
               <div className="w-px h-8 bg-zinc-800" />
