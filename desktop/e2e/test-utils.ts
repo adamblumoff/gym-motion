@@ -88,7 +88,7 @@ export async function launchDesktopApp(
       typeof window.gymMotionDesktopTest !== "undefined"
     );
   });
-  await expect(page.getByText("Motion Tracking Dashboard")).toBeVisible();
+  await expect(page.getByText("Motion Tracking")).toBeVisible();
   await expect
     .poll(async () => (await page.evaluate(() => window.gymMotionDesktop.getSnapshot())).runtimeState)
     .toBe("running");

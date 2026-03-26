@@ -1,4 +1,4 @@
-import { BarChart3, Bluetooth, ChevronLeft, ChevronRight, LayoutDashboard, Settings } from "lucide-react";
+import { ArrowLeftFromLine, ArrowRightFromLine, BarChart3, Bluetooth, LayoutDashboard, Settings } from "lucide-react";
 
 import { useSidebar } from "./SidebarContext";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -14,7 +14,7 @@ export function AppSidebar() {
       ].join(" ")}
     >
       {/* Brand */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border">
+      <div className="flex items-center gap-3 px-4 py-4 border-b border-sidebar-border">
         <div className="p-2 bg-blue-500/10 rounded-lg shrink-0">
           <Bluetooth className="size-5 text-blue-400" />
         </div>
@@ -33,7 +33,7 @@ export function AppSidebar() {
         <SidebarNavItem icon={BarChart3} label="Analytics" to="/analytics" collapsed={collapsed} />
       </nav>
 
-      {/* Collapse toggle */}
+      {/* Collapse / expand toggle */}
       <div className="border-t border-sidebar-border px-3 py-3">
         <button
           type="button"
@@ -44,7 +44,10 @@ export function AppSidebar() {
           ].join(" ")}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? <ChevronRight className="size-5 shrink-0" /> : <ChevronLeft className="size-5 shrink-0" />}
+          {collapsed
+            ? <ArrowRightFromLine className="size-4 shrink-0" />
+            : <ArrowLeftFromLine className="size-4 shrink-0" />
+          }
           {!collapsed && <span>Collapse</span>}
         </button>
       </div>

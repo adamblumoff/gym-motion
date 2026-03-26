@@ -34,8 +34,8 @@ test("forgetting a node prevents resurrection until it is scanned and paired aga
 
     await app.page.getByRole("link", { name: /Analytics/i }).click();
     await expect(app.page.getByText("No approved nodes are available for analytics yet.")).toBeVisible();
-    await app.page.getByRole("button", { name: /Back to Dashboard/i }).click();
-    await expect(app.page.getByText("Motion Tracking Dashboard")).toBeVisible();
+    await app.page.getByRole("link", { name: /^Dashboard$/i }).click();
+    await expect(app.page.getByText("Motion Tracking")).toBeVisible();
     await expect(app.page.getByText("No sensors configured. Go to Setup to add devices.")).toBeVisible();
 
     await app.page.evaluate(() => {
