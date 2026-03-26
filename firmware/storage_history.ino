@@ -241,12 +241,14 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
 }
 
 void sendHistorySyncComplete(
+  const String& requestId,
   unsigned long latestSequence,
   unsigned long highWaterSequence,
   size_t sentCount
 ) {
   String payload =
-    "{\"type\":\"history-sync-complete\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "{\"type\":\"history-page-complete\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) +
     "\",\"latestSequence\":" + String(latestSequence) +
     ",\"highWaterSequence\":" + String(highWaterSequence) +
     ",\"sentCount\":" + String(sentCount) +
@@ -257,7 +259,7 @@ void sendHistorySyncComplete(
   }
 
   payload += "}";
-  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueHistoryNotificationChunked(historyStatusCharacteristic, runtimeBleConnected, payload);
 
   logRuntimeHistoryEvent(
     "Sync complete latestSequence=" + String(latestSequence) +
@@ -268,27 +270,170 @@ void sendHistorySyncComplete(
   );
 }
 
-void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
-  File history = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
-  const unsigned long highWaterSequence =
-    nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+void sendHistoryError(
+  const String& sessionId,
+  const String& requestId,
+  const String& code,
+  const String& message
+) {
+  String payload =
+    "{\"type\":\"history-error\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) +
+    "\",\"code\":\"" + escapeJsonString(code) +
+    "\",\"message\":\"" + escapeJsonString(message) + "\"}";
+  enqueueHistoryNotificationChunked(historyStatusCharacteristic, runtimeBleConnected, payload);
+  logRuntimeHistoryEvent(code + ": " + message);
+}
 
-  logRuntimeHistoryEvent(
-    "Streaming records afterSequence=" + String(afterSequence) +
-    " maxRecords=" + String(maxRecords) +
-    " highWaterSequence=" + String(highWaterSequence)
-  );
+void cancelHistoryWorker() {
+  if (historyWorkerFile) {
+    historyWorkerFile.close();
+  }
 
-  if (!history) {
-    sendHistorySyncComplete(afterSequence, highWaterSequence, 0);
+  historyWorkerState = HistoryWorkerState();
+}
+
+void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command) {
+  const firmware_runtime::HistorySyncRequest request =
+    firmware_runtime::createHistorySyncRequest(command, HISTORY_SYNC_PAGE_SIZE);
+
+  if (!runtimeBleConnected || !runtimeAppSessionConnected) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.session_unavailable",
+      "History sync requires an active runtime app session."
+    );
     return;
   }
 
-  size_t sentCount = 0;
-  unsigned long latestSequence = afterSequence;
+  if (request.sessionId.length() == 0 || request.requestId.length() == 0) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.invalid_request",
+      "History page request requires both sessionId and requestId."
+    );
+    return;
+  }
 
-  while (history.available()) {
-    String line = history.readStringUntil('\n');
+  if (String(request.sessionId.c_str()) != runtimeAppSessionId) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.session_mismatch",
+      "History page request did not match the active runtime app session."
+    );
+    return;
+  }
+
+  cancelHistoryWorker();
+  historyWorkerState.phase = HistoryWorkerPhase::Streaming;
+  historyWorkerState.sessionId = request.sessionId.c_str();
+  historyWorkerState.requestId = request.requestId.c_str();
+  historyWorkerState.requestedAfterSequence = request.afterSequence;
+  historyWorkerState.maxRecords = request.maxRecords;
+  historyWorkerState.highWaterSequence = nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+  historyWorkerState.latestSequence = request.afterSequence;
+  historyWorkerState.overflowed = historyOverflowed;
+  historyWorkerState.droppedCount = historyDroppedCount;
+
+  historyWorkerFile = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  logRuntimeHistoryEvent(
+    "Queued history page request requestId=" + historyWorkerState.requestId +
+    " afterSequence=" + String(historyWorkerState.requestedAfterSequence) +
+    " maxRecords=" + String(historyWorkerState.maxRecords)
+  );
+}
+
+void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command) {
+  const firmware_runtime::HistoryAckRequest request =
+    firmware_runtime::createHistoryAckRequest(command);
+
+  if (!runtimeAppSessionConnected || String(request.sessionId.c_str()) != runtimeAppSessionId) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.ack_session_mismatch",
+      "History page ack did not match the active runtime app session."
+    );
+    return;
+  }
+
+  if (request.requestId.length() == 0) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.invalid_ack",
+      "History page ack requires a requestId."
+    );
+    return;
+  }
+
+  const bool matchesActive =
+    historyWorkerState.requestId.length() > 0 &&
+    String(request.requestId.c_str()) == historyWorkerState.requestId;
+  const bool matchesCompleted =
+    lastCompletedHistoryRequestId.length() > 0 &&
+    String(request.requestId.c_str()) == lastCompletedHistoryRequestId;
+
+  if (!matchesActive && !matchesCompleted) {
+    sendHistoryError(
+      request.sessionId.c_str(),
+      request.requestId.c_str(),
+      "history.ack_request_mismatch",
+      "History page ack did not match the active history request."
+    );
+    return;
+  }
+
+  acknowledgeHistoryThrough(request.sequence);
+
+  if (matchesActive && historyWorkerState.phase == HistoryWorkerPhase::AwaitingAck) {
+    lastCompletedHistoryRequestId = request.requestId.c_str();
+    cancelHistoryWorker();
+  }
+}
+
+void queueHistoryRecord(const String& requestId, const String& line) {
+  enqueueHistoryNotificationChunked(
+    historyStatusCharacteristic,
+    runtimeBleConnected,
+    "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) +
+    "\",\"record\":" + line + "}"
+  );
+}
+
+void pumpHistoryWorker() {
+  if (historyWorkerState.phase != HistoryWorkerPhase::Streaming) {
+    return;
+  }
+
+  if (historyTxQueue.length >= (BLE_TX_QUEUE_CAPACITY / 2)) {
+    return;
+  }
+
+  if (!historyWorkerFile) {
+    historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+    sendHistorySyncComplete(
+      historyWorkerState.requestId,
+      historyWorkerState.latestSequence,
+      historyWorkerState.highWaterSequence,
+      historyWorkerState.sentCount
+    );
+    return;
+  }
+
+  size_t sentThisSlice = 0;
+  while (
+    historyWorkerFile.available() &&
+    historyWorkerState.sentCount < historyWorkerState.maxRecords &&
+    sentThisSlice < HISTORY_WORKER_RECORDS_PER_SLICE &&
+    historyTxQueue.length < (BLE_TX_QUEUE_CAPACITY - 8)
+  ) {
+    String line = historyWorkerFile.readStringUntil('\n');
     line.trim();
 
     if (line.length() == 0) {
@@ -296,24 +441,27 @@ void streamHistoryRecords(unsigned long afterSequence, size_t maxRecords) {
     }
 
     const unsigned long sequence = extractJsonUnsignedLong(line, "sequence", 0);
-    if (sequence <= afterSequence) {
+    if (sequence <= historyWorkerState.requestedAfterSequence) {
       continue;
     }
 
-    if (sentCount >= maxRecords) {
-      break;
-    }
-
-    notifyCharacteristicChunked(
-      runtimeStatusCharacteristic,
-      runtimeBleConnected,
-      "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-      "\",\"record\":" + line + "}"
-    );
-    latestSequence = sequence;
-    sentCount++;
+    queueHistoryRecord(historyWorkerState.requestId, line);
+    historyWorkerState.latestSequence = sequence;
+    historyWorkerState.sentCount += 1;
+    sentThisSlice += 1;
   }
 
-  history.close();
-  sendHistorySyncComplete(latestSequence, highWaterSequence, sentCount);
+  if (
+    historyWorkerState.sentCount >= historyWorkerState.maxRecords ||
+    !historyWorkerFile.available()
+  ) {
+    historyWorkerFile.close();
+    historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+    sendHistorySyncComplete(
+      historyWorkerState.requestId,
+      historyWorkerState.latestSequence,
+      historyWorkerState.highWaterSequence,
+      historyWorkerState.sentCount
+    );
+  }
 }

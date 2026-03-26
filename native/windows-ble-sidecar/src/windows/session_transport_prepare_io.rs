@@ -90,6 +90,20 @@ fn required_characteristic(
         .ok_or_else(|| anyhow!(missing_message.to_string()))
 }
 
+fn required_service(
+    peripheral: &Peripheral,
+    uuid: uuid::Uuid,
+    missing_message: &str,
+) -> Result<()> {
+    let found = peripheral
+        .services()
+        .iter()
+        .any(|service| service.uuid == uuid);
+    found
+        .then_some(())
+        .ok_or_else(|| anyhow!(missing_message.to_string()))
+}
+
 pub(super) async fn prepare_runtime_session_io(
     peripheral: &Peripheral,
     node: &DiscoveredNode,
@@ -99,7 +113,33 @@ pub(super) async fn prepare_runtime_session_io(
     app_session_id: &str,
     app_session_nonce: &str,
     io_config: PrepareSessionIoConfig,
-) -> Result<(NotificationStream, Characteristic)> {
+) -> Result<(NotificationStream, Characteristic, Characteristic)> {
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "verifying runtime service",
+    )
+    .await?;
+    required_service(
+        peripheral,
+        config.service_uuid,
+        "runtime service not found",
+    )?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "verifying history service",
+    )
+    .await?;
+    required_service(
+        peripheral,
+        config.history_service_uuid,
+        "history service not found",
+    )?;
     emit_handshake_step(
         writer,
         config.verbose_logging,
@@ -131,6 +171,19 @@ pub(super) async fn prepare_runtime_session_io(
         config.verbose_logging,
         node,
         reconnect,
+        "resolving history control characteristic",
+    )
+    .await?;
+    let history_control_characteristic = required_characteristic(
+        peripheral,
+        config.history_control_uuid,
+        "history control characteristic not found",
+    )?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
         "resolving runtime status characteristic",
     )
     .await?;
@@ -138,6 +191,19 @@ pub(super) async fn prepare_runtime_session_io(
         peripheral,
         config.status_uuid,
         "runtime status characteristic not found",
+    )?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "resolving history status characteristic",
+    )
+    .await?;
+    let history_status_characteristic = required_characteristic(
+        peripheral,
+        config.history_status_uuid,
+        "history status characteristic not found",
     )?;
     wait_for_cold_boot_ready_window(
         peripheral,
@@ -178,6 +244,18 @@ pub(super) async fn prepare_runtime_session_io(
         config.verbose_logging,
         node,
         reconnect,
+        "subscribing to history status",
+    )
+    .await?;
+    peripheral
+        .subscribe(&history_status_characteristic)
+        .await
+        .with_context(|| format!("history status subscribe step failed for {}", node.label))?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
         "subscribing to telemetry",
     )
     .await?;
@@ -208,5 +286,5 @@ pub(super) async fn prepare_runtime_session_io(
         .await
         .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
 
-    Ok((notifications, control_characteristic))
+    Ok((notifications, control_characteristic, history_control_characteristic))
 }

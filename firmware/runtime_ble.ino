@@ -15,38 +15,126 @@ void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, con
   Serial.println(payload);
   characteristic->setValue(payload.c_str());
   characteristic->notify();
-  delay(30);
+  delay(BLE_TX_MIN_INTERVAL_MS);
 }
 
-void notifyCharacteristicChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
+bool enqueueBleTxMessage(
+  BleTxQueue& queue,
+  BLECharacteristic* characteristic,
+  bool* connectedFlag,
+  const String& payload
+) {
   if (characteristic == nullptr) {
-    Serial.print("BLE chunked notify skipped (missing characteristic): ");
+    Serial.print("BLE queue skipped (missing characteristic): ");
     Serial.println(payload);
-    return;
+    return false;
   }
 
-  if (!connected) {
-    Serial.print("BLE chunked notify skipped (runtime client disconnected): ");
+  if (connectedFlag == nullptr || !(*connectedFlag)) {
+    Serial.print("BLE queue skipped (runtime client disconnected): ");
     Serial.println(payload);
-    return;
+    return false;
   }
 
-  Serial.print("BLE chunked notify sent: ");
-  Serial.println(payload);
-  characteristic->setValue(("BEGIN:" + String(payload.length())).c_str());
-  characteristic->notify();
-  delay(30);
+  if (queue.length >= BLE_TX_QUEUE_CAPACITY) {
+    Serial.print("BLE queue dropped (full): ");
+    Serial.println(payload);
+    return false;
+  }
+
+  BleTxMessage& entry = queue.entries[queue.tail];
+  entry.characteristic = characteristic;
+  entry.connectedFlag = connectedFlag;
+  entry.payload = payload;
+  queue.tail = (queue.tail + 1) % BLE_TX_QUEUE_CAPACITY;
+  queue.length += 1;
+  return true;
+}
+
+void enqueueChunkedNotification(
+  BleTxQueue& queue,
+  BLECharacteristic* characteristic,
+  bool* connectedFlag,
+  const String& payload
+) {
+  if (!enqueueBleTxMessage(queue, characteristic, connectedFlag, "BEGIN:" + String(payload.length()))) {
+    return;
+  }
 
   for (size_t offset = 0; offset < payload.length(); offset += STATUS_CHUNK_SIZE) {
-    const String chunk = payload.substring(offset, offset + STATUS_CHUNK_SIZE);
-    characteristic->setValue(chunk.c_str());
-    characteristic->notify();
-    delay(30);
+    if (!enqueueBleTxMessage(
+          queue,
+          characteristic,
+          connectedFlag,
+          payload.substring(offset, offset + STATUS_CHUNK_SIZE)
+        )) {
+      return;
+    }
   }
 
-  characteristic->setValue("END");
-  characteristic->notify();
-  delay(30);
+  enqueueBleTxMessage(queue, characteristic, connectedFlag, "END");
+}
+
+void enqueueRuntimeNotification(BLECharacteristic* characteristic, bool connected, const String& payload) {
+  (void)connected;
+  enqueueBleTxMessage(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
+}
+
+void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
+  (void)connected;
+  enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
+}
+
+void enqueueHistoryNotification(BLECharacteristic* characteristic, bool connected, const String& payload) {
+  (void)connected;
+  enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
+}
+
+void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
+  (void)connected;
+  enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
+}
+
+bool processBleTxMessage(BleTxQueue& queue) {
+  if (queue.length == 0) {
+    return false;
+  }
+
+  BleTxMessage entry = queue.entries[queue.head];
+  queue.head = (queue.head + 1) % BLE_TX_QUEUE_CAPACITY;
+  queue.length -= 1;
+
+  if (entry.characteristic == nullptr || entry.connectedFlag == nullptr || !(*entry.connectedFlag)) {
+    return false;
+  }
+
+  Serial.print("BLE notify sent: ");
+  Serial.println(entry.payload);
+  entry.characteristic->setValue(entry.payload.c_str());
+  entry.characteristic->notify();
+  lastBleTxAt = millis();
+  return true;
+}
+
+void processBleNotificationQueues() {
+  const unsigned long now = millis();
+  if (lastBleTxAt > 0 && now - lastBleTxAt < BLE_TX_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  while (runtimeTxQueue.length > 0) {
+    if (processBleTxMessage(runtimeTxQueue)) {
+      return;
+    }
+  }
+
+  size_t historyBudget = BLE_TX_BURST_HISTORY_LIMIT;
+  while (historyBudget > 0 && historyTxQueue.length > 0) {
+    if (processBleTxMessage(historyTxQueue)) {
+      return;
+    }
+    historyBudget -= 1;
+  }
 }
 
 void sendProvisioningStatus(const String& payload) {
@@ -84,7 +172,7 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   }
 
   payload += "}";
-  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
 void sendRuntimeAppSessionOnline(
@@ -97,7 +185,7 @@ void sendRuntimeAppSessionOnline(
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
-  notifyCharacteristicChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
@@ -191,6 +279,8 @@ void resetRuntimeAppSessionState() {
   lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
+  cancelHistoryWorker();
+  lastCompletedHistoryRequestId = "";
 }
 
 void armRuntimeBootstrapWatchdog(const String& message) {
@@ -410,7 +500,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
-  notifyCharacteristic(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;
@@ -453,8 +543,7 @@ void handleRuntimeControl(const String& payload) {
   const firmware_runtime::ControlCommand command =
     firmware_runtime::parseRuntimeControlCommand(
       payload.c_str(),
-      APP_SESSION_LEASE_DEFAULT_MS,
-      HISTORY_SYNC_PAGE_SIZE
+      APP_SESSION_LEASE_DEFAULT_MS
     );
   lastRuntimeControlAt = millis();
 
@@ -535,24 +624,30 @@ void handleRuntimeControl(const String& payload) {
     return;
   }
 
-  if (command.type == firmware_runtime::ControlCommandType::HistorySyncBegin) {
-    disarmRuntimeBootstrapWatchdog();
-    const firmware_runtime::HistorySyncRequest request =
-      firmware_runtime::createHistorySyncRequest(command, HISTORY_SYNC_PAGE_SIZE);
-    logRuntimeHistoryEvent(
-      "Sync requested afterSequence=" + String(request.afterSequence) +
-      " maxRecords=" + String(request.maxRecords)
+}
+
+void handleHistoryControl(const String& payload) {
+  const firmware_runtime::HistoryControlCommand command =
+    firmware_runtime::parseHistoryControlCommand(
+      payload.c_str(),
+      HISTORY_SYNC_PAGE_SIZE
     );
-    streamHistoryRecords(request.afterSequence, request.maxRecords);
+
+  if (command.type == firmware_runtime::HistoryControlCommandType::Unknown) {
+    sendHistoryError("", "", "history.invalid_command", "Unsupported history control command.");
     return;
   }
 
-  if (command.type == firmware_runtime::ControlCommandType::HistoryAck) {
-    disarmRuntimeBootstrapWatchdog();
-    logRuntimeHistoryEvent(
-      "Ack requested through sequence=" + String(command.sequence)
-    );
-    acknowledgeHistoryThrough(command.sequence);
+  disarmRuntimeBootstrapWatchdog();
+  lastRuntimeControlAt = millis();
+
+  if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
+    beginHistorySyncRequest(command);
+    return;
+  }
+
+  if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageAck) {
+    acknowledgeHistorySyncRequest(command);
     return;
   }
 }
@@ -578,6 +673,9 @@ class GymServerCallbacks : public BLEServerCallbacks {
     if (runtimeStatusCharacteristic != nullptr) {
       runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
     }
+    if (historyStatusCharacteristic != nullptr) {
+      historyStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
+    }
     sendTelemetry(lastReportedDelta, millis(), true, false);
   }
 
@@ -591,6 +689,10 @@ class GymServerCallbacks : public BLEServerCallbacks {
     runtimeBleConnected = false;
     runtimeBleConnectedAt = 0;
     lastConnectedRuntimeDebugAt = 0;
+    runtimeTxQueue = BleTxQueue();
+    historyTxQueue = BleTxQueue();
+    cancelHistoryWorker();
+    lastCompletedHistoryRequestId = "";
     noteRuntimeTransportDisconnected(millis());
     startRuntimeAdvertising("BLE client disconnected");
   }
@@ -669,6 +771,30 @@ class RuntimeControlCallbacks : public BLECharacteristicCallbacks {
     }
 
     runtimeCommandBuffer += value;
+  }
+};
+
+class HistoryControlCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* characteristic) override {
+    const String value(characteristic->getValue().c_str());
+
+    if (value.length() == 0) {
+      return;
+    }
+
+    if (value.startsWith("BEGIN:")) {
+      historyCommandBuffer = "";
+      return;
+    }
+
+    if (value == "END") {
+      const String command = historyCommandBuffer;
+      historyCommandBuffer = "";
+      handleHistoryControl(command);
+      return;
+    }
+
+    historyCommandBuffer += value;
   }
 };
 
@@ -778,6 +904,19 @@ void setupBle() {
   runtimeOtaDataCharacteristic->setCallbacks(new RuntimeOtaDataCallbacks());
   runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
   runtimeService->start();
+
+  BLEService* historyService = bleServer->createService(HISTORY_SERVICE_UUID);
+  historyControlCharacteristic = historyService->createCharacteristic(
+    HISTORY_CONTROL_UUID,
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  historyStatusCharacteristic = historyService->createCharacteristic(
+    HISTORY_STATUS_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  historyStatusCharacteristic->addDescriptor(new BLE2902());
+  historyControlCharacteristic->setCallbacks(new HistoryControlCallbacks());
+  historyService->start();
 
   BLEAdvertising* advertising = bleServer->getAdvertising();
   configureRuntimeAdvertisingPayload(advertising);

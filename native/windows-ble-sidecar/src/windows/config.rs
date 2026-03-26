@@ -7,6 +7,9 @@ const SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001";
 const TELEMETRY_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const STATUS_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004";
+const HISTORY_SERVICE_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7101";
+const HISTORY_CONTROL_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7102";
+const HISTORY_STATUS_UUID_FALLBACK: &str = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7103";
 const DEVICE_PREFIX_FALLBACK: &str = "GymMotion-";
 
 #[derive(Clone)]
@@ -15,6 +18,9 @@ pub(crate) struct Config {
     pub(crate) telemetry_uuid: Uuid,
     pub(crate) control_uuid: Uuid,
     pub(crate) status_uuid: Uuid,
+    pub(crate) history_service_uuid: Uuid,
+    pub(crate) history_control_uuid: Uuid,
+    pub(crate) history_status_uuid: Uuid,
     pub(crate) device_name_prefix: String,
     pub(crate) verbose_logging: bool,
 }
@@ -26,6 +32,18 @@ impl Config {
             telemetry_uuid: parse_uuid("BLE_TELEMETRY_UUID", TELEMETRY_UUID_FALLBACK)?,
             control_uuid: parse_uuid("BLE_CONTROL_UUID", CONTROL_UUID_FALLBACK)?,
             status_uuid: parse_uuid("BLE_STATUS_UUID", STATUS_UUID_FALLBACK)?,
+            history_service_uuid: parse_uuid(
+                "BLE_HISTORY_SERVICE_UUID",
+                HISTORY_SERVICE_UUID_FALLBACK,
+            )?,
+            history_control_uuid: parse_uuid(
+                "BLE_HISTORY_CONTROL_UUID",
+                HISTORY_CONTROL_UUID_FALLBACK,
+            )?,
+            history_status_uuid: parse_uuid(
+                "BLE_HISTORY_STATUS_UUID",
+                HISTORY_STATUS_UUID_FALLBACK,
+            )?,
             device_name_prefix: env::var("BLE_DEVICE_NAME_PREFIX")
                 .unwrap_or_else(|_| DEVICE_PREFIX_FALLBACK.to_string()),
             verbose_logging: env_flag("GATEWAY_VERBOSE"),

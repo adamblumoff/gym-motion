@@ -212,6 +212,7 @@ export function createDataIngestController(deps: DataIngestDeps) {
           type: "backfill-recorded",
           payload,
           deviceId: message.payload.deviceId,
+          syncComplete: message.payload.syncComplete ?? false,
         });
       }
     }

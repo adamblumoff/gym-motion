@@ -26,6 +26,7 @@ export type DesktopDataEvent =
       type: "backfill-recorded";
       payload: unknown;
       deviceId: string;
+      syncComplete?: boolean;
     };
 
 type ServerHandle = {

@@ -283,7 +283,8 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         parsedMessage.type === "manual-scan-updated" ||
         parsedMessage.type === "runtime-device-updated" ||
         parsedMessage.type === "history_record" ||
-        parsedMessage.type === "history_sync_complete"
+        parsedMessage.type === "history_sync_complete" ||
+        parsedMessage.type === "history_error"
       ) {
         deps.onChildRuntimeMessage(parsedMessage);
         return;

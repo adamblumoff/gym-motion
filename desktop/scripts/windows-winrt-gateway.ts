@@ -497,11 +497,13 @@ function handleSidecarEvent(event) {
     case "history_record":
       log("received history record", {
         deviceId: event.device_id ?? null,
+        requestId: event.request_id ?? null,
         sequence: event.record?.sequence ?? null,
         kind: event.record?.kind ?? null,
       });
       void runtimeBridge.handleHistoryRecord({
         device_id: event.device_id,
+        request_id: event.request_id,
         node: event.node ?? {},
         record: event.record,
       }).catch((error) => {
@@ -514,6 +516,7 @@ function handleSidecarEvent(event) {
         deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
         latestSequence:
           event.payload?.latest_sequence ?? event.payload?.latestSequence ?? null,
+        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
         highWaterSequence:
           event.payload?.high_water_sequence ?? event.payload?.highWaterSequence ?? null,
         sentCount: event.payload?.sent_count ?? event.payload?.sentCount ?? null,
@@ -527,6 +530,32 @@ function handleSidecarEvent(event) {
         .catch((error) => {
           console.error("[gateway-winrt] failed to complete history sync page", error);
           setRuntimeIssue(error instanceof Error ? error.message : "History sync failed.");
+        });
+      break;
+    case "history_error":
+      log("received history sync error", {
+        deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
+        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
+        code: event.payload?.code ?? null,
+        detail: event.payload?.message ?? null,
+      });
+      void runtimeBridge
+        .handleHistoryError({
+          node: event.node ?? {},
+          payload: event.payload ?? {},
+        })
+        .then(() => {
+          emitDesktopMessage({
+            type: "history_error",
+            node: event.node ?? {},
+            payload: event.payload ?? {},
+          });
+        })
+        .catch((error) => {
+          console.error("[gateway-winrt] failed to process history sync error", error);
+          setRuntimeIssue(
+            error instanceof Error ? error.message : "History sync failure handling failed.",
+          );
         });
       break;
     case "log":

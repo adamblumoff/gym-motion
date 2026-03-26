@@ -32,6 +32,9 @@ const char* RUNTIME_TELEMETRY_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const char* RUNTIME_CONTROL_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const char* RUNTIME_STATUS_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004";
 const char* RUNTIME_OTA_DATA_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7005";
+const char* HISTORY_SERVICE_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7101";
+const char* HISTORY_CONTROL_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7102";
+const char* HISTORY_STATUS_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7103";
 
 const uint8_t ADXL345_ADDR = 0x53;
 const int SDA_PIN = 21;
@@ -53,6 +56,10 @@ const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
 const size_t HISTORY_SYNC_PAGE_SIZE = 80;
 const size_t STATUS_CHUNK_SIZE = 120;
+const size_t BLE_TX_QUEUE_CAPACITY = 96;
+const size_t BLE_TX_BURST_HISTORY_LIMIT = 1;
+const unsigned long BLE_TX_MIN_INTERVAL_MS = 30;
+const size_t HISTORY_WORKER_RECORDS_PER_SLICE = 4;
 const char* HISTORY_LOG_PATH = "/history.log";
 const char* HISTORY_TEMP_PATH = "/history.tmp";
 
@@ -71,9 +78,12 @@ BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
 BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeOtaDataCharacteristic = nullptr;
+BLECharacteristic* historyControlCharacteristic = nullptr;
+BLECharacteristic* historyStatusCharacteristic = nullptr;
 BLE2902* runtimeTelemetryDescriptor = nullptr;
 String provisioningCommandBuffer;
 String runtimeCommandBuffer;
+String historyCommandBuffer;
 
 String hardwareId;
 String bootId;
@@ -109,6 +119,48 @@ String runtimeAppSessionId;
 String runtimeAppSessionNonce;
 String runtimeBootstrapSessionNonce;
 
+struct BleTxMessage {
+  BLECharacteristic* characteristic = nullptr;
+  bool* connectedFlag = nullptr;
+  String payload;
+  bool chunked = false;
+};
+
+struct BleTxQueue {
+  BleTxMessage entries[BLE_TX_QUEUE_CAPACITY];
+  size_t head = 0;
+  size_t tail = 0;
+  size_t length = 0;
+};
+
+enum class HistoryWorkerPhase {
+  Idle,
+  Streaming,
+  AwaitingAck,
+};
+
+struct HistoryWorkerState {
+  HistoryWorkerPhase phase = HistoryWorkerPhase::Idle;
+  String sessionId;
+  String requestId;
+  unsigned long requestedAfterSequence = 0;
+  size_t maxRecords = 0;
+  unsigned long highWaterSequence = 0;
+  unsigned long latestSequence = 0;
+  size_t sentCount = 0;
+  bool overflowed = false;
+  unsigned long droppedCount = 0;
+  bool completionQueued = false;
+  bool completionDelivered = false;
+};
+
+BleTxQueue runtimeTxQueue;
+BleTxQueue historyTxQueue;
+HistoryWorkerState historyWorkerState;
+File historyWorkerFile;
+unsigned long lastBleTxAt = 0;
+String lastCompletedHistoryRequestId;
+
 struct OtaTransferState {
   bool active = false;
   size_t expectedBytes = 0;
@@ -126,6 +178,25 @@ void sendTelemetry(
   unsigned long timestamp,
   bool force = false,
   bool stateChanged = false
+);
+void enqueueRuntimeNotification(BLECharacteristic* characteristic, bool connected, const String& payload);
+void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload);
+void enqueueHistoryNotification(BLECharacteristic* characteristic, bool connected, const String& payload);
+void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload);
+void processBleNotificationQueues();
+void pumpHistoryWorker();
+void cancelHistoryWorker();
+void beginHistorySyncRequest(
+  const firmware_runtime::HistoryControlCommand& command
+);
+void acknowledgeHistorySyncRequest(
+  const firmware_runtime::HistoryControlCommand& command
+);
+void sendHistoryError(
+  const String& sessionId,
+  const String& requestId,
+  const String& code,
+  const String& message
 );
 
 String escapeJsonString(const String& value) {
@@ -331,8 +402,11 @@ void setup() {
 void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
+  pumpHistoryWorker();
+  processBleNotificationQueues();
   logConnectedRuntimeHeartbeat();
   logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
+  processBleNotificationQueues();
   delay(LOOP_DELAY_MS);
 }

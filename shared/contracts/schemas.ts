@@ -140,4 +140,5 @@ export const backfillBatchSchema = z.object({
   records: z.array(backfillRecordSchema).max(500),
   ackSequence: z.number().int().nonnegative(),
   overflowDetectedAt: z.string().datetime().optional(),
+  syncComplete: z.boolean().optional(),
 });

@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Activity, Bluetooth, Clock3, DatabaseZap, TrendingUp } from "lucide-react";
+import { Activity, Bluetooth, Clock3, TrendingUp } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -20,6 +20,7 @@ import {
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
+  buildAnalyticsSyncDisplay,
   sortAnalyticsNodes,
 } from "../selectors/analytics";
 import { buildBluetoothNodes as buildDashboardNodes } from "../selectors/dashboard";
@@ -69,30 +70,6 @@ function connectionLabel(connectionState: string) {
       return "Unreachable";
     default:
       return "Discovered";
-  }
-}
-
-function syncBannerCopy(state: "idle" | "syncing" | "failed", detail: string | null) {
-  if (state === "syncing") {
-    return "History catch-up is running in the background. Cached analytics stays visible while canonical history catches up.";
-  }
-
-  if (state === "failed") {
-    return detail ?? "History sync failed. Cached analytics remains available until the next successful refresh.";
-  }
-
-  return null;
-}
-
-function syncStateLabel(state: "idle" | "syncing" | "failed") {
-  switch (state) {
-    case "syncing":
-      return "Syncing";
-    case "failed":
-      return "Needs attention";
-    case "idle":
-    default:
-      return "Up to date";
   }
 }
 
@@ -246,6 +223,10 @@ export function AnalyticsPage() {
     () => buildAnalyticsOverview(currentAnalytics),
     [currentAnalytics],
   );
+  const syncDisplay = useMemo(
+    () => buildAnalyticsSyncDisplay(currentAnalytics),
+    [currentAnalytics],
+  );
   const activityLogs = useMemo(() => {
     if (!selectedNodeId) {
       return [];
@@ -267,9 +248,6 @@ export function AnalyticsPage() {
       isMoving: activity.state === "moving",
     }));
   }, [deviceActivities, selectedNodeId, snapshot?.activities]);
-  const syncBanner = currentAnalytics
-    ? syncBannerCopy(currentAnalytics.sync.state, currentAnalytics.sync.detail)
-    : null;
   const utilizationSummary = useMemo(() => {
     if (isLoadingAnalytics && !overview) {
       return "Loading utilization from canonical history...";
@@ -399,20 +377,6 @@ export function AnalyticsPage() {
             </div>
           </Card>
 
-          {syncBanner ? (
-            <Card className="border-amber-500/30 bg-amber-500/10 p-4">
-              <div className="flex items-start gap-3">
-                <DatabaseZap className="mt-0.5 size-4 text-amber-300" />
-                <div>
-                  <p className="text-sm font-medium text-amber-100">
-                    {currentAnalytics?.sync.state === "failed" ? "History sync needs attention" : "History catch-up in progress"}
-                  </p>
-                  <p className="mt-1 text-sm text-amber-200/80">{syncBanner}</p>
-                </div>
-              </div>
-            </Card>
-          ) : null}
-
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.8fr)_repeat(3,minmax(0,1fr))]">
             <Card className="border-zinc-800 bg-zinc-950/80 p-6">
               <div className="flex items-start justify-between gap-4">
@@ -486,6 +450,37 @@ export function AnalyticsPage() {
                 <p className="mt-2 text-sm text-zinc-400">
                   Live connection and history sync stay visible here while usage remains the primary signal.
                 </p>
+                {syncDisplay ? (
+                  <div className="mt-3 flex items-center gap-2 text-sm">
+                    <span
+                      className={[
+                        "size-2 rounded-full",
+                        syncDisplay.tone === "warning"
+                          ? "bg-amber-300"
+                          : syncDisplay.tone === "muted"
+                            ? "bg-sky-300"
+                            : "bg-emerald-300",
+                        syncDisplay.showAnimation ? "animate-pulse" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    />
+                    <span
+                      className={
+                        syncDisplay.tone === "warning"
+                          ? "text-amber-200"
+                          : syncDisplay.tone === "muted"
+                            ? "text-zinc-200"
+                            : "text-zinc-300"
+                      }
+                    >
+                      {syncDisplay.label}
+                    </span>
+                    {syncDisplay.detail ? (
+                      <span className="text-zinc-500">{syncDisplay.detail}</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -494,14 +489,6 @@ export function AnalyticsPage() {
                   className="border-zinc-800 bg-zinc-950 text-zinc-300"
                 >
                   {motionLabel(selectedNode.isMoving)}
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
-                >
-                  {currentAnalytics?.liveOverlay?.active
-                    ? `${syncStateLabel(currentAnalytics?.sync.state ?? "idle")} + live`
-                    : syncStateLabel(currentAnalytics?.sync.state ?? "idle")}
                 </Badge>
                 <Badge
                   variant="outline"

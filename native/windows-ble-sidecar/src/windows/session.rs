@@ -40,10 +40,23 @@ use super::{
 pub(super) const SCAN_WINDOW_SECS: u64 = 15;
 
 #[derive(Clone)]
-pub(super) struct ActiveSessionControl {
+pub(super) struct ActiveLiveControl {
     pub(super) peripheral: Peripheral,
     pub(super) characteristic: Characteristic,
     pub(super) write_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+pub(super) struct ActiveHistoryControl {
+    pub(super) peripheral: Peripheral,
+    pub(super) characteristic: Characteristic,
+    pub(super) write_lock: Arc<Mutex<()>>,
+    pub(super) app_session_id: String,
+}
+
+#[derive(Clone)]
+pub(super) struct ActiveSessionChannels {
+    pub(super) history: ActiveHistoryControl,
 }
 
 pub(super) struct SessionContext {
@@ -53,7 +66,7 @@ pub(super) struct SessionContext {
     pub(super) config: Config,
     pub(super) allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
     pub(super) active_connections: Arc<Mutex<HashMap<String, DiscoveredNode>>>,
-    pub(super) active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionControl>>>,
+    pub(super) active_session_controls: Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
     pub(super) known_device_ids: Arc<RwLock<HashMap<String, String>>>,
     pub(super) command_sender: mpsc::UnboundedSender<SessionCommand>,
 }

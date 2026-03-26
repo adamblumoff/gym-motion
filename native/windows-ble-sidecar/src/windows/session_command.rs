@@ -22,20 +22,12 @@ use super::{
     session_types::SessionCommand,
 };
 
-const HISTORY_COMMAND_RETRY_DELAY_MS: u64 = 250;
-
-enum HistoryControlCommandResult {
-    Sent,
-    Deferred,
-    Skipped,
-}
-
 async fn send_history_control_command(
     context: &SessionContext,
     device_id: &str,
     payload: serde_json::Value,
     missing_message: &str,
-) -> Result<HistoryControlCommandResult> {
+) -> Result<bool> {
     let active_session_controls = context.active_session_controls.lock().await;
     let Some(control) = active_session_controls.get(device_id).cloned() else {
         drop(active_session_controls);
@@ -49,42 +41,30 @@ async fn send_history_control_command(
                 })),
             })
             .await?;
-        return Ok(HistoryControlCommandResult::Skipped);
+        return Ok(false);
     };
     drop(active_session_controls);
 
-    let Ok(write_guard) = control.write_lock.try_lock() else {
-        context
-            .writer
-            .send(&Event::Log {
-                level: "info".to_string(),
-                message: format!(
-                    "Deferring background history control write for {} while the app-session control path is busy.",
-                    device_id
-                ),
-                details: Some(json!({
-                    "deviceId": device_id,
-                    "payloadType": payload.get("type").and_then(serde_json::Value::as_str),
-                    "retryDelayMs": HISTORY_COMMAND_RETRY_DELAY_MS,
-                })),
-            })
-            .await?;
-        return Ok(HistoryControlCommandResult::Deferred);
-    };
+    let write_guard = control.history.write_lock.lock().await;
     let result =
-        write_chunked_json_command(&control.peripheral, &control.characteristic, &payload.to_string())
+        write_chunked_json_command(
+            &control.history.peripheral,
+            &control.history.characteristic,
+            &payload.to_string(),
+        )
             .await;
     drop(write_guard);
     result?;
-    Ok(HistoryControlCommandResult::Sent)
+    Ok(true)
 }
 
-fn requeue_history_command(context: &SessionContext, command: SessionCommand) {
-    let command_sender = context.command_sender.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(HISTORY_COMMAND_RETRY_DELAY_MS)).await;
-        let _ = command_sender.send(command);
-    });
+async fn active_history_session_id(context: &SessionContext, device_id: &str) -> Option<String> {
+    context
+        .active_session_controls
+        .lock()
+        .await
+        .get(device_id)
+        .map(|channels| channels.history.app_session_id.clone())
 }
 
 pub(super) async fn handle_session_command(
@@ -112,12 +92,29 @@ pub(super) async fn handle_session_command(
             device_id,
             after_sequence,
             max_records,
+            request_id,
         } => {
-            match send_history_control_command(
+            let Some(session_id) = active_history_session_id(context, &device_id).await else {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: format!(
+                            "Skipping history sync for {} because it is not currently connected.",
+                            device_id
+                        ),
+                        details: Some(json!({ "deviceId": device_id })),
+                    })
+                    .await?;
+                return Ok(());
+            };
+            send_history_control_command(
                 context,
                 &device_id,
                 json!({
-                    "type": "history-sync-begin",
+                    "type": "history-page-request",
+                    "sessionId": session_id,
+                    "requestId": request_id,
                     "afterSequence": after_sequence,
                     "maxRecords": max_records,
                 }),
@@ -126,27 +123,35 @@ pub(super) async fn handle_session_command(
                     device_id
                 ),
             )
-            .await? {
-                HistoryControlCommandResult::Sent | HistoryControlCommandResult::Skipped => {}
-                HistoryControlCommandResult::Deferred => {
-                    requeue_history_command(
-                        context,
-                        SessionCommand::BeginHistorySync {
-                            device_id,
-                            after_sequence,
-                            max_records,
-                        },
-                    );
-                }
-            }
+            .await?;
             return Ok(());
         }
-        SessionCommand::AcknowledgeHistorySync { device_id, sequence } => {
-            match send_history_control_command(
+        SessionCommand::AcknowledgeHistorySync {
+            device_id,
+            sequence,
+            request_id,
+        } => {
+            let Some(session_id) = active_history_session_id(context, &device_id).await else {
+                context
+                    .writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: format!(
+                            "Skipping history ack for {} because it is not currently connected.",
+                            device_id
+                        ),
+                        details: Some(json!({ "deviceId": device_id })),
+                    })
+                    .await?;
+                return Ok(());
+            };
+            send_history_control_command(
                 context,
                 &device_id,
                 json!({
-                    "type": "history-ack",
+                    "type": "history-page-ack",
+                    "sessionId": session_id,
+                    "requestId": request_id,
                     "sequence": sequence,
                 }),
                 &format!(
@@ -154,15 +159,7 @@ pub(super) async fn handle_session_command(
                     device_id
                 ),
             )
-            .await? {
-                HistoryControlCommandResult::Sent | HistoryControlCommandResult::Skipped => {}
-                HistoryControlCommandResult::Deferred => {
-                    requeue_history_command(
-                        context,
-                        SessionCommand::AcknowledgeHistorySync { device_id, sequence },
-                    );
-                }
-            }
+            .await?;
             return Ok(());
         }
         SessionCommand::PairManualCandidate { candidate_id } => {

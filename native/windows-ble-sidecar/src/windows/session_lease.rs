@@ -4,7 +4,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::{
     handshake::send_app_session_lease,
-    session::ActiveSessionControl,
+    session::ActiveLiveControl,
     session_transport::APP_SESSION_HEARTBEAT_MS,
     session_util::format_error_chain,
 };
@@ -14,7 +14,7 @@ pub(super) fn is_closed_handle_error_message(message: &str) -> bool {
 }
 
 pub(super) fn spawn_lease_task(
-    control: ActiveSessionControl,
+    control: ActiveLiveControl,
     session_id: String,
 ) -> (
     watch::Sender<bool>,

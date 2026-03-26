@@ -409,6 +409,12 @@ export function createManagedGatewayRuntime(
       case "runtime-device-updated":
         applyRuntimeDevicePatch(message.device);
         break;
+      case "history_error":
+        analyticsService.markSyncFailure(
+          message.payload.device_id,
+          message.payload.message ?? "History sync failed.",
+        );
+        break;
       case "control-response":
         break;
     }
@@ -488,6 +494,11 @@ export function createManagedGatewayRuntime(
     emit,
     refreshHistory: () => runtimeSync.refreshHistory(),
     refreshDeviceHistory: (deviceId) => runtimeSync.refreshDeviceHistory(deviceId),
+    refreshSyncStateOnly: (deviceId) => analyticsService.refreshSyncStateOnly(deviceId),
+    markAnalyticsSyncInProgress: (deviceId) => analyticsService.markSyncInProgress(deviceId),
+    markAnalyticsSyncComplete: (deviceId) => analyticsService.markSyncComplete(deviceId),
+    markAnalyticsSyncFailure: (deviceId, detail) =>
+      analyticsService.markSyncFailure(deviceId, detail),
     refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
     recordLiveMotion: (event) => {

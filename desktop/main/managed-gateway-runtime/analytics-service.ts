@@ -21,6 +21,10 @@ const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v1";
 
 type CachedAnalyticsMap = Record<string, DeviceAnalyticsSnapshot>;
 type LiveMotionEventMap = Map<string, MotionEventSummary[]>;
+type RuntimeSyncOverride = {
+  state: DeviceAnalyticsSyncState["state"];
+  detail: string | null;
+};
 
 type AnalyticsServiceDeps = {
   store: PreferencesStore;
@@ -331,6 +335,7 @@ function hydrateSyncState(
   lastCanonicalAt: string | null,
   syncSummary: Awaited<ReturnType<typeof getDeviceSyncState>>,
   failureDetail: string | null,
+  runtimeSyncOverride: RuntimeSyncOverride | null,
 ): DeviceAnalyticsSyncState {
   const lastConnectedAt =
     runtimeDevice?.gatewayLastConnectedAt ??
@@ -343,11 +348,20 @@ function hydrateSyncState(
     !!lastConnectedAt &&
     !!lastSyncCompletedAt &&
     Date.parse(lastSyncCompletedAt) < Date.parse(lastConnectedAt);
+  const inferredState: DeviceAnalyticsSyncState["state"] = failureDetail
+    ? "failed"
+    : shouldSync
+      ? "syncing"
+      : "idle";
+  const resolvedState = runtimeSyncOverride?.state ?? inferredState;
+  const resolvedDetail =
+    runtimeSyncOverride?.detail ??
+    (resolvedState === "failed" ? failureDetail : null);
 
   return {
     deviceId,
-    state: failureDetail ? "failed" : shouldSync ? "syncing" : "idle",
-    detail: failureDetail,
+    state: resolvedState,
+    detail: resolvedDetail,
     lastCanonicalAt,
     lastSyncCompletedAt,
     lastAckedSequence: syncSummary.lastAckedSequence,
@@ -373,6 +387,7 @@ async function buildAnalyticsSnapshot(args: {
   window: AnalyticsWindow;
   runtimeDevice: GatewayRuntimeDeviceSummary | null;
   failureDetail: string | null;
+  runtimeSyncOverride: RuntimeSyncOverride | null;
   hasMotionRollupTables: typeof hasMotionRollupTables;
   listMotionRollupBuckets: typeof listMotionRollupBuckets;
   listDeviceMotionEventsByReceivedAt: typeof listDeviceMotionEventsByReceivedAt;
@@ -393,6 +408,7 @@ async function buildAnalyticsSnapshot(args: {
     null,
     syncSummary,
     args.failureDetail,
+    args.runtimeSyncOverride,
   );
   let summary:
     | ReturnType<typeof summarizeMotionEventsInBuckets>
@@ -477,6 +493,9 @@ async function buildAnalyticsSnapshot(args: {
 export type AnalyticsService = {
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
   scheduleRefresh: (deviceId: string, delayMs?: number) => void;
+  refreshSyncStateOnly: (deviceId: string) => Promise<void>;
+  markSyncInProgress: (deviceId: string) => void;
+  markSyncComplete: (deviceId: string) => void;
   markSyncFailure: (deviceId: string, detail: string) => void;
   clearSyncFailure: (deviceId: string) => void;
   recordLiveMotion: (event: MotionEventSummary) => void;
@@ -486,6 +505,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
   const refreshTimers = new Map<string, NodeJS.Timeout>();
   const syncFailures = new Map<string, string>();
   const liveMotionEvents: LiveMotionEventMap = new Map();
+  const runtimeSyncOverrides = new Map<string, RuntimeSyncOverride>();
   const checkHasMotionRollups = deps.hasMotionRollupTables ?? hasMotionRollupTables;
   const loadMotionRollupBuckets = deps.listMotionRollupBuckets ?? listMotionRollupBuckets;
   const loadMotionEventsByReceivedAt =
@@ -645,6 +665,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
           cached.generatedAt,
           syncSummary,
           failureDetail,
+          runtimeSyncOverrides.get(deviceId) ?? null,
         );
         deps.onUpdated(
           mergeLiveOverlayIntoSnapshot(buildCachedSnapshotFromSync(cached, sync), deviceId),
@@ -680,6 +701,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window,
         runtimeDevice,
         failureDetail,
+        runtimeSyncOverride: runtimeSyncOverrides.get(deviceId) ?? null,
         hasMotionRollupTables: checkHasMotionRollups,
         listMotionRollupBuckets: loadMotionRollupBuckets,
         listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
@@ -730,6 +752,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
             cached.generatedAt,
             syncSummary,
             syncFailures.get(input.deviceId) ?? null,
+            runtimeSyncOverrides.get(input.deviceId) ?? null,
           );
           return mergeLiveOverlayIntoSnapshot(
             buildCachedSnapshotFromSync(cached, sync, {
@@ -757,6 +780,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         window: input.window,
         runtimeDevice: deps.getRuntimeDevice(input.deviceId),
         failureDetail: syncFailures.get(input.deviceId) ?? null,
+        runtimeSyncOverride: runtimeSyncOverrides.get(input.deviceId) ?? null,
         hasMotionRollupTables: checkHasMotionRollups,
         listMotionRollupBuckets: loadMotionRollupBuckets,
         listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
@@ -775,13 +799,45 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
     scheduleRefresh,
 
+    async refreshSyncStateOnly(deviceId: string) {
+      await emitCachedSnapshots(deviceId);
+    },
+
+    markSyncInProgress(deviceId) {
+      syncFailures.delete(deviceId);
+      runtimeSyncOverrides.set(deviceId, {
+        state: "syncing",
+        detail: null,
+      });
+      void emitCachedSnapshots(deviceId);
+    },
+
+    markSyncComplete(deviceId) {
+      syncFailures.delete(deviceId);
+      runtimeSyncOverrides.set(deviceId, {
+        state: "idle",
+        detail: null,
+      });
+      void emitCachedSnapshots(deviceId);
+    },
+
     markSyncFailure(deviceId, detail) {
       syncFailures.set(deviceId, detail);
+      runtimeSyncOverrides.set(deviceId, {
+        state: "failed",
+        detail,
+      });
       void emitCachedSnapshots(deviceId);
     },
 
     clearSyncFailure(deviceId) {
-      if (!syncFailures.delete(deviceId)) {
+      const clearedFailure = syncFailures.delete(deviceId);
+      const override = runtimeSyncOverrides.get(deviceId);
+      if (override?.state === "failed") {
+        runtimeSyncOverrides.delete(deviceId);
+      }
+
+      if (!clearedFailure && override?.state !== "failed") {
         return;
       }
 

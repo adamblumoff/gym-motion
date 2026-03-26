@@ -183,8 +183,7 @@ LeaseEnforcementResult evaluateAppSessionLease(
 
 ControlCommand parseRuntimeControlCommand(
   const std::string& payload,
-  unsigned long defaultLeaseTimeoutMs,
-  std::size_t defaultHistoryPageSize
+  unsigned long defaultLeaseTimeoutMs
 ) {
   ControlCommand command;
   const std::string type = extractJsonString(payload, "type");
@@ -223,16 +222,29 @@ ControlCommand parseRuntimeControlCommand(
     return command;
   }
 
-  if (type == "history-sync-begin") {
-    command.type = ControlCommandType::HistorySyncBegin;
+  return command;
+}
+
+HistoryControlCommand parseHistoryControlCommand(
+  const std::string& payload,
+  std::size_t defaultHistoryPageSize
+) {
+  HistoryControlCommand command;
+  const std::string type = extractJsonString(payload, "type");
+
+  if (type == "history-page-request") {
+    command.type = HistoryControlCommandType::HistoryPageRequest;
+    command.sessionId = extractJsonString(payload, "sessionId");
+    command.requestId = extractJsonString(payload, "requestId");
     command.afterSequence = extractJsonUnsignedLong(payload, "afterSequence", 0);
-    command.maxRecords =
-      extractJsonSize(payload, "maxRecords", defaultHistoryPageSize);
+    command.maxRecords = extractJsonSize(payload, "maxRecords", defaultHistoryPageSize);
     return command;
   }
 
-  if (type == "history-ack") {
-    command.type = ControlCommandType::HistoryAck;
+  if (type == "history-page-ack") {
+    command.type = HistoryControlCommandType::HistoryPageAck;
+    command.sessionId = extractJsonString(payload, "sessionId");
+    command.requestId = extractJsonString(payload, "requestId");
     command.sequence = extractJsonUnsignedLong(payload, "sequence", 0);
     return command;
   }
@@ -265,13 +277,23 @@ HistoryAckResult acknowledgeHistoryThrough(HistorySyncState& state, unsigned lon
 }
 
 HistorySyncRequest createHistorySyncRequest(
-  const ControlCommand& command,
+  const HistoryControlCommand& command,
   std::size_t defaultHistoryPageSize
 ) {
   HistorySyncRequest request;
+  request.sessionId = command.sessionId;
+  request.requestId = command.requestId;
   request.afterSequence = command.afterSequence;
   request.maxRecords =
     command.maxRecords > 0 ? command.maxRecords : defaultHistoryPageSize;
+  return request;
+}
+
+HistoryAckRequest createHistoryAckRequest(const HistoryControlCommand& command) {
+  HistoryAckRequest request;
+  request.sessionId = command.sessionId;
+  request.requestId = command.requestId;
+  request.sequence = command.sequence;
   return request;
 }
 

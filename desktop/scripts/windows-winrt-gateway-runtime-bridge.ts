@@ -45,6 +45,7 @@ function createHistorySyncState({
     requestedAfterSequence: null,
     latestSequence: 0,
     highWaterSequence: 0,
+    requestId: null,
     records: [],
     nextEligibleAt,
     timerHandle: null,
@@ -67,8 +68,8 @@ export function createRuntimeBridge({
 }) {
   const historySyncStabilityWindowMs =
     config.historySyncStabilityWindowMs ?? config.historySyncDelayMs ?? 5_000;
-  const historySyncPageSize = config.historySyncPageSize ?? 3;
-  const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 2_000;
+  const historySyncPageSize = config.historySyncPageSize ?? 256;
+  const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 0;
   const deviceContexts = new Map();
   const pendingNodeLogs = new Map();
   const liveTaskChains = new Map();
@@ -332,6 +333,7 @@ export function createRuntimeBridge({
     }
 
     setBackfillStatus(context, state, "buffering_page", {
+      requestId: `${state.deviceId}:${state.bootId}:${state.requestedAfterSequence ?? 0}:${nowFn()}`,
       records: [],
       pausedReason: null,
       nextEligibleAt: null,
@@ -342,6 +344,7 @@ export function createRuntimeBridge({
       bootId: state.bootId,
       afterSequence: state.requestedAfterSequence,
       maxRecords: historySyncPageSize,
+      requestId: state.requestId,
     });
 
     await sendSidecarCommand({
@@ -349,6 +352,7 @@ export function createRuntimeBridge({
       device_id: state.deviceId,
       after_sequence: state.requestedAfterSequence,
       max_records: historySyncPageSize,
+      request_id: state.requestId,
     });
   }
 
@@ -419,6 +423,7 @@ export function createRuntimeBridge({
       latestSequence: payload.latest_sequence ?? null,
       highWaterSequence: payload.high_water_sequence ?? null,
       hasMore: payload.has_more ?? null,
+      requestId: payload.request_id ?? null,
     });
 
     if (!deviceId || !state || !context) {
@@ -436,6 +441,15 @@ export function createRuntimeBridge({
         contextBootId: context.bootId ?? null,
         stateBootId: state.bootId ?? null,
         status: state.status,
+      });
+      return;
+    }
+
+    if (payload.request_id !== state.requestId) {
+      logBackfill("ignoring history sync completion for stale request", {
+        deviceId,
+        expectedRequestId: state.requestId ?? null,
+        requestId: payload.request_id ?? null,
       });
       return;
     }
@@ -497,6 +511,7 @@ export function createRuntimeBridge({
           ...(pageBootId ? { bootId: pageBootId } : {}),
           records,
           ackSequence: payload.latest_sequence ?? 0,
+          syncComplete: payload.has_more !== true,
           ...(payload.overflowed ? { overflowDetectedAt: new Date().toISOString() } : {}),
         }),
       });
@@ -519,6 +534,7 @@ export function createRuntimeBridge({
         type: "acknowledge_history_sync",
         device_id: deviceId,
         sequence: provenAckSequence,
+        request_id: payload.request_id,
       });
 
       const noProgress = provenAckSequence <= (state.requestedAfterSequence ?? 0);
@@ -542,6 +558,7 @@ export function createRuntimeBridge({
 
       setBackfillStatus(context, state, "requesting_page", {
         requestedAfterSequence: provenAckSequence,
+        requestId: null,
         nextEligibleAt: nowFn() + historySyncInterPageDelayMs,
         pausedReason: null,
       });
@@ -564,6 +581,48 @@ export function createRuntimeBridge({
         detail: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  function handleHistoryErrorNow(event) {
+    const payload = event.payload ?? {};
+    const deviceId = payload.device_id;
+    const state = historySyncByDevice.get(deviceId);
+    const context = deviceContexts.get(deviceId);
+
+    logBackfill("received history sync error", {
+      deviceId: deviceId ?? null,
+      code: payload.code ?? null,
+      detail: payload.message ?? null,
+      requestId: payload.request_id ?? null,
+      status: state?.status ?? null,
+    });
+
+    if (!deviceId || !state || !context) {
+      return;
+    }
+
+    if (payload.request_id && payload.request_id !== state.requestId) {
+      logBackfill("ignoring history sync error for stale request", {
+        deviceId,
+        expectedRequestId: state.requestId ?? null,
+        requestId: payload.request_id ?? null,
+      });
+      return;
+    }
+
+    state.completionPending = false;
+    pauseBackfill(
+      context,
+      state,
+      "history sync failed",
+      {
+        deviceId,
+        bootId: state.bootId,
+        code: payload.code ?? null,
+        detail: payload.message ?? null,
+        requestId: payload.request_id ?? null,
+      },
+    );
   }
 
   async function forwardTelemetryNow(payload, node = {}) {
@@ -664,6 +723,16 @@ export function createRuntimeBridge({
       return;
     }
 
+    if (event.request_id !== state.requestId) {
+      logBackfill("dropping history record for stale request", {
+        deviceId: deviceId ?? null,
+        expectedRequestId: state.requestId ?? null,
+        requestId: event.request_id ?? null,
+        sequence: event.record?.sequence ?? null,
+      });
+      return;
+    }
+
     state.records.push(event.record);
   }
 
@@ -688,6 +757,15 @@ export function createRuntimeBridge({
     }
 
     return queueHistoryDeviceTask(deviceId, () => handleHistorySyncCompleteNow(event));
+  }
+
+  function handleHistoryError(event) {
+    const deviceId = event?.payload?.device_id;
+    if (!deviceId) {
+      return Promise.resolve();
+    }
+
+    return queueHistoryDeviceTask(deviceId, () => handleHistoryErrorNow(event));
   }
 
   function handleNodeDiscovered(node, scanReason = null) {
@@ -844,6 +922,7 @@ export function createRuntimeBridge({
     forwardTelemetry,
     handleHistoryRecord,
     handleHistorySyncComplete,
+    handleHistoryError,
     handleNodeDiscovered,
     handleNodeConnectionState,
   };
