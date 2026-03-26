@@ -5,7 +5,6 @@ import { buildBluetoothNodes, buildDashboardRuntimeStatus } from '../selectors/d
 import { useDesktopRuntime } from '../runtime-context';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmationDialog } from './ConfirmationDialog';
-import { DashboardHeader } from './DashboardHeader';
 import { NodeDetailModal } from './NodeDetailModal';
 import { NodeGrid } from './dashboard/NodeGrid';
 import { RuntimeBanner } from './dashboard/RuntimeBanner';
@@ -138,8 +137,10 @@ export function Dashboard() {
   const movingNodes = nodes.filter((node) => node.isMoving && node.isConnected).length;
   const forgetPending = forgetTarget ? pendingForgetNodeIds.has(forgetTarget.id) : false;
 
+  const runtimeStatus = buildDashboardRuntimeStatus(setup?.approvedNodes.length ?? 0);
+
   return (
-    <div className="size-full flex flex-col bg-black">
+    <>
       <Toaster
         theme="dark"
         position="bottom-right"
@@ -171,14 +172,26 @@ export function Dashboard() {
         onConfirm={() => void confirmForgetNode()}
       />
 
-      <DashboardHeader
-        totalNodes={nodes.length}
-        activeNodes={activeNodes}
-        movingNodes={movingNodes}
-        runtimeStatus={buildDashboardRuntimeStatus(setup?.approvedNodes.length ?? 0)}
-      />
-
       <div className="flex-1 overflow-auto p-6">
+        <div className="max-w-[1800px] mx-auto mb-6 grid grid-cols-4 gap-4">
+          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
+            <div className="text-2xl font-semibold text-zinc-100">{nodes.length}</div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Total Nodes</div>
+          </div>
+          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
+            <div className="text-2xl font-semibold text-blue-400">{activeNodes}</div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Connected</div>
+          </div>
+          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
+            <div className="text-2xl font-semibold text-cyan-400">{movingNodes}</div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Active Motion</div>
+          </div>
+          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
+            <div className="text-sm font-medium text-zinc-100">{runtimeStatus}</div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Gateway</div>
+          </div>
+        </div>
+
         <div className="max-w-[1800px] mx-auto mb-4 flex items-center justify-between">
           <div className="text-xs text-zinc-600 flex items-center gap-2">
             <div className="size-2 rounded-full bg-blue-400 animate-pulse" />
@@ -203,6 +216,6 @@ export function Dashboard() {
           onKeepNode={(nodeId) => void handleKeepNode(nodeId)}
         />
       </div>
-    </div>
+    </>
   );
 }

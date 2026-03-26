@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  Bluetooth,
-} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { buildPairedDevices, buildSetupVisibleDevices } from '../selectors/setup';
 import { useDesktopRuntime } from '../runtime-context';
 import { ConfirmationDialog } from './ConfirmationDialog';
-import { PageHeader } from './PageHeader';
 import { DiscoveryPanel } from './setup/DiscoveryPanel';
 import { PairedDevicesPanel } from './setup/PairedDevicesPanel';
 
@@ -160,7 +156,7 @@ export function SetupPage() {
   const removePending = removeTarget ? pendingRemoveIds.has(removeTarget.id) : false;
 
   return (
-    <div className="size-full flex flex-col bg-black">
+    <>
       <ConfirmationDialog
         open={removeTarget !== null}
         title="Forget this device?"
@@ -175,33 +171,31 @@ export function SetupPage() {
         onConfirm={() => void confirmUnpairDevice()}
       />
 
-      <PageHeader
-        title="Sensor Setup"
-        description="Scan and configure Bluetooth devices"
-        icon={Bluetooth}
-        backHref="/"
-        backLabel="Back to Dashboard"
-      />
-
       <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-5xl mx-auto space-y-6">
-          <DiscoveryPanel
-            devices={discoveredDevices}
-            isScanning={isScanning}
-            pairingCandidateId={pairingCandidateId}
-            pendingPairIds={pendingPairIds}
-            onScan={() => void handleScan()}
-            onPairDevice={(deviceId) => void handlePairDevice(deviceId)}
-          />
-          <PairedDevicesPanel
-            devices={pairedDevices}
-            pendingRecoverIds={pendingRecoverIds}
-            pendingRemoveIds={pendingRemoveIds}
-            onRecoverDevice={(deviceId) => void handleRecoverDevice(deviceId)}
-            onRequestUnpairDevice={requestUnpairDevice}
-          />
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-6">
+            <h1 className="text-xl font-semibold text-zinc-100">Sensor Setup</h1>
+            <p className="text-sm text-zinc-500">Scan and configure Bluetooth devices</p>
+          </div>
+          <div className="space-y-6">
+            <DiscoveryPanel
+              devices={discoveredDevices}
+              isScanning={isScanning}
+              pairingCandidateId={pairingCandidateId}
+              pendingPairIds={pendingPairIds}
+              onScan={() => void handleScan()}
+              onPairDevice={(deviceId) => void handlePairDevice(deviceId)}
+            />
+            <PairedDevicesPanel
+              devices={pairedDevices}
+              pendingRecoverIds={pendingRecoverIds}
+              pendingRemoveIds={pendingRemoveIds}
+              onRecoverDevice={(deviceId) => void handleRecoverDevice(deviceId)}
+              onRequestUnpairDevice={requestUnpairDevice}
+            />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

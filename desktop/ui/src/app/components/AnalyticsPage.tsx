@@ -25,7 +25,6 @@ import {
 } from "../selectors/analytics";
 import { buildBluetoothNodes as buildDashboardNodes } from "../selectors/dashboard";
 import { useDesktopRuntime } from "../runtime-context";
-import { PageHeader } from "./PageHeader";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
@@ -266,14 +265,11 @@ export function AnalyticsPage() {
 
   if (!selectedNode) {
     return (
-      <div className="size-full flex flex-col bg-black">
-        <PageHeader
-          title="Analytics"
-          description="How often each machine is actually in use"
-          icon={TrendingUp}
-          backHref="/"
-          backLabel="Back to Dashboard"
-        />
+      <div className="flex-1 flex flex-col">
+        <div className="p-6">
+          <h1 className="text-xl font-semibold text-zinc-100">Analytics</h1>
+          <p className="text-sm text-zinc-500">How often each machine is actually in use</p>
+        </div>
         <div className="flex flex-1 items-center justify-center p-6">
           <Card className="max-w-xl border-zinc-800 bg-zinc-950/80 p-8 text-center">
             <p className="text-sm text-zinc-300">No approved nodes are available for analytics yet.</p>
@@ -287,16 +283,11 @@ export function AnalyticsPage() {
   }
 
   return (
-    <div className="size-full flex flex-col bg-black">
-      <PageHeader
-        title="Analytics"
-        description="How often each machine is actually in use"
-        icon={TrendingUp}
-        backHref="/"
-        backLabel="Back to Dashboard"
-      />
-
-      <div className="flex-1 overflow-auto p-6">
+    <div className="flex-1 overflow-auto p-6">
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-zinc-100">Analytics</h1>
+        <p className="text-sm text-zinc-500">How often each machine is actually in use</p>
+      </div>
         <div className="mx-auto max-w-[1800px] space-y-6">
           <Card className="border-zinc-800 bg-zinc-950/80 p-5 hover:border-zinc-700 transition-colors">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -619,7 +610,7 @@ export function AnalyticsPage() {
             </ScrollArea>
           </Card>
         </div>
-      </div>
     </div>
   );
 }
+
