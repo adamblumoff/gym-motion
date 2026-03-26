@@ -32,19 +32,19 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
         </DialogHeader>
 
         <div className="grid grid-cols-3 gap-3 mt-2">
-          <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+          <div className="bg-zinc-800/50 rounded-lg p-3 text-center hover:bg-zinc-800/70 transition-colors">
             <Wifi className={`size-4 mx-auto mb-1.5 ${node.isConnected ? 'text-blue-400' : 'text-zinc-600'}`} />
             <div className="text-xs text-zinc-400">Signal</div>
             <div className="text-sm text-zinc-100 font-mono">
               {node.signalStrength === null ? '--' : `${node.signalStrength}%`}
             </div>
           </div>
-          <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+          <div className="bg-zinc-800/50 rounded-lg p-3 text-center hover:bg-zinc-800/70 transition-colors">
             <Activity className={`size-4 mx-auto mb-1.5 ${node.isMoving ? 'text-blue-400' : 'text-zinc-600'}`} />
             <div className="text-xs text-zinc-400">Motion</div>
             <div className="text-sm text-zinc-100">{node.isMoving ? 'Active' : 'Still'}</div>
           </div>
-          <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+          <div className="bg-zinc-800/50 rounded-lg p-3 text-center hover:bg-zinc-800/70 transition-colors">
             <DeviceConnectionBadge state={node.connectionState} className="text-xs mx-auto" />
             <div className="text-xs text-zinc-400 mt-1.5">Status</div>
           </div>
@@ -60,7 +60,7 @@ export function NodeDetailModal({ node, open, onOpenChange }: NodeDetailModalPro
               {node.logs.map((log) => (
                 <div
                   key={log.id}
-                  className="flex items-start gap-2 text-xs pb-2 border-b border-zinc-800/50 last:border-0"
+                  className="flex items-start gap-2 text-xs pb-2 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30 rounded px-1 -mx-1 transition-colors"
                 >
                   <span className="text-zinc-600 font-mono shrink-0">
                     {log.timestamp.toLocaleTimeString('en-US', {

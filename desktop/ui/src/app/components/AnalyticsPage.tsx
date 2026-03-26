@@ -101,7 +101,7 @@ function SummaryMetricCard({
   description,
 }: SummaryMetricCardProps) {
   return (
-    <Card className="border-zinc-800 bg-zinc-950/80 p-5">
+    <Card className="border-zinc-800 bg-zinc-950/80 p-5 hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-emerald-500/5">
       <div className="mb-4 flex items-center justify-between">
         <Icon className={`size-5 ${iconClassName}`} />
         <span className="text-xs uppercase tracking-[0.3em] text-zinc-500">{label}</span>
@@ -324,7 +324,7 @@ export function AnalyticsPage() {
 
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-[1800px] space-y-6">
-          <Card className="border-zinc-800 bg-zinc-950/80 p-5">
+          <Card className="border-zinc-800 bg-zinc-950/80 p-5 hover:border-zinc-700 transition-colors">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Selected Machine</p>
@@ -378,7 +378,7 @@ export function AnalyticsPage() {
           </Card>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.8fr)_repeat(3,minmax(0,1fr))]">
-            <Card className="border-zinc-800 bg-zinc-950/80 p-6">
+            <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-all hover:shadow-lg hover:shadow-emerald-500/5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Utilization</p>
@@ -443,7 +443,7 @@ export function AnalyticsPage() {
             />
           </div>
 
-          <Card className="border-zinc-800 bg-zinc-950/60 p-5">
+          <Card className="border-zinc-800 bg-zinc-950/60 p-5 hover:border-zinc-700 transition-colors">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Data Status</p>
@@ -523,7 +523,7 @@ export function AnalyticsPage() {
           </Card>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.7fr_1fr]">
-            <Card className="border-zinc-800 bg-zinc-950/80 p-6">
+            <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-colors">
               <div className="mb-6">
                 <h2 className="text-sm font-medium text-zinc-100">Usage Over Time</h2>
                 <p className="mt-0.5 text-xs text-zinc-500">
@@ -561,7 +561,7 @@ export function AnalyticsPage() {
               )}
             </Card>
 
-            <Card className="border-zinc-800 bg-zinc-950/80 p-6">
+            <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-colors">
               <div className="mb-6">
                 <h2 className="text-sm font-medium text-zinc-100">Session Starts</h2>
                 <p className="mt-0.5 text-xs text-zinc-500">
@@ -597,7 +597,7 @@ export function AnalyticsPage() {
             </Card>
           </div>
 
-          <Card className="border-zinc-800 bg-zinc-950/80 p-6">
+          <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-colors">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h2 className="text-sm font-medium text-zinc-100">Live Activity</h2>
@@ -619,7 +619,7 @@ export function AnalyticsPage() {
                   activityLogs.map((log) => (
                     <div
                       key={log.id}
-                      className="flex items-start gap-3 rounded-lg border border-zinc-900 bg-zinc-950/70 px-3 py-2"
+                      className="flex items-start gap-3 rounded-lg border border-zinc-900 bg-zinc-950/70 px-3 py-2 hover:bg-zinc-900/80 hover:border-zinc-800 transition-colors"
                     >
                       <span className="shrink-0 font-mono text-[11px] text-zinc-500">
                         {log.timestamp.toLocaleTimeString("en-US", {

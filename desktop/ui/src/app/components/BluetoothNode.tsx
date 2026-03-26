@@ -85,7 +85,7 @@ export function BluetoothNode({
               node.logs.map((log) => (
                 <div
                   key={log.id}
-                  className="flex items-start gap-2 text-xs pb-2 border-b border-zinc-800/50 last:border-0"
+                  className="flex items-start gap-2 text-xs pb-2 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30 rounded px-1 -mx-1 transition-colors"
                 >
                   <span className="text-zinc-600 font-mono shrink-0">
                     {log.timestamp.toLocaleTimeString('en-US', {

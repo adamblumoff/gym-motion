@@ -41,7 +41,7 @@ export function PairedDevicesPanel({
           return (
             <div
               key={device.id}
-              className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg"
+              className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg hover:border-blue-500/35 hover:bg-blue-500/8 transition-colors"
             >
               <div className="flex items-center gap-4">
                 <div className="p-2 bg-blue-500/10 rounded-lg">

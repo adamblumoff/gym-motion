@@ -8,7 +8,10 @@ export function SignalStrengthMeter({
   className = "",
 }: SignalStrengthMeterProps) {
   return (
-    <div className={`flex items-center gap-1.5 ${className}`.trim()}>
+    <div
+      className={`flex items-center gap-1.5 cursor-help ${className}`.trim()}
+      title={value === null ? "Signal unavailable" : `Signal: ${value}% (${value >= 75 ? "Excellent" : value >= 50 ? "Good" : value >= 25 ? "Fair" : "Weak"})`}
+    >
       <div className="flex gap-0.5">
         {[1, 2, 3, 4].map((bar) => (
           <div
