@@ -6,7 +6,7 @@ import { AppSidebar } from "./sidebar/AppSidebar";
 export function AppLayout() {
   return (
     <SidebarProvider>
-      <div className="size-full flex bg-black">
+      <div className="h-screen w-full flex bg-black overflow-hidden">
         <AppSidebar />
         <main className="flex-1 min-w-0 overflow-auto">
           <Outlet />
