@@ -79,9 +79,11 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
       hardwareId: "hw-1",
     });
     await flushBackgroundWork();
+    const requestId = sidecarCommands[0]?.request_id;
 
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "node-log",
         sequence: 783,
@@ -96,6 +98,7 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "node-log",
         sequence: 1451,
@@ -110,6 +113,7 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "motion",
         sequence: 1585,
@@ -123,6 +127,7 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "node-log",
         sequence: 1586,
@@ -139,6 +144,7 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
     await bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
+        request_id: requestId,
         latest_sequence: 1586,
         high_water_sequence: 2289,
         sent_count: 3,
@@ -151,8 +157,19 @@ describe("windows winrt gateway runtime bridge malformed history recovery", () =
     expect(persistedBodies[0].records).toHaveLength(4);
     expect(persistedBodies[0].ackSequence).toBe(1586);
     expect(sidecarCommands).toEqual([
-      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 782, max_records: 3 },
-      { type: "acknowledge_history_sync", device_id: "stack-001", sequence: 1586 },
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 782,
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
+        type: "acknowledge_history_sync",
+        device_id: "stack-001",
+        sequence: 1586,
+        request_id: requestId,
+      }),
     ]);
   });
 });

@@ -867,19 +867,18 @@ describe("createAnalyticsService", () => {
 
     onUpdated.mockClear();
     service.scheduleRefresh("stack-001", 0);
-    vi.runAllTimers();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(onUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        totalMovementCount: 2,
-        totalMovingSeconds: 1740,
-        liveOverlay: expect.objectContaining({
-          active: false,
+    await vi.runAllTimersAsync();
+    await vi.waitFor(() => {
+      expect(onUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          totalMovementCount: 2,
+          totalMovingSeconds: 1740,
+          liveOverlay: expect.objectContaining({
+            active: false,
+          }),
         }),
-      }),
-    );
+      );
+    });
     vi.useRealTimers();
     nowSpy.mockRestore();
   });

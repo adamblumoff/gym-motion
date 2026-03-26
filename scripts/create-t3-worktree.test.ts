@@ -116,12 +116,14 @@ describe("create-t3-worktree cli parsing", () => {
 
 describe("create-t3-worktree path helpers", () => {
   it("derives the expected source env path", () => {
-    expect(getSourceEnvPath({ repoRoot: "C:\\repo\\gym-motion" })).toBe("C:\\repo\\gym-motion\\.env.local");
+    expect(getSourceEnvPath({ repoRoot: "C:\\repo\\gym-motion" })).toBe(
+      path.join("C:\\repo\\gym-motion", ".env.local"),
+    );
   });
 
   it("derives the expected t3 worktree path", () => {
     expect(getWorktreePath("feature-123", { osHomedir: () => "C:\\Users\\tester" })).toBe(
-      "C:\\Users\\tester\\.t3\\worktrees\\gym-motion\\feature-123",
+      path.join("C:\\Users\\tester", ".t3", "worktrees", "gym-motion", "feature-123"),
     );
   });
 });

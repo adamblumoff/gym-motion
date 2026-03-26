@@ -438,12 +438,13 @@ describe("windows winrt gateway runtime bridge", () => {
 
     expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
     expect(sidecarCommands).toEqual([
-      {
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 12,
-        max_records: 3,
-      },
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
     ]);
   });
 
@@ -520,9 +521,11 @@ describe("windows winrt gateway runtime bridge", () => {
       hardwareId: "hw-1",
     });
     await flushBackgroundWork();
+    const requestId = sidecarCommands[0]?.request_id;
 
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "motion",
         sequence: 5,
@@ -536,6 +539,7 @@ describe("windows winrt gateway runtime bridge", () => {
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: {
         kind: "node-log",
         sequence: 6,
@@ -552,6 +556,7 @@ describe("windows winrt gateway runtime bridge", () => {
     await bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
+        request_id: requestId,
         latest_sequence: 6,
         high_water_sequence: 6,
         sent_count: 2,
@@ -588,20 +593,23 @@ describe("windows winrt gateway runtime bridge", () => {
           },
         ],
         ackSequence: 6,
+        syncComplete: true,
       },
     ]);
     expect(sidecarCommands).toEqual([
-      {
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 4,
-        max_records: 3,
-      },
-      {
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
         type: "acknowledge_history_sync",
         device_id: "stack-001",
         sequence: 6,
-      },
+        request_id: requestId,
+      }),
     ]);
   });
 
@@ -678,19 +686,23 @@ describe("windows winrt gateway runtime bridge", () => {
       hardwareId: "hw-1",
     });
     await flushBackgroundWork();
+    const requestId = sidecarCommands[0]?.request_id;
 
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: { kind: "motion", sequence: 5, state: "moving", delta: 8, timestamp: 1 },
     });
     bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: { kind: "motion", sequence: 8, state: "still", delta: 0, timestamp: 2 },
     });
 
     await bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
+        request_id: requestId,
         latest_sequence: 8,
         high_water_sequence: 10,
         sent_count: 2,
@@ -700,40 +712,45 @@ describe("windows winrt gateway runtime bridge", () => {
     });
 
     expect(sidecarCommands).toEqual([
-      {
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 4,
-        max_records: 3,
-      },
-      {
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
         type: "acknowledge_history_sync",
         device_id: "stack-001",
         sequence: 6,
-      },
+        request_id: requestId,
+      }),
     ]);
 
     await vi.advanceTimersByTimeAsync(1_000);
     await flushBackgroundWork();
 
     expect(sidecarCommands).toEqual([
-      {
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 4,
-        max_records: 3,
-      },
-      {
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
         type: "acknowledge_history_sync",
         device_id: "stack-001",
         sequence: 6,
-      },
-      {
+        request_id: requestId,
+      }),
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 6,
-        max_records: 3,
-      },
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
     ]);
   });
 
@@ -814,18 +831,22 @@ describe("windows winrt gateway runtime bridge", () => {
       hardwareId: "hw-1",
     });
     await flushBackgroundWork();
+    const requestId = sidecarCommands[0]?.request_id;
 
     const recordPromise = bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 },
     });
     const secondRecordPromise = bridge.handleHistoryRecord({
       device_id: "stack-001",
+      request_id: requestId,
       record: { kind: "motion", sequence: 2, state: "still", delta: 0, timestamp: 2 },
     });
     const completePromise = bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
+        request_id: requestId,
         latest_sequence: 2,
         high_water_sequence: 2,
         sent_count: 2,
@@ -858,20 +879,23 @@ describe("windows winrt gateway runtime bridge", () => {
           { kind: "motion", sequence: 2, state: "still", delta: 0, timestamp: 2 },
         ],
         ackSequence: 2,
+        syncComplete: true,
       },
     ]);
     expect(sidecarCommands).toEqual([
-      {
+      expect.objectContaining({
         type: "begin_history_sync",
         device_id: "stack-001",
         after_sequence: 0,
-        max_records: 3,
-      },
-      {
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
         type: "acknowledge_history_sync",
         device_id: "stack-001",
         sequence: 2,
-      },
+        request_id: requestId,
+      }),
     ]);
   });
 
@@ -918,10 +942,12 @@ describe("windows winrt gateway runtime bridge", () => {
     });
     await bridge.forwardTelemetry({ deviceId: "stack-001", state: "moving", timestamp: 1, delta: 8, sequence: 1, bootId: "boot-1", firmwareVersion: "0.5.3", hardwareId: "hw-1" });
     await flushBackgroundWork();
-    bridge.handleHistoryRecord({ device_id: "stack-001", record: { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 } });
+    const requestId = sidecarCommands[0]?.request_id;
+    bridge.handleHistoryRecord({ device_id: "stack-001", request_id: requestId, record: { kind: "motion", sequence: 1, state: "moving", delta: 8, timestamp: 1 } });
     await bridge.handleHistorySyncComplete({
       payload: {
         device_id: "stack-001",
+        request_id: requestId,
         latest_sequence: 1,
         high_water_sequence: 1,
         sent_count: 1,
@@ -930,7 +956,13 @@ describe("windows winrt gateway runtime bridge", () => {
       },
     });
     expect(sidecarCommands).toEqual([
-      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 0, max_records: 3 },
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 0,
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
     ]);
   });
 
@@ -976,7 +1008,8 @@ describe("windows winrt gateway runtime bridge", () => {
     });
     await bridge.forwardTelemetry({ deviceId: "stack-001", state: "moving", timestamp: 1, delta: 8, sequence: 7, bootId: "boot-1", firmwareVersion: "0.5.3", hardwareId: "hw-1" });
     await flushBackgroundWork();
-    bridge.handleHistoryRecord({ device_id: "stack-001", record: { kind: "motion", sequence: 7, state: "moving", delta: 8, timestamp: 1 } });
+    const firstRequestId = sidecarCommands[0]?.request_id;
+    bridge.handleHistoryRecord({ device_id: "stack-001", request_id: firstRequestId, record: { kind: "motion", sequence: 7, state: "moving", delta: 8, timestamp: 1 } });
     bridge.handleNodeConnectionState({
       gatewayConnectionState: "disconnected",
       reason: "ble-disconnected",
@@ -989,8 +1022,20 @@ describe("windows winrt gateway runtime bridge", () => {
       "http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1",
     ]);
     expect(sidecarCommands).toEqual([
-      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 6, max_records: 3 },
-      { type: "begin_history_sync", device_id: "stack-001", after_sequence: 6, max_records: 3 },
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 6,
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 6,
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
     ]);
   });
 
