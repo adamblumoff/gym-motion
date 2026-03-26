@@ -21,7 +21,7 @@ import {
   handlePersistAck,
   sendToDesktop,
 } from "./windows-winrt-gateway-desktop-ipc.js";
-import { handleNodeConnectionStateEvent } from "./windows-winrt-gateway-node-connection-state.js";
+import { createNodeConnectionStateEventQueue } from "./windows-winrt-gateway-node-connection-state.js";
 import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 
@@ -130,6 +130,19 @@ const runtimeBridge = createRuntimeBridge({
   debug,
   sendSidecarCommand(command) {
     sendCommand(command.type, command);
+  },
+});
+
+const enqueueNodeConnectionStateEvent = createNodeConnectionStateEventQueue({
+  runtimeBridge,
+  runtimeServer,
+  emitGatewayState,
+  emitRuntimeDeviceUpdated,
+  onError(error) {
+    console.error("[gateway-winrt] failed to handle node connection state", error);
+    setRuntimeIssue(
+      error instanceof Error ? error.message : "Node connection-state handling failed.",
+    );
   },
 });
 
@@ -452,18 +465,7 @@ function handleSidecarEvent(event) {
       emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
     case "node_connection_state":
-      void handleNodeConnectionStateEvent({
-        event,
-        runtimeBridge,
-        runtimeServer,
-        emitGatewayState,
-        emitRuntimeDeviceUpdated,
-      }).catch((error) => {
-        console.error("[gateway-winrt] failed to handle node connection state", error);
-        setRuntimeIssue(
-          error instanceof Error ? error.message : "Node connection-state handling failed.",
-        );
-      });
+      void enqueueNodeConnectionStateEvent(event);
       break;
     case "telemetry": {
       const payload = {

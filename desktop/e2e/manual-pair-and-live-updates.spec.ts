@@ -28,7 +28,7 @@ test("manual pair and live analytics updates stay in sync", async () => {
     await expect(app.page.getByText("1 devices configured")).toBeVisible();
     await expect(app.page.getByText("Connected")).toBeVisible();
 
-    await app.page.getByRole("link", { name: /Back to Dashboard/i }).click();
+    await app.page.getByRole("button", { name: /Back to Dashboard/i }).click();
     await expect(app.page.getByText("Motion Tracking Dashboard")).toBeVisible();
     await expect(app.page.getByText(/GymMotion-f4e9d4|Leg Press/i)).toBeVisible();
     await expect(

@@ -49,22 +49,26 @@ export function DashboardHeader({
             <div className="text-xs text-zinc-500 uppercase tracking-wider">Gateway</div>
           </div>
           <div className="w-px h-12 bg-zinc-800" />
-          <Link to="/analytics">
-            <Button variant="ghost" className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+          <Button
+            asChild
+            variant="ghost"
+            className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+          >
+            <Link to="/analytics">
               <BarChart3 className="size-4 mr-2" />
               Analytics
-            </Button>
-          </Link>
+            </Link>
+          </Button>
           <div className="flex items-center gap-2 text-xs text-zinc-600 bg-zinc-800/50 rounded-lg px-3 py-2 border border-zinc-800">
             <Command className="size-3" />
             <span>K</span>
           </div>
-          <Link to="/setup">
-            <Button className="bg-blue-500 hover:bg-blue-600 text-white">
+          <Button asChild className="bg-blue-500 hover:bg-blue-600 text-white">
+            <Link to="/setup">
               <Settings className="size-4 mr-2" />
               Setup Sensors
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </div>
     </div>

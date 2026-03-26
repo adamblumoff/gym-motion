@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { handleNodeConnectionStateEvent } from "./windows-winrt-gateway-node-connection-state";
+import {
+  createNodeConnectionStateEventQueue,
+  handleNodeConnectionStateEvent,
+} from "./windows-winrt-gateway-node-connection-state";
 
 describe("windows winrt gateway node connection state handler", () => {
   it("emits reconnecting device updates only after the bridge mutation completes", async () => {
@@ -107,6 +110,56 @@ describe("windows winrt gateway node connection state handler", () => {
       },
     });
 
+    expect(emittedStates).toEqual(["reconnecting", "connected"]);
+  });
+
+  it("serializes back-to-back connection events in dispatcher order", async () => {
+    const emittedStates = [];
+    const runtimeState = {
+      deviceId: "esp32-known",
+      gatewayConnectionState: "disconnected",
+    };
+
+    const runtimeBridge = {
+      handleNodeConnectionState: vi.fn(async (event) => {
+        await Promise.resolve();
+        runtimeState.gatewayConnectionState =
+          event.gatewayConnectionState === "connected" ? "connected" : "reconnecting";
+      }),
+    };
+    const runtimeServer = {
+      resolveKnownDeviceId: vi.fn(() => runtimeState.deviceId),
+      getRuntimeNode: vi.fn(() => ({ ...runtimeState })),
+    };
+    const emitGatewayState = vi.fn();
+    const emitRuntimeDeviceUpdated = vi.fn((deviceId) => {
+      emittedStates.push(runtimeServer.getRuntimeNode(deviceId)?.gatewayConnectionState);
+    });
+    const onError = vi.fn();
+
+    const enqueueNodeConnectionStateEvent = createNodeConnectionStateEventQueue({
+      runtimeBridge,
+      runtimeServer,
+      emitGatewayState,
+      emitRuntimeDeviceUpdated,
+      onError,
+      describeNode(node) {
+        return node;
+      },
+    });
+
+    const first = enqueueNodeConnectionStateEvent({
+      gatewayConnectionState: "connecting",
+      node: { knownDeviceId: runtimeState.deviceId, peripheralId: "AA:BB" },
+    });
+    const second = enqueueNodeConnectionStateEvent({
+      gatewayConnectionState: "connected",
+      node: { knownDeviceId: runtimeState.deviceId, peripheralId: "AA:BB" },
+    });
+
+    await Promise.all([first, second]);
+
+    expect(onError).not.toHaveBeenCalled();
     expect(emittedStates).toEqual(["reconnecting", "connected"]);
   });
 });
