@@ -226,8 +226,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApprovedNodeRule, Command, Event, HistoryErrorPayload, HistorySyncCompletePayload,
-        TelemetryPayload,
+        ApprovedNodeRule, Command, DiscoveredNode, Event, HistoryErrorPayload,
+        HistorySyncCompletePayload, TelemetryPayload,
     };
 
     #[test]

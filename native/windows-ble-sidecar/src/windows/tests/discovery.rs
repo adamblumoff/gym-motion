@@ -1,5 +1,19 @@
 use super::*;
 
+fn test_config() -> Config {
+    Config {
+        service_uuid: Uuid::nil(),
+        telemetry_uuid: Uuid::nil(),
+        control_uuid: Uuid::nil(),
+        status_uuid: Uuid::nil(),
+        history_service_uuid: Uuid::nil(),
+        history_control_uuid: Uuid::nil(),
+        history_status_uuid: Uuid::nil(),
+        device_name_prefix: "GymMotion-".to_string(),
+        verbose_logging: false,
+    }
+}
+
 #[test]
 fn retryable_pre_session_setup_failures_use_the_inline_setup_retry() {
     let subscribe_error = anyhow::anyhow!("status subscribe step failed for Bench");
@@ -26,14 +40,7 @@ fn approved_reconnect_waits_for_stronger_signal_after_first_sparse_sighting() {
         Some("aa:bb"),
         None,
         false,
-        &Config {
-            service_uuid: Uuid::nil(),
-            telemetry_uuid: Uuid::nil(),
-            control_uuid: Uuid::nil(),
-            status_uuid: Uuid::nil(),
-            device_name_prefix: "GymMotion-".to_string(),
-            verbose_logging: false,
-        },
+        &test_config(),
         &[ApprovedNodeRule {
             id: "node-1".to_string(),
             label: "Bench".to_string(),
@@ -72,14 +79,7 @@ fn approved_reconnect_requires_runtime_service_even_after_sparse_repeat_sighting
         Some("aa:bb"),
         None,
         false,
-        &Config {
-            service_uuid: Uuid::nil(),
-            telemetry_uuid: Uuid::nil(),
-            control_uuid: Uuid::nil(),
-            status_uuid: Uuid::nil(),
-            device_name_prefix: "GymMotion-".to_string(),
-            verbose_logging: false,
-        },
+        &test_config(),
         &[ApprovedNodeRule {
             id: "node-1".to_string(),
             label: "Bench".to_string(),
@@ -118,14 +118,7 @@ fn explicit_windows_pairing_can_connect_visible_name_prefix_nodes() {
         Some("aa:bb"),
         Some("GymMotion-f4e9d4"),
         false,
-        &Config {
-            service_uuid: Uuid::nil(),
-            telemetry_uuid: Uuid::nil(),
-            control_uuid: Uuid::nil(),
-            status_uuid: Uuid::nil(),
-            device_name_prefix: "GymMotion-".to_string(),
-            verbose_logging: false,
-        },
+        &test_config(),
         &[],
         &HashMap::new(),
     );
@@ -144,14 +137,7 @@ fn explicit_windows_pairing_can_connect_visible_name_prefix_nodes() {
 
 #[test]
 fn manual_discovery_stays_strict_when_only_approved_identity_matches() {
-    let config = Config {
-        service_uuid: Uuid::nil(),
-        telemetry_uuid: Uuid::nil(),
-        control_uuid: Uuid::nil(),
-        status_uuid: Uuid::nil(),
-        device_name_prefix: "GymMotion-".to_string(),
-        verbose_logging: false,
-    };
+    let config = test_config();
     let allowed = vec![ApprovedNodeRule {
         id: "node-1".to_string(),
         label: "Bench".to_string(),
@@ -180,14 +166,7 @@ fn manual_discovery_stays_strict_when_only_approved_identity_matches() {
 
 #[test]
 fn approved_reconnect_does_not_match_shared_local_name_without_stronger_identity() {
-    let config = Config {
-        service_uuid: Uuid::nil(),
-        telemetry_uuid: Uuid::nil(),
-        control_uuid: Uuid::nil(),
-        status_uuid: Uuid::nil(),
-        device_name_prefix: "GymMotion-".to_string(),
-        verbose_logging: false,
-    };
+    let config = test_config();
     let allowed = vec![
         ApprovedNodeRule {
             id: "node-1".to_string(),
