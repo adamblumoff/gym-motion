@@ -1,4 +1,4 @@
-import { Bluetooth, Settings, BarChart3, Command } from 'lucide-react';
+import { Bluetooth, Settings, BarChart3 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from './ui/button';
 
@@ -59,10 +59,6 @@ export function DashboardHeader({
               Analytics
             </Link>
           </Button>
-          <div className="flex items-center gap-2 text-xs text-zinc-600 bg-zinc-800/50 rounded-lg px-3 py-2 border border-zinc-800">
-            <Command className="size-3" />
-            <span>K</span>
-          </div>
           <Button asChild className="bg-blue-500 hover:bg-blue-600 text-white">
             <Link to="/setup">
               <Settings className="size-4 mr-2" />
