@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 
 import { applyThemeState } from "../../lib/theme";
 import { createDesktopAppActions } from "./actions";
@@ -12,7 +12,7 @@ import { createInitialDesktopAppState } from "./state";
 
 export function useDesktopApp() {
   const [state, setState] = useState(createInitialDesktopAppState);
-  const actions = createDesktopAppActions(setState);
+  const actions = useMemo(() => createDesktopAppActions(setState), []);
 
   useEffect(() => {
     let mounted = true;

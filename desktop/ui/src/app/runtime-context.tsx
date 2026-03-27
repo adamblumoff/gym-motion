@@ -1,14 +1,13 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { useDesktopApp } from "./runtime/use-desktop-app";
 import { isDesktopRuntimeLoaded } from "./runtime/state";
 
-type DesktopRuntimeValue = ReturnType<typeof useDesktopApp> & {
-  isLoaded: boolean;
-};
+type DesktopRuntimeValue = ReturnType<typeof useDesktopApp>;
 
 const DesktopRuntimeContext = createContext<DesktopRuntimeValue | null>(null);
+const DesktopRuntimeLoadedContext = createContext(false);
 
 export function DesktopRuntimeProvider({
   children,
@@ -16,16 +15,17 @@ export function DesktopRuntimeProvider({
   children: ReactNode;
 }) {
   const desktopApp = useDesktopApp();
+  const isLoaded = useMemo(
+    () => isDesktopRuntimeLoaded(desktopApp),
+    [desktopApp.setup, desktopApp.snapshot],
+  );
 
   return (
-    <DesktopRuntimeContext.Provider
-      value={{
-        ...desktopApp,
-        isLoaded: isDesktopRuntimeLoaded(desktopApp),
-      }}
-    >
-      {children}
-    </DesktopRuntimeContext.Provider>
+    <DesktopRuntimeLoadedContext.Provider value={isLoaded}>
+      <DesktopRuntimeContext.Provider value={desktopApp}>
+        {children}
+      </DesktopRuntimeContext.Provider>
+    </DesktopRuntimeLoadedContext.Provider>
   );
 }
 
@@ -37,4 +37,8 @@ export function useDesktopRuntime() {
   }
 
   return context;
+}
+
+export function useDesktopRuntimeLoaded() {
+  return useContext(DesktopRuntimeLoadedContext);
 }

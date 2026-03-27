@@ -1,8 +1,11 @@
 import { createHashRouter } from "react-router";
+
 import { AppLayout } from "./components/AppLayout";
-import { Dashboard } from "./components/Dashboard";
-import { SetupPage } from "./components/SetupPage";
-import { AnalyticsPage } from "./components/AnalyticsPage";
+import {
+  loadAnalyticsRoute,
+  loadDashboardRoute,
+  loadSetupRoute,
+} from "./route-modules";
 
 export const router = createHashRouter([
   {
@@ -10,15 +13,24 @@ export const router = createHashRouter([
     children: [
       {
         index: true,
-        Component: Dashboard,
+        lazy: async () => {
+          const module = await loadDashboardRoute();
+          return { Component: module.Dashboard };
+        },
       },
       {
         path: "/setup",
-        Component: SetupPage,
+        lazy: async () => {
+          const module = await loadSetupRoute();
+          return { Component: module.SetupPage };
+        },
       },
       {
         path: "/analytics",
-        Component: AnalyticsPage,
+        lazy: async () => {
+          const module = await loadAnalyticsRoute();
+          return { Component: module.AnalyticsPage };
+        },
       },
     ],
   },

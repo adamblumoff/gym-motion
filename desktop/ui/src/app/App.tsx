@@ -1,10 +1,10 @@
 import { RouterProvider } from "react-router";
 
-import { DesktopRuntimeProvider, useDesktopRuntime } from "./runtime-context";
+import { DesktopRuntimeProvider, useDesktopRuntimeLoaded } from "./runtime-context";
 import { router } from "./routes";
 
 function AppRouter() {
-  const { isLoaded } = useDesktopRuntime();
+  const isLoaded = useDesktopRuntimeLoaded();
 
   if (!isLoaded) {
     return (

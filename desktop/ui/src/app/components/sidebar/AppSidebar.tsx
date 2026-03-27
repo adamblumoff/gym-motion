@@ -9,7 +9,7 @@ export function AppSidebar() {
   return (
     <aside
       className={[
-        "flex flex-col h-full border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-in-out overflow-hidden shrink-0",
+        "flex flex-col h-full border-r border-sidebar-border bg-sidebar overflow-hidden shrink-0",
         collapsed ? "w-16" : "w-60",
       ].join(" ")}
     >
