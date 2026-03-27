@@ -2,13 +2,16 @@ type RouteModuleLoader<TModule> = (() => Promise<TModule>) & {
   preload: () => Promise<TModule>;
 };
 
-function createRouteModuleLoader<TModule>(
+export function createRouteModuleLoader<TModule>(
   loadModule: () => Promise<TModule>,
 ): RouteModuleLoader<TModule> {
   let pending: Promise<TModule> | null = null;
 
   const load = (() => {
-    pending ??= loadModule();
+    pending ??= loadModule().catch((error) => {
+      pending = null;
+      throw error;
+    });
     return pending;
   }) as RouteModuleLoader<TModule>;
 
