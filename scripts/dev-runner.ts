@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 
 import {
   appendDevLog,
@@ -62,12 +63,18 @@ export function turboCommandArgs(mode: DevRunnerMode, turboArgs: string[] = []):
 }
 
 async function spawnTurbo(mode: DevRunnerMode, env: NodeJS.ProcessEnv, turboArgs: string[]) {
-  const args = turboCommandArgs(mode, turboArgs);
+  const turboBinary = path.join(
+    process.cwd(),
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "turbo.exe" : "turbo",
+  );
+  const args = ["run", mode, "--ui=tui", ...turboArgs];
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("bunx", args, {
+    const child = spawn(turboBinary, args, {
       stdio: "inherit",
-      shell: process.platform === "win32",
+      shell: false,
       env,
     });
 

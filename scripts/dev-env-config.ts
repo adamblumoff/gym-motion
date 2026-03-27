@@ -314,6 +314,9 @@ export function createDevRunnerEnv(input: {
     ELECTRON_RENDERER_PORT: String(input.ports.rendererPort),
   };
 
+  delete nextEnv.ELECTRON_RUN_AS_NODE;
+  delete nextEnv.ELECTRON_NO_ATTACH_CONSOLE;
+
   if (!nextEnv.GYM_MOTION_AUTO_BOOTSTRAP_FROM_CWD) {
     nextEnv.GYM_MOTION_AUTO_BOOTSTRAP_FROM_CWD = "1";
   }

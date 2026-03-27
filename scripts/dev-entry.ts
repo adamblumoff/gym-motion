@@ -5,24 +5,22 @@ import { runDevRunnerCli } from "./dev-runner";
 
 export type TaskExecutionPlan = {
   description: string;
-  command: string | null;
+  packageScript: string | null;
   env?: NodeJS.ProcessEnv;
 };
 
-function shellCommandForMode(mode: DevRunnerMode): TaskExecutionPlan {
+function taskPlanForMode(mode: DevRunnerMode): TaskExecutionPlan {
   switch (mode) {
     case "dev":
     case "dev:desktop":
       return {
         description: "Launch the Gym Motion Electron desktop dev stack.",
-        command:
-          "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
+        packageScript: "dev:desktop:task",
       };
     case "dev:test-desktop":
       return {
         description: "Launch the Electron desktop dev stack with desktop E2E mode enabled.",
-        command:
-          "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev",
+        packageScript: "dev:test-desktop:task",
         env: {
           ...process.env,
           GYM_MOTION_E2E: "1",
@@ -31,22 +29,22 @@ function shellCommandForMode(mode: DevRunnerMode): TaskExecutionPlan {
     case "dev:runtime":
       return {
         description: "No standalone runtime-only dev loop exists yet. Leaving this as a no-op extension point.",
-        command: null,
+        packageScript: null,
       };
     case "dev:ble-sidecar":
       return {
         description:
           "Build the Windows BLE sidecar once. A dedicated watch mode is not implemented yet.",
-        command: "bun run scripts/build-windows-ble-sidecar.mjs",
+        packageScript: "dev:ble-sidecar:task",
       };
   }
 }
 
-async function runShellCommand(command: string, env: NodeJS.ProcessEnv): Promise<void> {
+async function runPackageScript(packageScript: string, env: NodeJS.ProcessEnv): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, {
+    const child = spawn("bun", ["run", packageScript], {
       stdio: "inherit",
-      shell: true,
+      shell: process.platform === "win32",
       env,
     });
 
@@ -68,21 +66,21 @@ async function runShellCommand(command: string, env: NodeJS.ProcessEnv): Promise
 export async function runTaskMode(mode: DevRunnerMode): Promise<void> {
   const devHome = resolveDevHome(process.env);
   const paths = resolveDevHomePaths(devHome);
-  const plan = shellCommandForMode(mode);
+  const plan = taskPlanForMode(mode);
   const env = plan.env ?? process.env;
 
   console.log(`[task] mode=${mode}`);
   console.log(`[task] ${plan.description}`);
   await appendTaskLog(paths, mode, `start ${plan.description}`);
 
-  if (!plan.command) {
+  if (!plan.packageScript) {
     await appendTaskLog(paths, mode, "complete no-op");
     return;
   }
 
-  console.log(`[task] executing ${plan.command}`);
-  await appendTaskLog(paths, mode, `command ${plan.command}`);
-  await runShellCommand(plan.command, env);
+  console.log(`[task] executing bun run ${plan.packageScript}`);
+  await appendTaskLog(paths, mode, `command bun run ${plan.packageScript}`);
+  await runPackageScript(plan.packageScript, env);
   await appendTaskLog(paths, mode, "complete success");
 }
 
