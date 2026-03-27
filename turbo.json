@@ -1,0 +1,93 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "GYM_MOTION_DEV_HOME",
+    "GYM_MOTION_DEV_INSTANCE",
+    "GYM_MOTION_PORT_OFFSET",
+    "GYM_MOTION_RENDERER_PORT",
+    "GYM_MOTION_RUNTIME_PORT",
+    "GYM_MOTION_DEV_URL",
+    "GYM_MOTION_AUTO_BOOTSTRAP_FROM_CWD",
+    "GYM_MOTION_NO_BROWSER",
+    "GYM_MOTION_LOG_DEV_EVENTS",
+    "GYM_MOTION_DEV_RUNNER_ACTIVE",
+    "GYM_MOTION_DEV_RUNNER_MODE",
+    "GYM_MOTION_E2E",
+    "PORT",
+    "ELECTRON_RENDERER_PORT"
+  ],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:desktop": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:runtime": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:ble-sidecar": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:test-desktop": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "outputs": [
+        "build/**",
+        "dist/**",
+        "out/**",
+        "release/**"
+      ]
+    },
+    "build:desktop:test": {
+      "outputs": [
+        "dist/**",
+        "out/**"
+      ]
+    },
+    "build:win": {
+      "outputs": [
+        "dist/**",
+        "out/**",
+        "release/**"
+      ]
+    },
+    "lint": {
+      "cache": false,
+      "outputs": []
+    },
+    "typecheck": {
+      "cache": false,
+      "outputs": []
+    },
+    "test": {
+      "cache": false,
+      "outputs": []
+    },
+    "test:e2e:desktop": {
+      "cache": false,
+      "outputs": [
+        "playwright-results/**"
+      ]
+    },
+    "firmware:build": {
+      "outputs": [
+        "firmware/build/**"
+      ]
+    },
+    "firmware:test:host": {
+      "cache": false,
+      "outputs": []
+    },
+    "firmware:upload": {
+      "cache": false,
+      "outputs": []
+    }
+  }
+}

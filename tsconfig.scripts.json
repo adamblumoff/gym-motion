@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "scripts/dev-entry.ts",
+    "scripts/dev-env-config.ts",
+    "scripts/dev-runner.ts",
+    "scripts/dev-env-config.test.ts",
+    "scripts/dev-runner.test.ts"
+  ]
+}
