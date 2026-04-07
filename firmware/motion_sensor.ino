@@ -73,6 +73,23 @@ bool resetMotionSensorAlgorithm() {
   return true;
 }
 
+void logMotionSensorTuning() {
+  Serial.print("STHS34PF80 tuning: odr=");
+  Serial.print(SENSOR_ODR_CONFIG, HEX);
+  Serial.print(" avg_t=");
+  Serial.print(SENSOR_AMBIENT_AVG_CONFIG, HEX);
+  Serial.print(" avg_tmos=");
+  Serial.print(SENSOR_OBJECT_AVG_CONFIG, HEX);
+  Serial.print(" lpf_pm=");
+  Serial.print(SENSOR_MOTION_PRESENCE_LPF_CONFIG, HEX);
+  Serial.print(" lpf_m=");
+  Serial.print(SENSOR_MOTION_LPF_CONFIG, HEX);
+  Serial.print(" lpf_p=");
+  Serial.print(SENSOR_PRESENCE_LPF_CONFIG, HEX);
+  Serial.print(" still_timeout_ms=");
+  Serial.println(STOP_TIMEOUT_MS);
+}
+
 void setupMotionSensor() {
   const uint8_t whoAmI = readSensorRegister8(STHS34PF80_REG_WHO_AM_I);
   if (whoAmI != STHS34PF80_WHO_AM_I_VALUE) {
@@ -86,13 +103,27 @@ void setupMotionSensor() {
   delay(5);
   resetMotionSensorAlgorithm();
 
-  // Match the vendor library defaults closely for a conservative bring-up.
-  writeSensorRegisterMasked(STHS34PF80_REG_AVG_TRIM, 0x07, 0x02);
+  // First tuning pass: sample faster and lighten filtering so motion changes
+  // feel more responsive on the bench without changing detection thresholds yet.
+  writeSensorRegisterMasked(STHS34PF80_REG_AVG_TRIM, 0x18, SENSOR_AMBIENT_AVG_CONFIG << 3);
+  writeSensorRegisterMasked(STHS34PF80_REG_AVG_TRIM, 0x07, SENSOR_OBJECT_AVG_CONFIG);
+  writeSensorRegisterMasked(
+    STHS34PF80_REG_LPF1,
+    0x38,
+    SENSOR_MOTION_PRESENCE_LPF_CONFIG << 3
+  );
+  writeSensorRegisterMasked(STHS34PF80_REG_LPF1, 0x07, SENSOR_MOTION_LPF_CONFIG);
+  writeSensorRegisterMasked(
+    STHS34PF80_REG_LPF2,
+    0x38,
+    SENSOR_PRESENCE_LPF_CONFIG << 3
+  );
   writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x10, 0x10);
-  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, 0x03);
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, SENSOR_ODR_CONFIG);
 
   motionSensorReady = true;
   Serial.println("STHS34PF80 motion sensor ready.");
+  logMotionSensorTuning();
 }
 
 void updateMotionState() {
