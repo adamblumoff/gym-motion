@@ -3,10 +3,6 @@ bool filesystemReady = false;
 bool filesystemInitAttempted = false;
 }
 
-bool persistedStateHasKey(const String& json, const char* key) {
-  return json.indexOf("\"" + String(key) + "\"") >= 0;
-}
-
 String buildPersistedStatePayload() {
   return
     "{\"" + String(PREF_DEVICE_ID) + "\":\"" + escapeJsonString(configuredDeviceId) +
@@ -37,52 +33,18 @@ bool readFileIntoString(const char* path, String& contents) {
 }
 
 bool loadPersistedStateFromPayload(const String& payload) {
-  String json = payload;
-  json.trim();
-  if (json.length() == 0 || !json.startsWith("{") || !json.endsWith("}")) {
+  firmware_runtime::PersistedStateSnapshot snapshot;
+  if (!firmware_runtime::parsePersistedStatePayload(payload.c_str(), snapshot)) {
     return false;
   }
 
-  const char* requiredKeys[] = {
-    PREF_DEVICE_ID,
-    PREF_SITE_ID,
-    PREF_MACHINE_LABEL,
-    PREF_NEXT_SEQUENCE,
-    PREF_ACKED_SEQUENCE,
-    PREF_HISTORY_OVERFLOW,
-    PREF_HISTORY_DROPPED,
-  };
-
-  for (size_t index = 0; index < (sizeof(requiredKeys) / sizeof(requiredKeys[0])); index++) {
-    if (!persistedStateHasKey(json, requiredKeys[index])) {
-      return false;
-    }
-  }
-
-  configuredDeviceId = extractJsonString(json, PREF_DEVICE_ID);
-  configuredSiteId = extractJsonString(json, PREF_SITE_ID);
-  configuredMachineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
-  nextHistorySequence = extractJsonUnsignedLong(json, PREF_NEXT_SEQUENCE, 1);
-  ackedHistorySequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
-  historyOverflowed = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
-  historyDroppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
-  if (nextHistorySequence == 0 || ackedHistorySequence >= nextHistorySequence) {
-    return false;
-  }
-
-  const bool anyProvisioningValue =
-    configuredDeviceId.length() > 0 ||
-    configuredSiteId.length() > 0 ||
-    configuredMachineLabel.length() > 0;
-  const bool allProvisioningValues =
-    configuredDeviceId.length() > 0 &&
-    configuredSiteId.length() > 0 &&
-    configuredMachineLabel.length() > 0;
-
-  if (anyProvisioningValue && !allProvisioningValues) {
-    return false;
-  }
-
+  configuredDeviceId = snapshot.deviceId.c_str();
+  configuredSiteId = snapshot.siteId.c_str();
+  configuredMachineLabel = snapshot.machineLabel.c_str();
+  nextHistorySequence = snapshot.nextHistorySequence;
+  ackedHistorySequence = snapshot.ackedHistorySequence;
+  historyOverflowed = snapshot.historyOverflowed;
+  historyDroppedCount = snapshot.historyDroppedCount;
   return true;
 }
 
@@ -136,15 +98,23 @@ void loadPersistedState() {
   historyOverflowed = false;
   historyDroppedCount = 0;
 
-  if (!filesystemReady) {
+  const bool primaryValid = filesystemReady && loadPersistedStateFromFile(PREFS_FILE_PATH);
+  const bool backupValid = !primaryValid && filesystemReady && loadPersistedStateFromFile(PREFS_BACKUP_FILE_PATH);
+  const auto action = firmware_runtime::decidePersistedStateLoadAction(
+    filesystemReady,
+    primaryValid,
+    backupValid
+  );
+
+  if (action == firmware_runtime::PersistedStateLoadAction::SkipFilesystem) {
     return;
   }
 
-  if (loadPersistedStateFromFile(PREFS_FILE_PATH)) {
+  if (action == firmware_runtime::PersistedStateLoadAction::UsePrimary) {
     return;
   }
 
-  if (loadPersistedStateFromFile(PREFS_BACKUP_FILE_PATH)) {
+  if (action == firmware_runtime::PersistedStateLoadAction::UseBackup) {
     savePersistedState();
     return;
   }

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from glob import glob
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,11 +52,11 @@ def main() -> int:
         str(ROOT / "firmware"),
         "-I",
         str(ROOT / "firmware" / "third_party"),
+        str(ROOT / "firmware" / "persisted_state.cpp"),
         str(ROOT / "firmware" / "runtime_host_protocol.cpp"),
-        str(ROOT / "firmware" / "host_tests" / "runtime_host_protocol.test.cpp"),
-        "-o",
-        str(output),
     ]
+    command.extend(sorted(glob(str(ROOT / "firmware" / "host_tests" / "*.cpp"))))
+    command.extend(["-o", str(output)])
 
     subprocess.run(command, check=True)
     subprocess.run([str(output)], check=True)

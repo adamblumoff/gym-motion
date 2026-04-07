@@ -4,6 +4,7 @@
 #include <nrf.h>
 
 #include "runtime_host_protocol.hpp"
+#include "persisted_state.hpp"
 
 using namespace Adafruit_LittleFS_Namespace;
 
