@@ -111,8 +111,6 @@ void updateMotionState() {
   if (!haveLastReading) {
     haveLastReading = true;
     lastMotionTime = now;
-    lastMotionValue = motionValue;
-    lastPresenceValue = presenceValue;
     Serial.println("Calibrating STHS34PF80...");
     return;
   }
@@ -139,9 +137,6 @@ void updateMotionState() {
   if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
     sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
   }
-
-  lastMotionValue = motionValue;
-  lastPresenceValue = presenceValue;
 }
 
 void logConnectedRuntimeHeartbeat() {

@@ -1,23 +1,84 @@
-void loadProvisioningConfig() {
-  configuredDeviceId = preferences.getString(PREF_DEVICE_ID, "");
-  configuredSiteId = preferences.getString(PREF_SITE_ID, "");
-  configuredMachineLabel = preferences.getString(PREF_MACHINE_LABEL, "");
+namespace {
+bool filesystemReady = false;
 }
 
-void loadHistoryConfig() {
-  nextHistorySequence = preferences.getULong(PREF_NEXT_SEQUENCE, 1);
-  ackedHistorySequence = preferences.getULong(PREF_ACKED_SEQUENCE, 0);
-  historyOverflowed = preferences.getBool(PREF_HISTORY_OVERFLOW, false);
-  historyDroppedCount = preferences.getULong(PREF_HISTORY_DROPPED, 0);
+void ensureFilesystemReady() {
+  if (filesystemReady) {
+    return;
+  }
+
+  if (!SPIFFS.begin()) {
+    SPIFFS.format();
+    SPIFFS.begin();
+  }
+
+  filesystemReady = true;
 }
 
-void clearProvisioningConfig() {
-  preferences.remove(PREF_DEVICE_ID);
-  preferences.remove(PREF_SITE_ID);
-  preferences.remove(PREF_MACHINE_LABEL);
+void loadPersistedState() {
+  ensureFilesystemReady();
+
   configuredDeviceId = "";
   configuredSiteId = "";
   configuredMachineLabel = "";
+  nextHistorySequence = 1;
+  ackedHistorySequence = 0;
+  historyOverflowed = false;
+  historyDroppedCount = 0;
+
+  if (!SPIFFS.exists(PREFS_FILE_PATH)) {
+    savePersistedState();
+    return;
+  }
+
+  File file = SPIFFS.open(PREFS_FILE_PATH, FILE_READ);
+  if (!file) {
+    return;
+  }
+
+  String json;
+  while (file.available()) {
+    json += static_cast<char>(file.read());
+  }
+  file.close();
+
+  configuredDeviceId = extractJsonString(json, PREF_DEVICE_ID);
+  configuredSiteId = extractJsonString(json, PREF_SITE_ID);
+  configuredMachineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
+  nextHistorySequence = extractJsonUnsignedLong(json, PREF_NEXT_SEQUENCE, 1);
+  ackedHistorySequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
+  historyOverflowed = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
+  historyDroppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
+}
+
+void savePersistedState() {
+  ensureFilesystemReady();
+  SPIFFS.remove(PREFS_FILE_PATH);
+
+  File file = SPIFFS.open(PREFS_FILE_PATH, FILE_WRITE);
+  if (!file) {
+    return;
+  }
+
+  const String payload =
+    "{\"" + String(PREF_DEVICE_ID) + "\":\"" + escapeJsonString(configuredDeviceId) +
+    "\",\"" + String(PREF_SITE_ID) + "\":\"" + escapeJsonString(configuredSiteId) +
+    "\",\"" + String(PREF_MACHINE_LABEL) + "\":\"" + escapeJsonString(configuredMachineLabel) +
+    "\",\"" + String(PREF_NEXT_SEQUENCE) + "\":" + String(nextHistorySequence) +
+    ",\"" + String(PREF_ACKED_SEQUENCE) + "\":" + String(ackedHistorySequence) +
+    ",\"" + String(PREF_HISTORY_OVERFLOW) + "\":" + String(historyOverflowed ? 1 : 0) +
+    ",\"" + String(PREF_HISTORY_DROPPED) + "\":" + String(historyDroppedCount) + "}";
+
+  file.write(payload.c_str(), payload.length());
+  file.flush();
+  file.close();
+}
+
+void clearProvisioningConfig() {
+  configuredDeviceId = "";
+  configuredSiteId = "";
+  configuredMachineLabel = "";
+  savePersistedState();
 }
 
 void saveProvisioningConfig(
@@ -25,12 +86,10 @@ void saveProvisioningConfig(
   const String& nextSiteId,
   const String& nextMachineLabel
 ) {
-  preferences.putString(PREF_DEVICE_ID, nextDeviceId);
-  preferences.putString(PREF_SITE_ID, nextSiteId);
-  preferences.putString(PREF_MACHINE_LABEL, nextMachineLabel);
   configuredDeviceId = nextDeviceId;
   configuredSiteId = nextSiteId;
   configuredMachineLabel = nextMachineLabel;
+  savePersistedState();
 }
 
 unsigned long allocateHistorySequence() {
@@ -38,14 +97,13 @@ unsigned long allocateHistorySequence() {
   state.nextSequence = nextHistorySequence;
   const unsigned long sequence = firmware_runtime::allocateHistorySequence(state);
   nextHistorySequence = state.nextSequence;
-  preferences.putULong(PREF_NEXT_SEQUENCE, nextHistorySequence);
+  savePersistedState();
   lastJournaledSequence = sequence;
   return sequence;
 }
 
 void persistHistoryOverflowState() {
-  preferences.putBool(PREF_HISTORY_OVERFLOW, historyOverflowed);
-  preferences.putULong(PREF_HISTORY_DROPPED, historyDroppedCount);
+  savePersistedState();
 }
 
 void replaceHistoryFile(File& tempFile) {
@@ -226,7 +284,7 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
   ackedHistorySequence = state.ackedSequence;
   historyOverflowed = state.overflowed;
   historyDroppedCount = state.droppedCount;
-  preferences.putULong(PREF_ACKED_SEQUENCE, ackedHistorySequence);
+  savePersistedState();
   compactHistoryAboveSequence(ackedHistorySequence);
 
   if (result.clearedOverflow) {

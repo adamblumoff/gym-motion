@@ -14,7 +14,6 @@ using namespace Adafruit_LittleFS_Namespace;
 
 const char* FIRMWARE_VERSION = "0.6.0-xiao.1";
 const int PROVISION_RESET_PIN = 0;
-const char* PREFS_NAMESPACE = "gym-motion";
 const char* PREFS_FILE_PATH = "/prefs.json";
 const char* PREF_DEVICE_ID = "device_id";
 const char* PREF_SITE_ID = "site_id";
@@ -52,8 +51,6 @@ const uint8_t STHS34PF80_EMBEDDED_RESET_ALGO = 0x2A;
 const uint8_t STHS34PF80_WHO_AM_I_VALUE = 0xD3;
 const uint8_t STHS34PF80_PRES_FLAG = 0x04;
 const uint8_t STHS34PF80_MOT_FLAG = 0x02;
-const int SDA_PIN = 4;
-const int SCL_PIN = 5;
 
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
@@ -65,7 +62,6 @@ const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 12000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
-const unsigned long OTA_RESTART_DELAY_MS = 1200;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
 const size_t HISTORY_SYNC_PAGE_SIZE = 80;
@@ -77,13 +73,14 @@ const size_t HISTORY_WORKER_RECORDS_PER_SLICE = 4;
 const char* HISTORY_LOG_PATH = "/history.log";
 const char* HISTORY_TEMP_PATH = "/history.tmp";
 
-int16_t lastPresenceValue = 0;
-int16_t lastMotionValue = 0;
 bool haveLastReading = false;
 unsigned long lastMotionTime = 0;
 bool motionSensorReady = false;
 bool blePeripheralReady = false;
 
+void ensureFilesystemReady();
+void loadPersistedState();
+void savePersistedState();
 String escapeJsonString(const String& value);
 String extractJsonString(const String& json, const char* key);
 unsigned long extractJsonUnsignedLong(
@@ -91,171 +88,6 @@ unsigned long extractJsonUnsignedLong(
   const char* key,
   unsigned long fallback
 );
-
-class PreferencesCompat {
- public:
-  bool begin(const char* ns, bool readOnly) {
-    (void)ns;
-    (void)readOnly;
-    load();
-    return true;
-  }
-
-  String getString(const char* key, const char* fallback = "") const {
-    if (strcmp(key, PREF_DEVICE_ID) == 0) {
-      return deviceId.length() > 0 ? deviceId : String(fallback);
-    }
-
-    if (strcmp(key, PREF_SITE_ID) == 0) {
-      return siteId.length() > 0 ? siteId : String(fallback);
-    }
-
-    if (strcmp(key, PREF_MACHINE_LABEL) == 0) {
-      return machineLabel.length() > 0 ? machineLabel : String(fallback);
-    }
-
-    return String(fallback);
-  }
-
-  unsigned long getULong(const char* key, unsigned long fallback = 0) const {
-    if (strcmp(key, PREF_NEXT_SEQUENCE) == 0) {
-      return nextSequence;
-    }
-
-    if (strcmp(key, PREF_ACKED_SEQUENCE) == 0) {
-      return ackedSequence;
-    }
-
-    if (strcmp(key, PREF_HISTORY_DROPPED) == 0) {
-      return droppedCount;
-    }
-
-    return fallback;
-  }
-
-  bool getBool(const char* key, bool fallback = false) const {
-    if (strcmp(key, PREF_HISTORY_OVERFLOW) == 0) {
-      return historyOverflow;
-    }
-
-    return fallback;
-  }
-
-  void putString(const char* key, const String& value) {
-    if (strcmp(key, PREF_DEVICE_ID) == 0) {
-      deviceId = value;
-    } else if (strcmp(key, PREF_SITE_ID) == 0) {
-      siteId = value;
-    } else if (strcmp(key, PREF_MACHINE_LABEL) == 0) {
-      machineLabel = value;
-    }
-
-    save();
-  }
-
-  void putULong(const char* key, unsigned long value) {
-    if (strcmp(key, PREF_NEXT_SEQUENCE) == 0) {
-      nextSequence = value;
-    } else if (strcmp(key, PREF_ACKED_SEQUENCE) == 0) {
-      ackedSequence = value;
-    } else if (strcmp(key, PREF_HISTORY_DROPPED) == 0) {
-      droppedCount = value;
-    }
-
-    save();
-  }
-
-  void putBool(const char* key, bool value) {
-    if (strcmp(key, PREF_HISTORY_OVERFLOW) == 0) {
-      historyOverflow = value;
-    }
-
-    save();
-  }
-
-  void remove(const char* key) {
-    if (strcmp(key, PREF_DEVICE_ID) == 0) {
-      deviceId = "";
-    } else if (strcmp(key, PREF_SITE_ID) == 0) {
-      siteId = "";
-    } else if (strcmp(key, PREF_MACHINE_LABEL) == 0) {
-      machineLabel = "";
-    } else if (strcmp(key, PREF_NEXT_SEQUENCE) == 0) {
-      nextSequence = 1;
-    } else if (strcmp(key, PREF_ACKED_SEQUENCE) == 0) {
-      ackedSequence = 0;
-    } else if (strcmp(key, PREF_HISTORY_OVERFLOW) == 0) {
-      historyOverflow = false;
-    } else if (strcmp(key, PREF_HISTORY_DROPPED) == 0) {
-      droppedCount = 0;
-    }
-
-    save();
-  }
-
- private:
-  String deviceId;
-  String siteId;
-  String machineLabel;
-  unsigned long nextSequence = 1;
-  unsigned long ackedSequence = 0;
-  bool historyOverflow = false;
-  unsigned long droppedCount = 0;
-
-  void load() {
-    if (!SPIFFS.begin()) {
-      SPIFFS.format();
-      SPIFFS.begin();
-    }
-
-    if (!SPIFFS.exists(PREFS_FILE_PATH)) {
-      save();
-      return;
-    }
-
-    File file = SPIFFS.open(PREFS_FILE_PATH, FILE_READ);
-    if (!file) {
-      return;
-    }
-
-    String json;
-    while (file.available()) {
-      json += static_cast<char>(file.read());
-    }
-    file.close();
-
-    deviceId = extractJsonString(json, PREF_DEVICE_ID);
-    siteId = extractJsonString(json, PREF_SITE_ID);
-    machineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
-    nextSequence = extractJsonUnsignedLong(json, PREF_NEXT_SEQUENCE, 1);
-    ackedSequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
-    historyOverflow = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
-    droppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
-  }
-
-  void save() {
-    SPIFFS.remove(PREFS_FILE_PATH);
-    File file = SPIFFS.open(PREFS_FILE_PATH, FILE_WRITE);
-    if (!file) {
-      return;
-    }
-
-    const String payload =
-      "{\"" + String(PREF_DEVICE_ID) + "\":\"" + escapeJsonString(deviceId) +
-      "\",\"" + String(PREF_SITE_ID) + "\":\"" + escapeJsonString(siteId) +
-      "\",\"" + String(PREF_MACHINE_LABEL) + "\":\"" + escapeJsonString(machineLabel) +
-      "\",\"" + String(PREF_NEXT_SEQUENCE) + "\":" + String(nextSequence) +
-      ",\"" + String(PREF_ACKED_SEQUENCE) + "\":" + String(ackedSequence) +
-      ",\"" + String(PREF_HISTORY_OVERFLOW) + "\":" + String(historyOverflow ? 1 : 0) +
-      ",\"" + String(PREF_HISTORY_DROPPED) + "\":" + String(droppedCount) + "}";
-
-    file.write(payload.c_str(), payload.length());
-    file.flush();
-    file.close();
-  }
-};
-
-PreferencesCompat preferences;
 BLECharacteristic* provisioningControlCharacteristic = nullptr;
 BLECharacteristic* provisioningStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
@@ -306,7 +138,6 @@ struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
   bool* connectedFlag = nullptr;
   String payload;
-  bool chunked = false;
 };
 
 struct BleTxQueue {
@@ -413,22 +244,6 @@ String escapeJsonString(const String& value) {
   return escaped;
 }
 
-String bytesToHex(const uint8_t* bytes, size_t length) {
-  String result;
-  result.reserve(length * 2);
-
-  for (size_t index = 0; index < length; index++) {
-    if (bytes[index] < 16) {
-      result += "0";
-    }
-
-    result += String(bytes[index], HEX);
-  }
-
-  result.toLowerCase();
-  return result;
-}
-
 String extractJsonString(const String& json, const char* key) {
   const String token = "\"" + String(key) + "\":\"";
   const int start = json.indexOf(token);
@@ -530,11 +345,10 @@ void setup() {
   delay(250);
 
   pinMode(PROVISION_RESET_PIN, INPUT_PULLUP);
-  preferences.begin(PREFS_NAMESPACE, false);
+  ensureFilesystemReady();
   hardwareId = createHardwareId();
   bootId = createBootId();
-  loadProvisioningConfig();
-  loadHistoryConfig();
+  loadPersistedState();
 
   if (digitalRead(PROVISION_RESET_PIN) == LOW) {
     Serial.println("Provision reset button held. Clearing saved identity.");
@@ -544,10 +358,6 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
   setupMotionSensor();
-  if (!SPIFFS.begin()) {
-    SPIFFS.format();
-    SPIFFS.begin();
-  }
   setupBle();
   finalizePendingRollback(true);
   journalNodeLog("info", "device.boot", "BLE node booted.", millis());
