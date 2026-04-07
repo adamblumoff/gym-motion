@@ -73,23 +73,6 @@ bool resetMotionSensorAlgorithm() {
   return true;
 }
 
-void logMotionSensorTuning() {
-  Serial.print("STHS34PF80 tuning: odr=");
-  Serial.print(SENSOR_ODR_CONFIG, HEX);
-  Serial.print(" avg_t=");
-  Serial.print(SENSOR_AMBIENT_AVG_CONFIG, HEX);
-  Serial.print(" avg_tmos=");
-  Serial.print(SENSOR_OBJECT_AVG_CONFIG, HEX);
-  Serial.print(" lpf_pm=");
-  Serial.print(SENSOR_MOTION_PRESENCE_LPF_CONFIG, HEX);
-  Serial.print(" lpf_m=");
-  Serial.print(SENSOR_MOTION_LPF_CONFIG, HEX);
-  Serial.print(" lpf_p=");
-  Serial.print(SENSOR_PRESENCE_LPF_CONFIG, HEX);
-  Serial.print(" still_timeout_ms=");
-  Serial.println(STOP_TIMEOUT_MS);
-}
-
 void setupMotionSensor() {
   const uint8_t whoAmI = readSensorRegister8(STHS34PF80_REG_WHO_AM_I);
   if (whoAmI != STHS34PF80_WHO_AM_I_VALUE) {
@@ -122,8 +105,7 @@ void setupMotionSensor() {
   writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, SENSOR_ODR_CONFIG);
 
   motionSensorReady = true;
-  Serial.println("STHS34PF80 motion sensor ready.");
-  logMotionSensorTuning();
+  Serial.println("STHS34PF80 motion sensor ready (4Hz, avg8, LPF50, still=300ms).");
 }
 
 void updateMotionState() {
