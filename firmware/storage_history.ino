@@ -1,5 +1,10 @@
 namespace {
 bool filesystemReady = false;
+bool filesystemInitAttempted = false;
+}
+
+bool persistedStateHasKey(const String& json, const char* key) {
+  return json.indexOf("\"" + String(key) + "\"") >= 0;
 }
 
 String buildPersistedStatePayload() {
@@ -38,6 +43,22 @@ bool loadPersistedStateFromPayload(const String& payload) {
     return false;
   }
 
+  const char* requiredKeys[] = {
+    PREF_DEVICE_ID,
+    PREF_SITE_ID,
+    PREF_MACHINE_LABEL,
+    PREF_NEXT_SEQUENCE,
+    PREF_ACKED_SEQUENCE,
+    PREF_HISTORY_OVERFLOW,
+    PREF_HISTORY_DROPPED,
+  };
+
+  for (size_t index = 0; index < (sizeof(requiredKeys) / sizeof(requiredKeys[0])); index++) {
+    if (!persistedStateHasKey(json, requiredKeys[index])) {
+      return false;
+    }
+  }
+
   configuredDeviceId = extractJsonString(json, PREF_DEVICE_ID);
   configuredSiteId = extractJsonString(json, PREF_SITE_ID);
   configuredMachineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
@@ -45,9 +66,23 @@ bool loadPersistedStateFromPayload(const String& payload) {
   ackedHistorySequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
   historyOverflowed = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
   historyDroppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
-  if (nextHistorySequence == 0) {
-    nextHistorySequence = 1;
+  if (nextHistorySequence == 0 || ackedHistorySequence >= nextHistorySequence) {
+    return false;
   }
+
+  const bool anyProvisioningValue =
+    configuredDeviceId.length() > 0 ||
+    configuredSiteId.length() > 0 ||
+    configuredMachineLabel.length() > 0;
+  const bool allProvisioningValues =
+    configuredDeviceId.length() > 0 &&
+    configuredSiteId.length() > 0 &&
+    configuredMachineLabel.length() > 0;
+
+  if (anyProvisioningValue && !allProvisioningValues) {
+    return false;
+  }
+
   return true;
 }
 
@@ -79,12 +114,15 @@ void ensureFilesystemReady() {
     return;
   }
 
-  if (!SPIFFS.begin()) {
-    SPIFFS.format();
-    SPIFFS.begin();
+  if (filesystemInitAttempted) {
+    return;
   }
 
-  filesystemReady = true;
+  filesystemInitAttempted = true;
+  filesystemReady = SPIFFS.begin();
+  if (!filesystemReady) {
+    Serial.println("LittleFS mount failed; preserving on-device state and skipping filesystem writes.");
+  }
 }
 
 void loadPersistedState() {
@@ -97,6 +135,10 @@ void loadPersistedState() {
   ackedHistorySequence = 0;
   historyOverflowed = false;
   historyDroppedCount = 0;
+
+  if (!filesystemReady) {
+    return;
+  }
 
   if (loadPersistedStateFromFile(PREFS_FILE_PATH)) {
     return;
@@ -112,6 +154,9 @@ void loadPersistedState() {
 
 void savePersistedState() {
   ensureFilesystemReady();
+  if (!filesystemReady) {
+    return;
+  }
   const String payload = buildPersistedStatePayload();
 
   if (!writePersistedStateFile(PREFS_TEMP_FILE_PATH, payload)) {
