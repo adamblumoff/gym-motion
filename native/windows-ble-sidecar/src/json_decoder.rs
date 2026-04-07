@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn recovers_concatenated_history_record_payloads() {
+    fn drops_concatenated_history_record_payloads_without_synthesizing_records() {
         let candidate = concat!(
             "{\"type\":\"history-record\",\"deviceId\":\"esp32-1\",\"record\":",
             "{\"kind\":\"node-log\",\"sequence\":1451,\"level\":\"info\",\"code\":\"runtime.app_session.online\",",
@@ -239,12 +239,9 @@ mod tests {
             .is_empty());
         let values = decoder
             .push_str("END")
-            .expect("decoder should recover malformed history records");
+            .expect("decoder should drop malformed concatenated history records");
 
-        assert_eq!(values.len(), 2);
-        assert_eq!(values[0]["type"], "history-record");
-        assert_eq!(values[0]["record"]["sequence"], 1451);
-        assert_eq!(values[1]["record"]["sequence"], 1585);
+        assert!(values.is_empty());
     }
 
     #[test]
@@ -289,24 +286,16 @@ fn try_recover_history_record_payloads(candidate: &str) -> Option<Vec<Value>> {
     let record_token = "\"record\":";
     let record_start = candidate.find(record_token)? + record_token.len();
     let record_source = &candidate[record_start..];
-    let record_candidates = split_concatenated_record_objects(record_source);
+    if split_concatenated_record_objects(record_source).len() >= 2 {
+        // One broken frame can look like multiple concatenated history records.
+        // Synthesizing several records from that payload creates fake duplicate
+        // sequences downstream, so let the page underflow guard pause sync
+        // instead of guessing.
+        return Some(Vec::new());
+    }
 
     let mut recovered = Vec::new();
-    if record_candidates.len() >= 2 {
-        for record_candidate in record_candidates {
-            let Ok(record) = serde_json::from_str::<Value>(&record_candidate) else {
-                continue;
-            };
-            if record.get("kind").and_then(Value::as_str).is_none() {
-                continue;
-            }
-            recovered.push(json!({
-                "type": "history-record",
-                "deviceId": device_id,
-                "record": record,
-            }));
-        }
-    } else if let Some(record) = build_best_effort_history_record(record_source) {
+    if let Some(record) = build_best_effort_history_record(record_source) {
         recovered.push(json!({
             "type": "history-record",
             "deviceId": device_id,

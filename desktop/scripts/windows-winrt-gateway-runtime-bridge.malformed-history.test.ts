@@ -14,6 +14,127 @@ afterEach(() => {
 });
 
 describe("windows winrt gateway runtime bridge malformed history recovery", () => {
+  it("pauses history sync when a malformed page yields fewer records than sent_count", async () => {
+    const sidecarCommands = [];
+    const persistedBodies = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 0,
+        historySyncInterPageDelayMs: 0,
+      },
+      runtimeServer: createRuntimeServer(),
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url, init) {
+        if (String(url).includes("/api/device-sync/")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              ok: true,
+              syncState: { deviceId: "stack-001", lastAckedSequence: 782, lastAckedBootId: "boot-1" },
+              historySyncState: {
+                deviceId: "stack-001",
+                lastAckedHistorySequence: 782,
+                lastHistorySyncCompletedAt: null,
+                lastHistoryOverflowDetectedAt: null,
+              },
+            }),
+          });
+        }
+
+        persistedBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: { deviceId: "stack-001", lastAckedSequence: 782, lastAckedBootId: "boot-1" },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 1586,
+              lastHistorySyncCompletedAt: "2026-03-20T00:00:00.000Z",
+              lastHistoryOverflowDetectedAt: null,
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.forwardTelemetry({
+      deviceId: "stack-001",
+      state: "moving",
+      timestamp: 1,
+      delta: 8,
+      sequence: 783,
+      bootId: "boot-1",
+      firmwareVersion: "0.5.3",
+      hardwareId: "hw-1",
+    });
+    await flushBackgroundWork();
+    const requestId = sidecarCommands[0]?.request_id;
+
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      request_id: requestId,
+      record: {
+        kind: "node-log",
+        sequence: 783,
+        level: "info",
+        code: "runtime.app_session.online",
+        message: "online",
+        timestamp: 1,
+        bootId: "boot-a",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+    });
+    bridge.handleHistoryRecord({
+      device_id: "stack-001",
+      request_id: requestId,
+      record: {
+        kind: "motion",
+        sequence: 1451,
+        state: "still",
+        delta: 5,
+        timestamp: 3,
+        bootId: "boot-b",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+    });
+
+    await bridge.handleHistorySyncComplete({
+      payload: {
+        device_id: "stack-001",
+        request_id: requestId,
+        latest_sequence: 1586,
+        high_water_sequence: 2289,
+        sent_count: 3,
+        has_more: false,
+        overflowed: false,
+      },
+    });
+
+    expect(persistedBodies).toHaveLength(0);
+    expect(sidecarCommands).toEqual([
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 782,
+        max_records: 256,
+        request_id: expect.any(String),
+      }),
+    ]);
+  });
+
   it("rejects recovered extra history records when a malformed payload yields more records than sent_count", async () => {
     const sidecarCommands = [];
     const persistedBodies = [];
