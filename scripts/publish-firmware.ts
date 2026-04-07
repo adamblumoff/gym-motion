@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 
 import { createFirmwareRelease } from "../backend/data/repository";
@@ -23,7 +24,7 @@ function printHelp() {
 Options:
   --version <value>   Required firmware version to register
   --rollout <state>   Rollout state: draft | active | paused (default: active)
-  --file <path>       Firmware binary path (default: build/firmware/firmware.ino.bin)
+  --file <path>       Firmware artifact path (default: build/firmware/firmware.ino.zip)
   --sha <path>        SHA256 checksum file path
   --md5 <path>        MD5 checksum file path
 `);
@@ -53,10 +54,10 @@ async function main() {
   }
 
   const rolloutState = readArg("rollout") ?? "active";
-  const filePath = readArg("file") ?? "build/firmware/firmware.ino.bin";
+  const filePath = readArg("file") ?? "build/firmware/firmware.ino.zip";
   const shaFile = readArg("sha") ?? `${filePath}.sha256`;
   const md5File = readArg("md5") ?? `${filePath}.md5`;
-  const objectKey = `reference-node-firmware/${version}/firmware.ino.bin`;
+  const objectKey = `reference-node-firmware/${version}/${basename(filePath)}`;
   const gitSha = resolveGitSha();
 
   const upload = await uploadFirmwareObject({

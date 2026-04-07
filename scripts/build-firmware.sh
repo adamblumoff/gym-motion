@@ -50,6 +50,9 @@ BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
 echo "Building reference BLE node firmware from $SKETCH_PATH"
+rm -rf "$BUILD_PATH"
+mkdir -p "$BUILD_PATH"
+
 compile_args=(
   --fqbn "$FQBN"
   --export-binaries

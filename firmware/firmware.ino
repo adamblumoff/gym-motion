@@ -15,6 +15,8 @@ using namespace Adafruit_LittleFS_Namespace;
 const char* FIRMWARE_VERSION = "0.6.0-xiao.1";
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_FILE_PATH = "/prefs.json";
+const char* PREFS_TEMP_FILE_PATH = "/prefs.tmp";
+const char* PREFS_BACKUP_FILE_PATH = "/prefs.bak";
 const char* PREF_DEVICE_ID = "device_id";
 const char* PREF_SITE_ID = "site_id";
 const char* PREF_MACHINE_LABEL = "machine_label";
@@ -55,6 +57,7 @@ const uint8_t STHS34PF80_MOT_FLAG = 0x02;
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
+const unsigned long OTA_DFU_HANDOFF_DELAY_MS = 750;
 // The current desktop runtime talks to this node through the Windows WinRT
 // sidecar handshake. Allow a little extra time for service discovery and the
 // first bootstrap/control writes before we tear the client down as stale.
@@ -117,6 +120,7 @@ bool runtimeBootstrapLeasePending = false;
 bool runtimeLeaseRequired = false;
 bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
+bool pendingOtaDfuRestart = false;
 unsigned long pendingRebootAt = 0;
 unsigned long runtimeBleConnectedAt = 0;
 unsigned long lastAppSessionLeaseAt = 0;

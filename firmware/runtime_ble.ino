@@ -1,6 +1,7 @@
 BLEService provisioningService{BLEUuid(PROVISIONING_SERVICE_UUID)};
 BLEService runtimeService{BLEUuid(RUNTIME_SERVICE_UUID)};
 BLEService historyService{BLEUuid(HISTORY_SERVICE_UUID)};
+BLEDfu dfuService;
 
 BLECharacteristic provisioningControlCharacteristicImpl{BLEUuid(PROVISIONING_CONTROL_UUID)};
 BLECharacteristic provisioningStatusCharacteristicImpl{BLEUuid(PROVISIONING_STATUS_UUID)};
@@ -938,6 +939,7 @@ void setupBle() {
   Bluefruit.Periph.setDisconnectCallback(handleBleDisconnect);
   Bluefruit.Periph.setConnInterval(6, 12);
 
+  dfuService.begin();
   setupBleService(provisioningService, "provisioning");
   if (!setupBleCharacteristic(
     provisioningControlCharacteristicImpl,

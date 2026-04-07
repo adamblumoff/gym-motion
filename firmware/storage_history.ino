@@ -2,6 +2,78 @@ namespace {
 bool filesystemReady = false;
 }
 
+String buildPersistedStatePayload() {
+  return
+    "{\"" + String(PREF_DEVICE_ID) + "\":\"" + escapeJsonString(configuredDeviceId) +
+    "\",\"" + String(PREF_SITE_ID) + "\":\"" + escapeJsonString(configuredSiteId) +
+    "\",\"" + String(PREF_MACHINE_LABEL) + "\":\"" + escapeJsonString(configuredMachineLabel) +
+    "\",\"" + String(PREF_NEXT_SEQUENCE) + "\":" + String(nextHistorySequence) +
+    ",\"" + String(PREF_ACKED_SEQUENCE) + "\":" + String(ackedHistorySequence) +
+    ",\"" + String(PREF_HISTORY_OVERFLOW) + "\":" + String(historyOverflowed ? 1 : 0) +
+    ",\"" + String(PREF_HISTORY_DROPPED) + "\":" + String(historyDroppedCount) + "}";
+}
+
+bool readFileIntoString(const char* path, String& contents) {
+  if (!SPIFFS.exists(path)) {
+    return false;
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    return false;
+  }
+
+  contents = "";
+  while (file.available()) {
+    contents += static_cast<char>(file.read());
+  }
+  file.close();
+  return contents.length() > 0;
+}
+
+bool loadPersistedStateFromPayload(const String& payload) {
+  String json = payload;
+  json.trim();
+  if (json.length() == 0 || !json.startsWith("{") || !json.endsWith("}")) {
+    return false;
+  }
+
+  configuredDeviceId = extractJsonString(json, PREF_DEVICE_ID);
+  configuredSiteId = extractJsonString(json, PREF_SITE_ID);
+  configuredMachineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
+  nextHistorySequence = extractJsonUnsignedLong(json, PREF_NEXT_SEQUENCE, 1);
+  ackedHistorySequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
+  historyOverflowed = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
+  historyDroppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
+  if (nextHistorySequence == 0) {
+    nextHistorySequence = 1;
+  }
+  return true;
+}
+
+bool loadPersistedStateFromFile(const char* path) {
+  String payload;
+  if (!readFileIntoString(path, payload)) {
+    return false;
+  }
+
+  return loadPersistedStateFromPayload(payload);
+}
+
+bool writePersistedStateFile(const char* path, const String& payload) {
+  SPIFFS.remove(path);
+
+  File file = SPIFFS.open(path, FILE_WRITE);
+  if (!file) {
+    return false;
+  }
+
+  const size_t written = file.write(payload.c_str(), payload.length());
+  file.flush();
+  file.close();
+  return written == payload.length();
+}
+
 void ensureFilesystemReady() {
   if (filesystemReady) {
     return;
@@ -26,52 +98,42 @@ void loadPersistedState() {
   historyOverflowed = false;
   historyDroppedCount = 0;
 
-  if (!SPIFFS.exists(PREFS_FILE_PATH)) {
+  if (loadPersistedStateFromFile(PREFS_FILE_PATH)) {
+    return;
+  }
+
+  if (loadPersistedStateFromFile(PREFS_BACKUP_FILE_PATH)) {
     savePersistedState();
     return;
   }
 
-  File file = SPIFFS.open(PREFS_FILE_PATH, FILE_READ);
-  if (!file) {
-    return;
-  }
-
-  String json;
-  while (file.available()) {
-    json += static_cast<char>(file.read());
-  }
-  file.close();
-
-  configuredDeviceId = extractJsonString(json, PREF_DEVICE_ID);
-  configuredSiteId = extractJsonString(json, PREF_SITE_ID);
-  configuredMachineLabel = extractJsonString(json, PREF_MACHINE_LABEL);
-  nextHistorySequence = extractJsonUnsignedLong(json, PREF_NEXT_SEQUENCE, 1);
-  ackedHistorySequence = extractJsonUnsignedLong(json, PREF_ACKED_SEQUENCE, 0);
-  historyOverflowed = extractJsonUnsignedLong(json, PREF_HISTORY_OVERFLOW, 0) != 0;
-  historyDroppedCount = extractJsonUnsignedLong(json, PREF_HISTORY_DROPPED, 0);
+  savePersistedState();
 }
 
 void savePersistedState() {
   ensureFilesystemReady();
-  SPIFFS.remove(PREFS_FILE_PATH);
+  const String payload = buildPersistedStatePayload();
 
-  File file = SPIFFS.open(PREFS_FILE_PATH, FILE_WRITE);
-  if (!file) {
+  if (!writePersistedStateFile(PREFS_TEMP_FILE_PATH, payload)) {
     return;
   }
 
-  const String payload =
-    "{\"" + String(PREF_DEVICE_ID) + "\":\"" + escapeJsonString(configuredDeviceId) +
-    "\",\"" + String(PREF_SITE_ID) + "\":\"" + escapeJsonString(configuredSiteId) +
-    "\",\"" + String(PREF_MACHINE_LABEL) + "\":\"" + escapeJsonString(configuredMachineLabel) +
-    "\",\"" + String(PREF_NEXT_SEQUENCE) + "\":" + String(nextHistorySequence) +
-    ",\"" + String(PREF_ACKED_SEQUENCE) + "\":" + String(ackedHistorySequence) +
-    ",\"" + String(PREF_HISTORY_OVERFLOW) + "\":" + String(historyOverflowed ? 1 : 0) +
-    ",\"" + String(PREF_HISTORY_DROPPED) + "\":" + String(historyDroppedCount) + "}";
+  SPIFFS.remove(PREFS_BACKUP_FILE_PATH);
+  if (SPIFFS.exists(PREFS_FILE_PATH) &&
+      !SPIFFS.rename(PREFS_FILE_PATH, PREFS_BACKUP_FILE_PATH)) {
+    SPIFFS.remove(PREFS_TEMP_FILE_PATH);
+    return;
+  }
 
-  file.write(payload.c_str(), payload.length());
-  file.flush();
-  file.close();
+  if (!SPIFFS.rename(PREFS_TEMP_FILE_PATH, PREFS_FILE_PATH)) {
+    if (SPIFFS.exists(PREFS_BACKUP_FILE_PATH)) {
+      SPIFFS.rename(PREFS_BACKUP_FILE_PATH, PREFS_FILE_PATH);
+    }
+    SPIFFS.remove(PREFS_TEMP_FILE_PATH);
+    return;
+  }
+
+  SPIFFS.remove(PREFS_BACKUP_FILE_PATH);
 }
 
 void clearProvisioningConfig() {

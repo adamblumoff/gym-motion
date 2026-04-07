@@ -62,20 +62,20 @@ jobs:
       - name: Install app dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install ESP32 core
+      - name: Install Seeed nRF52 core
         run: |
           arduino-cli config init --overwrite
-          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config add board_manager.additional_urls https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          arduino-cli core install Seeeduino:nrf52
 
-      - name: Build firmware binary
+      - name: Build firmware artifact
         run: ./scripts/build-firmware.sh
 
       - name: Generate checksums
         run: |
           cd build/firmware
-          for file in *.bin; do
+          for file in *.zip; do
             sha256sum "$file" > "$file.sha256"
             md5sum "$file" > "$file.md5"
           done
