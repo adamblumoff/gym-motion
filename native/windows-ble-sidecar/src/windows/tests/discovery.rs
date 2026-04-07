@@ -73,7 +73,7 @@ fn approved_reconnect_waits_for_stronger_signal_after_first_sparse_sighting() {
 }
 
 #[test]
-fn approved_reconnect_requires_runtime_service_even_after_sparse_repeat_sighting() {
+fn approved_reconnect_allows_sparse_repeat_sighting_for_approved_identity() {
     let classification = classify_discovery_candidate(
         "peripheral-2",
         Some("aa:bb"),
@@ -104,10 +104,36 @@ fn approved_reconnect_requires_runtime_service_even_after_sparse_repeat_sighting
         last_seen_at_monotonic: start + Duration::from_millis(300),
     };
 
-    assert!(!reconnect_candidate_ready(
+    assert!(reconnect_candidate_ready(
         &classification,
         false,
         Some(&record),
+    ));
+}
+
+#[test]
+fn approved_reconnect_allows_visible_local_name_without_runtime_service() {
+    let classification = classify_discovery_candidate(
+        "peripheral-2",
+        Some("aa:bb"),
+        Some("GymMotion-ac12c0"),
+        false,
+        &test_config(),
+        &[ApprovedNodeRule {
+            id: "node-1".to_string(),
+            label: "Bench".to_string(),
+            peripheral_id: None,
+            address: Some("AA:BB".to_string()),
+            local_name: Some("GymMotion-ac12c0".to_string()),
+            known_device_id: Some("stack-001".to_string()),
+        }],
+        &HashMap::new(),
+    );
+
+    assert!(reconnect_candidate_ready(
+        &classification,
+        true,
+        None,
     ));
 }
 

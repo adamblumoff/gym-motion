@@ -11,6 +11,8 @@ pub(crate) const RECONNECT_ATTEMPT_LIMIT: u32 = 20;
 pub(crate) const APPROVED_RECONNECT_SCAN_BURST_LIMIT: u32 = 20;
 pub(crate) const APPROVED_RECONNECT_SCAN_BURST_MS: u64 = 2_000;
 pub(crate) const APPROVED_RECONNECT_STALL_MS: u64 = 3_000;
+const APPROVED_RECONNECT_READY_SIGHTINGS: u32 = 2;
+const APPROVED_RECONNECT_READY_WINDOW_MS: u64 = 1_000;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ApprovedReconnectState {
@@ -198,9 +200,20 @@ pub(crate) fn reconnect_candidate_ready(
     if !classification.approved_identity_matched {
         return false;
     }
-    let _ = local_name_present;
-    let _ = record;
-    false
+
+    if local_name_present {
+        return true;
+    }
+
+    record
+        .map(|device| {
+            device.sightings_in_epoch >= APPROVED_RECONNECT_READY_SIGHTINGS
+                && device
+                    .last_seen_at_monotonic
+                    .duration_since(device.first_seen_at_monotonic)
+                    <= Duration::from_millis(APPROVED_RECONNECT_READY_WINDOW_MS)
+        })
+        .unwrap_or(false)
 }
 
 pub(crate) fn approved_nodes_pending_connection(
