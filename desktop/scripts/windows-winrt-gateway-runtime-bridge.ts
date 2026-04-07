@@ -47,6 +47,7 @@ function createHistorySyncState({
     highWaterSequence: 0,
     requestId: null,
     records: [],
+    recordSequences: new Set(),
     nextEligibleAt,
     timerHandle: null,
     timerToken: 0,
@@ -231,6 +232,7 @@ export function createRuntimeBridge({
     clearBackfillTimer(state);
     setBackfillStatus(context, state, "paused_after_error", {
       records: [],
+      recordSequences: new Set(),
       pausedReason: reason,
       nextEligibleAt: null,
     });
@@ -241,6 +243,7 @@ export function createRuntimeBridge({
     clearBackfillTimer(state);
     setBackfillStatus(context, state, "complete", {
       records: [],
+      recordSequences: new Set(),
       pausedReason: null,
       nextEligibleAt: null,
     });
@@ -335,6 +338,7 @@ export function createRuntimeBridge({
     setBackfillStatus(context, state, "buffering_page", {
       requestId: `${state.deviceId}:${state.bootId}:${state.requestedAfterSequence ?? 0}:${nowFn()}`,
       records: [],
+      recordSequences: new Set(),
       pausedReason: null,
       nextEligibleAt: null,
     });
@@ -468,6 +472,7 @@ export function createRuntimeBridge({
     }
 
     const records = state.records.splice(0);
+    state.recordSequences = new Set();
 
     const expectedRecordCount = payload.sent_count ?? 0;
     if (records.length < expectedRecordCount) {
@@ -481,16 +486,18 @@ export function createRuntimeBridge({
     }
 
     if (records.length > expectedRecordCount) {
-      logBackfill("history sync recovered additional records from malformed payload", {
+      pauseBackfill(context, state, "history sync record count overflow", {
         deviceId,
-        bootId: state.bootId,
         expectedRecordCount,
         actualRecordCount: records.length,
+        requestId: payload.request_id ?? null,
       });
+      return;
     }
 
     setBackfillStatus(context, state, "persisting_page", {
       records: [],
+      recordSequences: new Set(),
       pausedReason: null,
     });
 
@@ -733,6 +740,28 @@ export function createRuntimeBridge({
       return;
     }
 
+    const sequence = event.record?.sequence;
+    if (!Number.isFinite(sequence) || sequence <= 0) {
+      logBackfill("dropping malformed history record without valid sequence", {
+        deviceId: deviceId ?? null,
+        requestId: event.request_id ?? null,
+        kind: event.record?.kind ?? null,
+        sequence: sequence ?? null,
+      });
+      return;
+    }
+
+    if (state.recordSequences.has(sequence)) {
+      logBackfill("dropping duplicate history record within active page buffer", {
+        deviceId: deviceId ?? null,
+        requestId: event.request_id ?? null,
+        sequence,
+        kind: event.record?.kind ?? null,
+      });
+      return;
+    }
+
+    state.recordSequences.add(sequence);
     state.records.push(event.record);
   }
 
