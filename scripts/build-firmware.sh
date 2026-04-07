@@ -44,18 +44,24 @@ else
   exit 1
 fi
 
-FQBN="${FQBN:-esp32:esp32:esp32}"
+FQBN="${FQBN:-Seeeduino:nrf52:xiaonRF52840:softdevice=s140v6,debug=l0}"
 SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
 
 echo "Building reference BLE node firmware from $SKETCH_PATH"
+compile_args=(
+  --fqbn "$FQBN"
+  --export-binaries
+  --output-dir "$BUILD_PATH"
+)
+
+if [[ "$FQBN" == esp32:* ]]; then
+  compile_args+=(--board-options "PartitionScheme=$PARTITIONS")
+fi
 
 "$ARDUINO_CLI_BIN" compile \
-  --fqbn "$FQBN" \
-  --board-options "PartitionScheme=$PARTITIONS" \
-  --export-binaries \
-  --output-dir "$BUILD_PATH" \
+  "${compile_args[@]}" \
   "$SKETCH_PATH"
 
 echo "Reference BLE node firmware exported to $BUILD_PATH"

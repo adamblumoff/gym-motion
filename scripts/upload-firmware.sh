@@ -65,13 +65,19 @@ if [[ -z "$PORT" ]]; then
   exit 1
 fi
 
-FQBN="${FQBN:-esp32:esp32:esp32}"
+FQBN="${FQBN:-Seeeduino:nrf52:xiaonRF52840:softdevice=s140v6,debug=l0}"
 SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
+upload_args=(
+  --fqbn "$FQBN"
+  --port "$PORT"
+)
+
+if [[ "$FQBN" == esp32:* ]]; then
+  upload_args+=(--board-options "PartitionScheme=$PARTITIONS")
+fi
 
 "$ARDUINO_CLI_BIN" upload \
-  --fqbn "$FQBN" \
-  --board-options "PartitionScheme=$PARTITIONS" \
-  --port "$PORT" \
+  "${upload_args[@]}" \
   "${EXTRA_ARGS[@]}" \
   "$SKETCH_PATH"

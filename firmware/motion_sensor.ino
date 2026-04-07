@@ -1,54 +1,123 @@
-void writeRegister(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(ADXL345_ADDR);
+bool writeSensorRegister(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(STHS34PF80_ADDR);
   Wire.write(reg);
   Wire.write(value);
-  Wire.endTransmission();
+  return Wire.endTransmission() == 0;
 }
 
-void readRegisters(uint8_t startReg, uint8_t* buffer, uint8_t len) {
-  Wire.beginTransmission(ADXL345_ADDR);
-  Wire.write(startReg);
-  Wire.endTransmission(false);
-  Wire.requestFrom(ADXL345_ADDR, len);
+bool writeSensorRegisterMasked(uint8_t reg, uint8_t mask, uint8_t value) {
+  const uint8_t current = readSensorRegister8(reg);
+  const uint8_t next = (current & ~mask) | (value & mask);
+  return writeSensorRegister(reg, next);
+}
 
-  uint8_t i = 0;
-  while (Wire.available() && i < len) {
-    buffer[i++] = Wire.read();
+uint8_t readSensorRegister8(uint8_t reg) {
+  Wire.beginTransmission(STHS34PF80_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return 0;
   }
+
+  if (Wire.requestFrom(STHS34PF80_ADDR, static_cast<uint8_t>(1)) != 1) {
+    return 0;
+  }
+
+  return Wire.read();
 }
 
-void readAccel(int16_t& x, int16_t& y, int16_t& z) {
-  uint8_t data[6];
-  readRegisters(0x32, data, 6);
+int16_t readSensorRegister16(uint8_t reg) {
+  Wire.beginTransmission(STHS34PF80_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return 0;
+  }
 
-  x = static_cast<int16_t>((data[1] << 8) | data[0]);
-  y = static_cast<int16_t>((data[3] << 8) | data[2]);
-  z = static_cast<int16_t>((data[5] << 8) | data[4]);
+  if (Wire.requestFrom(STHS34PF80_ADDR, static_cast<uint8_t>(2)) != 2) {
+    return 0;
+  }
+
+  const uint8_t low = Wire.read();
+  const uint8_t high = Wire.read();
+  return static_cast<int16_t>((high << 8) | low);
 }
 
-void setupADXL345() {
-  writeRegister(0x2D, 0x08);
-  writeRegister(0x31, 0x08);
+bool resetMotionSensorAlgorithm() {
+  if (!writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, 0x00)) {
+    return false;
+  }
+
+  if (!writeSensorRegisterMasked(STHS34PF80_REG_CTRL2, 0x10, 0x10)) {
+    return false;
+  }
+
+  if (!writeSensorRegisterMasked(STHS34PF80_REG_PAGE_RW, 0x40, 0x40)) {
+    return false;
+  }
+
+  if (!writeSensorRegister(STHS34PF80_REG_FUNC_CFG_ADDR, STHS34PF80_EMBEDDED_RESET_ALGO)) {
+    return false;
+  }
+
+  if (!writeSensorRegister(STHS34PF80_REG_FUNC_CFG_DATA, 0x01)) {
+    return false;
+  }
+
+  if (!writeSensorRegisterMasked(STHS34PF80_REG_PAGE_RW, 0x40, 0x00)) {
+    return false;
+  }
+
+  if (!writeSensorRegisterMasked(STHS34PF80_REG_CTRL2, 0x10, 0x00)) {
+    return false;
+  }
+
+  return true;
 }
 
-void updateMotionState() {
-  int16_t x, y, z;
-  readAccel(x, y, z);
-
-  if (!haveLastReading) {
-    haveLastReading = true;
-    lastMotionTime = millis();
-    lastX = x;
-    lastY = y;
-    lastZ = z;
-    Serial.println("Calibrating...");
+void setupMotionSensor() {
+  const uint8_t whoAmI = readSensorRegister8(STHS34PF80_REG_WHO_AM_I);
+  if (whoAmI != STHS34PF80_WHO_AM_I_VALUE) {
+    Serial.print("STHS34PF80 missing or unexpected WHO_AM_I: 0x");
+    Serial.println(whoAmI, HEX);
+    motionSensorReady = false;
     return;
   }
 
-  const int delta = abs(x - lastX) + abs(y - lastY) + abs(z - lastZ);
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL2, 0x80, 0x80);
+  delay(5);
+  resetMotionSensorAlgorithm();
+
+  // Match the vendor library defaults closely for a conservative bring-up.
+  writeSensorRegisterMasked(STHS34PF80_REG_AVG_TRIM, 0x07, 0x02);
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x10, 0x10);
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, 0x03);
+
+  motionSensorReady = true;
+  Serial.println("STHS34PF80 motion sensor ready.");
+}
+
+void updateMotionState() {
+  if (!motionSensorReady) {
+    return;
+  }
+
+  const uint8_t funcStatus = readSensorRegister8(STHS34PF80_REG_FUNC_STATUS);
+  const bool motionDetected = (funcStatus & STHS34PF80_MOT_FLAG) != 0;
+  const bool presenceDetected = (funcStatus & STHS34PF80_PRES_FLAG) != 0;
+  const int16_t motionValue = readSensorRegister16(STHS34PF80_REG_TMOTION_L);
+  const int16_t presenceValue = readSensorRegister16(STHS34PF80_REG_TPRESENCE_L);
+  const int delta = max(abs(motionValue), abs(presenceValue));
   const unsigned long now = millis();
 
-  if (delta > MOTION_THRESHOLD) {
+  if (!haveLastReading) {
+    haveLastReading = true;
+    lastMotionTime = now;
+    lastMotionValue = motionValue;
+    lastPresenceValue = presenceValue;
+    Serial.println("Calibrating STHS34PF80...");
+    return;
+  }
+
+  if (motionDetected || presenceDetected) {
     lastMotionTime = now;
 
     if (strcmp(currentDetectedState, "moving") != 0) {
@@ -71,9 +140,8 @@ void updateMotionState() {
     sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
   }
 
-  lastX = x;
-  lastY = y;
-  lastZ = z;
+  lastMotionValue = motionValue;
+  lastPresenceValue = presenceValue;
 }
 
 void logConnectedRuntimeHeartbeat() {
@@ -95,7 +163,7 @@ void logConnectedRuntimeHeartbeat() {
 }
 
 void logDisconnectedAdvertisingHeartbeat() {
-  if (runtimeBleConnected || bleServer == nullptr) {
+  if (runtimeBleConnected || !blePeripheralReady) {
     return;
   }
 

@@ -1,3 +1,53 @@
+BLEService provisioningService{BLEUuid(PROVISIONING_SERVICE_UUID)};
+BLEService runtimeService{BLEUuid(RUNTIME_SERVICE_UUID)};
+BLEService historyService{BLEUuid(HISTORY_SERVICE_UUID)};
+
+BLECharacteristic provisioningControlCharacteristicImpl{BLEUuid(PROVISIONING_CONTROL_UUID)};
+BLECharacteristic provisioningStatusCharacteristicImpl{BLEUuid(PROVISIONING_STATUS_UUID)};
+BLECharacteristic runtimeTelemetryCharacteristicImpl{BLEUuid(RUNTIME_TELEMETRY_UUID)};
+BLECharacteristic runtimeControlCharacteristicImpl{BLEUuid(RUNTIME_CONTROL_UUID)};
+BLECharacteristic runtimeStatusCharacteristicImpl{BLEUuid(RUNTIME_STATUS_UUID)};
+BLECharacteristic runtimeOtaDataCharacteristicImpl{BLEUuid(RUNTIME_OTA_DATA_UUID)};
+BLECharacteristic historyControlCharacteristicImpl{BLEUuid(HISTORY_CONTROL_UUID)};
+BLECharacteristic historyStatusCharacteristicImpl{BLEUuid(HISTORY_STATUS_UUID)};
+
+String bytesToString(const uint8_t* data, size_t length) {
+  String value;
+  value.reserve(length);
+
+  for (size_t index = 0; index < length; index++) {
+    value += static_cast<char>(data[index]);
+  }
+
+  return value;
+}
+
+bool writeCharacteristicValue(BLECharacteristic* characteristic, const String& payload) {
+  if (characteristic == nullptr) {
+    return false;
+  }
+
+  return characteristic->write(payload.c_str()) > 0;
+}
+
+bool notifyCharacteristicValue(BLECharacteristic* characteristic, const String& payload) {
+  if (characteristic == nullptr) {
+    return false;
+  }
+
+  characteristic->write(payload.c_str());
+
+  if (!runtimeBleConnIdKnown) {
+    return true;
+  }
+
+  if (!characteristic->notifyEnabled(runtimeBleConnId)) {
+    return true;
+  }
+
+  return characteristic->notify(runtimeBleConnId, payload.c_str());
+}
+
 void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, const String& payload) {
   if (characteristic == nullptr) {
     Serial.print("BLE notify skipped (missing characteristic): ");
@@ -13,8 +63,7 @@ void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, con
 
   Serial.print("BLE notify sent: ");
   Serial.println(payload);
-  characteristic->setValue(payload.c_str());
-  characteristic->notify();
+  notifyCharacteristicValue(characteristic, payload);
   delay(BLE_TX_MIN_INTERVAL_MS);
 }
 
@@ -110,8 +159,7 @@ bool processBleTxMessage(BleTxQueue& queue) {
 
   Serial.print("BLE notify sent: ");
   Serial.println(entry.payload);
-  entry.characteristic->setValue(entry.payload.c_str());
-  entry.characteristic->notify();
+  notifyCharacteristicValue(entry.characteristic, entry.payload);
   lastBleTxAt = millis();
   return true;
 }
@@ -198,44 +246,32 @@ void logRuntimeHistoryEvent(const String& message) {
   Serial.println(message);
 }
 
-void configureRuntimeAdvertisingPayload(BLEAdvertising* advertising) {
-  if (advertising == nullptr) {
-    return;
-  }
+void configureRuntimeAdvertisingPayload() {
+  Bluefruit.Advertising.stop();
+  Bluefruit.Advertising.clearData();
+  Bluefruit.ScanResponse.clearData();
 
-  advertising->stop();
-  advertising->setScanResponse(true);
-
-  BLEAdvertisementData advertisementData;
-  advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
-  advertisementData.setName(createBleDeviceName().c_str());
-  advertisementData.setCompleteServices(BLEUUID(PROVISIONING_SERVICE_UUID));
-  advertising->setAdvertisementData(advertisementData);
-
-  BLEAdvertisementData scanResponseData;
-  scanResponseData.setPartialServices(BLEUUID(RUNTIME_SERVICE_UUID));
-  advertising->setScanResponseData(scanResponseData);
-  advertising->setMinPreferred(0x06);
-  advertising->setMinPreferred(0x12);
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(provisioningService, runtimeService);
+  Bluefruit.ScanResponse.addService(historyService);
+  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);
+  Bluefruit.Advertising.setFastTimeout(30);
 }
 
 void startRuntimeAdvertising(const String& reason) {
-  if (bleServer == nullptr) {
+  if (!blePeripheralReady) {
     return;
   }
 
-  BLEAdvertising* advertising = bleServer->getAdvertising();
-
-  if (advertising == nullptr) {
-    return;
-  }
-
-  configureRuntimeAdvertisingPayload(advertising);
-  advertising->start();
+  configureRuntimeAdvertisingPayload();
+  Bluefruit.Advertising.start(0);
   lastDisconnectedAdvertisingLogAt = millis();
   logRuntimeTransportEvent(
     "Advertising for Windows app reconnect (" + reason + ") as " +
-    createBleDeviceName() + " with runtime scan response."
+    createBleDeviceName() + "."
   );
 }
 
@@ -436,8 +472,8 @@ void enforceRuntimeAppSessionLease() {
     );
     resetRuntimeAppSessionState();
 
-    if (bleServer != nullptr && runtimeBleConnIdKnown) {
-      bleServer->disconnect(runtimeBleConnId);
+    if (runtimeBleConnIdKnown) {
+      Bluefruit.disconnect(runtimeBleConnId);
       return;
     }
 
@@ -458,8 +494,8 @@ void enforceRuntimeAppSessionLease() {
     );
     resetRuntimeAppSessionState();
 
-    if (bleServer != nullptr && runtimeBleConnIdKnown) {
-      bleServer->disconnect(runtimeBleConnId);
+    if (runtimeBleConnIdKnown) {
+      Bluefruit.disconnect(runtimeBleConnId);
       return;
     }
 
@@ -470,8 +506,8 @@ void enforceRuntimeAppSessionLease() {
   logRuntimeLeaseState("Lease expiry timeout fired.", now);
   noteRuntimeAppSessionExpired(now);
 
-  if (bleServer != nullptr && runtimeBleConnIdKnown) {
-    bleServer->disconnect(runtimeBleConnId);
+  if (runtimeBleConnIdKnown) {
+    Bluefruit.disconnect(runtimeBleConnId);
     return;
   }
 
@@ -500,7 +536,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
-  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;
@@ -623,7 +659,6 @@ void handleRuntimeControl(const String& payload) {
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
-
 }
 
 void handleHistoryControl(const String& payload) {
@@ -652,278 +687,302 @@ void handleHistoryControl(const String& payload) {
   }
 }
 
-class GymServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* server) override {
-    (void)server;
+void handleProvisioningControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
+  (void)conn_hdl;
+  (void)characteristic;
+  const String value = bytesToString(data, len);
+
+  if (value.length() == 0) {
+    return;
   }
 
-  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
-    provisioningBleConnected = true;
-    runtimeBleConnected = true;
-    runtimeBleConnectedAt = millis();
-    lastDisconnectedAdvertisingLogAt = 0;
-    lastConnectedRuntimeDebugAt = 0;
-    runtimeBleConnIdKnown = param != nullptr;
-    runtimeBleConnId = param != nullptr ? param->connect.conn_id : 0;
-    resetRuntimeAppSessionState();
-    armRuntimeBootstrapWatchdog(
-      "BLE client connected; waiting for runtime or provisioning traffic."
-    );
-    sendProvisioningReady();
-    if (runtimeStatusCharacteristic != nullptr) {
-      runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
-    }
-    if (historyStatusCharacteristic != nullptr) {
-      historyStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
-    }
-    sendTelemetry(lastReportedDelta, millis(), true, false);
+  disarmRuntimeBootstrapWatchdog();
+
+  if (value.startsWith("BEGIN:")) {
+    provisioningCommandBuffer = "";
+    return;
   }
 
-  void onDisconnect(BLEServer* server) override {
-    (void)server;
+  if (value == "END") {
+    const String command = provisioningCommandBuffer;
+    provisioningCommandBuffer = "";
+    handleProvisioningCommand(command);
+    return;
   }
 
-  void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
-    (void)param;
-    provisioningBleConnected = false;
-    runtimeBleConnected = false;
-    runtimeBleConnectedAt = 0;
-    lastConnectedRuntimeDebugAt = 0;
-    runtimeTxQueue = BleTxQueue();
-    historyTxQueue = BleTxQueue();
-    cancelHistoryWorker();
-    lastCompletedHistoryRequestId = "";
-    noteRuntimeTransportDisconnected(millis());
-    startRuntimeAdvertising("BLE client disconnected");
+  provisioningCommandBuffer += value;
+}
+
+void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
+  (void)conn_hdl;
+  (void)characteristic;
+  const String value = bytesToString(data, len);
+
+  if (value.length() == 0) {
+    return;
   }
-};
 
-class ProvisioningControlCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    const String value(characteristic->getValue().c_str());
-
-    if (value.length() == 0) {
-      return;
-    }
-
-    disarmRuntimeBootstrapWatchdog();
-
-    if (value.startsWith("BEGIN:")) {
-      provisioningCommandBuffer = "";
-      return;
-    }
-
-    if (value == "END") {
-      const String command = provisioningCommandBuffer;
-      provisioningCommandBuffer = "";
-      handleProvisioningCommand(command);
-      return;
-    }
-
-    provisioningCommandBuffer += value;
+  if (value.startsWith("BEGIN:")) {
+    runtimeCommandBuffer = "";
+    return;
   }
-};
 
-class ProvisioningStatusDescriptorCallbacks : public BLEDescriptorCallbacks {
-  void onWrite(BLEDescriptor* descriptor) override {
-    if (descriptor == nullptr) {
-      return;
-    }
-
-    const uint8_t* value = descriptor->getValue();
-    const size_t length = descriptor->getLength();
-    const bool notificationsEnabled =
-      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
-
-    if (!notificationsEnabled) {
-      return;
-    }
-
-    if (!runtimeBleConnected || !runtimeBootstrapLeasePending) {
-      return;
-    }
-
-    disarmRuntimeBootstrapWatchdog();
-    logRuntimeTransportEvent(
-      "Provisioning status notifications enabled; leaving runtime lease watchdog idle."
-    );
+  if (value == "END") {
+    const String command = runtimeCommandBuffer;
+    runtimeCommandBuffer = "";
+    handleRuntimeControl(command);
+    return;
   }
-};
 
-class RuntimeControlCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    const String value(characteristic->getValue().c_str());
+  runtimeCommandBuffer += value;
+}
 
-    if (value.length() == 0) {
-      return;
-    }
+void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
+  (void)conn_hdl;
+  (void)characteristic;
+  const String value = bytesToString(data, len);
 
-    if (value.startsWith("BEGIN:")) {
-      runtimeCommandBuffer = "";
-      return;
-    }
-
-    if (value == "END") {
-      const String command = runtimeCommandBuffer;
-      runtimeCommandBuffer = "";
-      handleRuntimeControl(command);
-      return;
-    }
-
-    runtimeCommandBuffer += value;
+  if (value.length() == 0) {
+    return;
   }
-};
 
-class HistoryControlCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    const String value(characteristic->getValue().c_str());
-
-    if (value.length() == 0) {
-      return;
-    }
-
-    if (value.startsWith("BEGIN:")) {
-      historyCommandBuffer = "";
-      return;
-    }
-
-    if (value == "END") {
-      const String command = historyCommandBuffer;
-      historyCommandBuffer = "";
-      handleHistoryControl(command);
-      return;
-    }
-
-    historyCommandBuffer += value;
+  if (value.startsWith("BEGIN:")) {
+    historyCommandBuffer = "";
+    return;
   }
-};
 
-class RuntimeTelemetryCallbacks : public BLECharacteristicCallbacks {
-#if defined(CONFIG_NIMBLE_ENABLED)
-  void onSubscribe(
-    BLECharacteristic* characteristic,
-    ble_gap_conn_desc* desc,
-    uint16_t subValue
-  ) override {
-    (void)characteristic;
-    (void)desc;
-
-    if (subValue == 0) {
-      return;
-    }
-
-    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
-      return;
-    }
-
-    armRuntimeBootstrapWatchdog(
-      "Runtime telemetry subscribed; waiting for runtime control traffic."
-    );
+  if (value == "END") {
+    const String command = historyCommandBuffer;
+    historyCommandBuffer = "";
+    handleHistoryControl(command);
+    return;
   }
-#endif
-};
 
-class RuntimeTelemetryDescriptorCallbacks : public BLEDescriptorCallbacks {
-  void onWrite(BLEDescriptor* descriptor) override {
-    if (descriptor == nullptr) {
-      return;
-    }
+  historyCommandBuffer += value;
+}
 
-    const uint8_t* value = descriptor->getValue();
-    const size_t length = descriptor->getLength();
-    const bool notificationsEnabled =
-      value != nullptr && length > 0 && (value[0] & 0x01) != 0;
+void handleRuntimeOtaDataWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
+  (void)conn_hdl;
+  (void)characteristic;
+  handleOtaDataWrite(data, len);
+}
 
-    if (!notificationsEnabled) {
-      return;
-    }
+void handleProvisioningStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
+  (void)conn_hdl;
+  (void)characteristic;
 
-    if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
-      return;
-    }
-
-    armRuntimeBootstrapWatchdog(
-      "Runtime telemetry notifications enabled; waiting for runtime control traffic."
-    );
+  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
+  if (!notificationsEnabled) {
+    return;
   }
-};
 
-class RuntimeOtaDataCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    const auto rawValue = characteristic->getValue();
-    const std::string value(rawValue.c_str(), rawValue.length());
-    handleOtaDataWrite(value);
+  if (!runtimeBleConnected || !runtimeBootstrapLeasePending) {
+    return;
   }
-};
+
+  disarmRuntimeBootstrapWatchdog();
+  logRuntimeTransportEvent(
+    "Provisioning status notifications enabled; leaving runtime lease watchdog idle."
+  );
+}
+
+void handleRuntimeTelemetryCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
+  (void)conn_hdl;
+  (void)characteristic;
+
+  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
+  if (!notificationsEnabled) {
+    return;
+  }
+
+  if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
+    return;
+  }
+
+  armRuntimeBootstrapWatchdog(
+    "Runtime telemetry notifications enabled; waiting for runtime control traffic."
+  );
+}
+
+void handleBleConnect(uint16_t conn_handle) {
+  provisioningBleConnected = true;
+  runtimeBleConnected = true;
+  runtimeBleConnectedAt = millis();
+  lastDisconnectedAdvertisingLogAt = 0;
+  lastConnectedRuntimeDebugAt = 0;
+  runtimeBleConnIdKnown = true;
+  runtimeBleConnId = conn_handle;
+  resetRuntimeAppSessionState();
+  armRuntimeBootstrapWatchdog(
+    "BLE client connected; waiting for runtime or provisioning traffic."
+  );
+
+  BLEConnection* connection = Bluefruit.Connection(conn_handle);
+  if (connection != nullptr) {
+    connection->requestPHY();
+    connection->requestDataLengthUpdate();
+    connection->requestMtuExchange(247);
+  }
+
+  sendProvisioningReady();
+  writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
+  sendTelemetry(lastReportedDelta, millis(), true, false);
+}
+
+void handleBleDisconnect(uint16_t conn_handle, uint8_t reason) {
+  (void)conn_handle;
+  (void)reason;
+  provisioningBleConnected = false;
+  runtimeBleConnected = false;
+  runtimeBleConnectedAt = 0;
+  lastConnectedRuntimeDebugAt = 0;
+  runtimeTxQueue = BleTxQueue();
+  historyTxQueue = BleTxQueue();
+  cancelHistoryWorker();
+  lastCompletedHistoryRequestId = "";
+  noteRuntimeTransportDisconnected(millis());
+  startRuntimeAdvertising("BLE client disconnected");
+}
+
+bool setupBleCharacteristic(
+  BLECharacteristic& characteristic,
+  uint8_t properties,
+  SecureMode_t readPermission,
+  SecureMode_t writePermission,
+  uint16_t maxLength
+) {
+  characteristic.setProperties(properties);
+  characteristic.setPermission(readPermission, writePermission);
+  characteristic.setMaxLen(maxLength);
+  return characteristic.begin() == ERROR_NONE;
+}
+
+bool setupBleService(BLEService& service, const char* label) {
+  const bool ok = service.begin() == ERROR_NONE;
+  if (!ok) {
+    Serial.print("BLE service registration failed: ");
+    Serial.println(label);
+  }
+  return ok;
+}
 
 void setupBle() {
-  BLEDevice::init(createBleDeviceName().c_str());
-  bleServer = BLEDevice::createServer();
-  bleServer->setCallbacks(new GymServerCallbacks());
+  Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
+  Bluefruit.configUuid128Count(16);
+  Bluefruit.begin(1, 0);
+  Bluefruit.setTxPower(4);
+  Bluefruit.setName(createBleDeviceName().c_str());
+  Bluefruit.Periph.setConnectCallback(handleBleConnect);
+  Bluefruit.Periph.setDisconnectCallback(handleBleDisconnect);
+  Bluefruit.Periph.setConnInterval(6, 12);
 
-  BLEService* provisioningService = bleServer->createService(PROVISIONING_SERVICE_UUID);
-  provisioningControlCharacteristic = provisioningService->createCharacteristic(
-    PROVISIONING_CONTROL_UUID,
-    BLECharacteristic::PROPERTY_WRITE
-  );
-  provisioningStatusCharacteristic = provisioningService->createCharacteristic(
-    PROVISIONING_STATUS_UUID,
-    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-  );
-  provisioningControlCharacteristic->setCallbacks(new ProvisioningControlCallbacks());
-  provisioningStatusDescriptor = new BLE2902();
-  provisioningStatusDescriptor->setCallbacks(new ProvisioningStatusDescriptorCallbacks());
-  provisioningStatusCharacteristic->addDescriptor(provisioningStatusDescriptor);
-  provisioningStatusCharacteristic->setValue(createProvisioningReadyPayload().c_str());
-  provisioningService->start();
+  setupBleService(provisioningService, "provisioning");
+  if (!setupBleCharacteristic(
+    provisioningControlCharacteristicImpl,
+    CHR_PROPS_WRITE,
+    SECMODE_NO_ACCESS,
+    SECMODE_OPEN,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: provisioning control");
+  }
+  provisioningControlCharacteristicImpl.setWriteCallback(handleProvisioningControlWrite);
 
-  BLEService* runtimeService = bleServer->createService(RUNTIME_SERVICE_UUID);
-  runtimeTelemetryCharacteristic = runtimeService->createCharacteristic(
-    RUNTIME_TELEMETRY_UUID,
-    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-  );
-  runtimeControlCharacteristic = runtimeService->createCharacteristic(
-    RUNTIME_CONTROL_UUID,
-    BLECharacteristic::PROPERTY_WRITE
-  );
-  runtimeStatusCharacteristic = runtimeService->createCharacteristic(
-    RUNTIME_STATUS_UUID,
-    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-  );
-  runtimeOtaDataCharacteristic = runtimeService->createCharacteristic(
-    RUNTIME_OTA_DATA_UUID,
-    BLECharacteristic::PROPERTY_WRITE
-  );
+  if (!setupBleCharacteristic(
+    provisioningStatusCharacteristicImpl,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    SECMODE_OPEN,
+    SECMODE_NO_ACCESS,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: provisioning status");
+  }
+  provisioningStatusCharacteristicImpl.setCccdWriteCallback(handleProvisioningStatusCccd);
+  provisioningStatusCharacteristicImpl.write(createProvisioningReadyPayload().c_str());
 
-  runtimeTelemetryDescriptor = new BLE2902();
-  runtimeTelemetryDescriptor->setCallbacks(new RuntimeTelemetryDescriptorCallbacks());
-  runtimeTelemetryCharacteristic->addDescriptor(runtimeTelemetryDescriptor);
-  runtimeStatusCharacteristic->addDescriptor(new BLE2902());
-  runtimeTelemetryCharacteristic->setCallbacks(new RuntimeTelemetryCallbacks());
-  runtimeControlCharacteristic->setCallbacks(new RuntimeControlCallbacks());
-  runtimeOtaDataCharacteristic->setCallbacks(new RuntimeOtaDataCallbacks());
-  runtimeStatusCharacteristic->setValue(createRuntimeReadyPayload().c_str());
-  runtimeService->start();
+  setupBleService(runtimeService, "runtime");
+  if (!setupBleCharacteristic(
+    runtimeTelemetryCharacteristicImpl,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    SECMODE_OPEN,
+    SECMODE_NO_ACCESS,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: runtime telemetry");
+  }
+  runtimeTelemetryCharacteristicImpl.setCccdWriteCallback(handleRuntimeTelemetryCccd);
 
-  BLEService* historyService = bleServer->createService(HISTORY_SERVICE_UUID);
-  historyControlCharacteristic = historyService->createCharacteristic(
-    HISTORY_CONTROL_UUID,
-    BLECharacteristic::PROPERTY_WRITE
-  );
-  historyStatusCharacteristic = historyService->createCharacteristic(
-    HISTORY_STATUS_UUID,
-    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-  );
-  historyStatusCharacteristic->addDescriptor(new BLE2902());
-  historyControlCharacteristic->setCallbacks(new HistoryControlCallbacks());
-  historyService->start();
+  if (!setupBleCharacteristic(
+    runtimeControlCharacteristicImpl,
+    CHR_PROPS_WRITE,
+    SECMODE_NO_ACCESS,
+    SECMODE_OPEN,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: runtime control");
+  }
+  runtimeControlCharacteristicImpl.setWriteCallback(handleRuntimeControlWrite);
 
-  BLEAdvertising* advertising = bleServer->getAdvertising();
-  configureRuntimeAdvertisingPayload(advertising);
-  advertising->start();
+  if (!setupBleCharacteristic(
+    runtimeStatusCharacteristicImpl,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    SECMODE_OPEN,
+    SECMODE_NO_ACCESS,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: runtime status");
+  }
+
+  if (!setupBleCharacteristic(
+    runtimeOtaDataCharacteristicImpl,
+    CHR_PROPS_WRITE,
+    SECMODE_NO_ACCESS,
+    SECMODE_OPEN,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: runtime OTA data");
+  }
+  runtimeOtaDataCharacteristicImpl.setWriteCallback(handleRuntimeOtaDataWrite);
+  runtimeStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
+
+  setupBleService(historyService, "history");
+  if (!setupBleCharacteristic(
+    historyControlCharacteristicImpl,
+    CHR_PROPS_WRITE,
+    SECMODE_NO_ACCESS,
+    SECMODE_OPEN,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: history control");
+  }
+  historyControlCharacteristicImpl.setWriteCallback(handleHistoryControlWrite);
+
+  if (!setupBleCharacteristic(
+    historyStatusCharacteristicImpl,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    SECMODE_OPEN,
+    SECMODE_NO_ACCESS,
+    244
+  )) {
+    Serial.println("BLE characteristic registration failed: history status");
+  }
+  historyStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
+
+  provisioningControlCharacteristic = &provisioningControlCharacteristicImpl;
+  provisioningStatusCharacteristic = &provisioningStatusCharacteristicImpl;
+  runtimeTelemetryCharacteristic = &runtimeTelemetryCharacteristicImpl;
+  runtimeControlCharacteristic = &runtimeControlCharacteristicImpl;
+  runtimeStatusCharacteristic = &runtimeStatusCharacteristicImpl;
+  runtimeOtaDataCharacteristic = &runtimeOtaDataCharacteristicImpl;
+  historyControlCharacteristic = &historyControlCharacteristicImpl;
+  historyStatusCharacteristic = &historyStatusCharacteristicImpl;
+
+  blePeripheralReady = true;
+  configureRuntimeAdvertisingPayload();
+  Bluefruit.Advertising.start(0);
   lastDisconnectedAdvertisingLogAt = millis();
   logRuntimeTransportEvent(
-    "BLE advertising started as " + createBleDeviceName() +
-    " with runtime scan response."
+    "BLE advertising started as " + createBleDeviceName() + "."
   );
 }
