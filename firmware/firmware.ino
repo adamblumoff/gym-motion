@@ -192,10 +192,10 @@ void sendTelemetry(
   bool force = false,
   bool stateChanged = false
 );
-void enqueueRuntimeNotification(BLECharacteristic* characteristic, bool connected, const String& payload);
-void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload);
-void enqueueHistoryNotification(BLECharacteristic* characteristic, bool connected, const String& payload);
-void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload);
+void enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
+void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
+void enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload);
+void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload);
 void processBleNotificationQueues();
 void pumpHistoryWorker();
 void cancelHistoryWorker();

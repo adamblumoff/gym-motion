@@ -48,14 +48,14 @@ bool notifyCharacteristicValue(BLECharacteristic* characteristic, const String& 
   return characteristic->notify(runtimeBleConnId, payload.c_str());
 }
 
-void notifyCharacteristic(BLECharacteristic* characteristic, bool connected, const String& payload) {
+void notifyCharacteristic(BLECharacteristic* characteristic, const String& payload) {
   if (characteristic == nullptr) {
     Serial.print("BLE notify skipped (missing characteristic): ");
     Serial.println(payload);
     return;
   }
 
-  if (!connected) {
+  if (!provisioningBleConnected) {
     Serial.print("BLE notify skipped (runtime client disconnected): ");
     Serial.println(payload);
     return;
@@ -124,23 +124,19 @@ void enqueueChunkedNotification(
   enqueueBleTxMessage(queue, characteristic, connectedFlag, "END");
 }
 
-void enqueueRuntimeNotification(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  (void)connected;
+void enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload) {
   enqueueBleTxMessage(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  (void)connected;
+void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
   enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueHistoryNotification(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  (void)connected;
+void enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload) {
   enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, bool connected, const String& payload) {
-  (void)connected;
+void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
   enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
@@ -186,7 +182,7 @@ void processBleNotificationQueues() {
 }
 
 void sendProvisioningStatus(const String& payload) {
-  notifyCharacteristic(provisioningStatusCharacteristic, provisioningBleConnected, payload);
+  notifyCharacteristic(provisioningStatusCharacteristic, payload);
 }
 
 String createRuntimeReadyPayload() {
@@ -220,7 +216,7 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   }
 
   payload += "}";
-  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
 void sendRuntimeAppSessionOnline(
@@ -233,7 +229,7 @@ void sendRuntimeAppSessionOnline(
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
-  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
@@ -246,16 +242,35 @@ void logRuntimeHistoryEvent(const String& message) {
   Serial.println(message);
 }
 
+void logAdvertisingSetupFailure(const char* field) {
+  Serial.print("BLE advertising payload setup failed: ");
+  Serial.println(field);
+}
+
 void configureRuntimeAdvertisingPayload() {
   Bluefruit.Advertising.stop();
   Bluefruit.Advertising.clearData();
   Bluefruit.ScanResponse.clearData();
 
-  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
-  Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addService(provisioningService, runtimeService);
-  Bluefruit.ScanResponse.addService(historyService);
-  Bluefruit.ScanResponse.addName();
+  if (!Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE)) {
+    logAdvertisingSetupFailure("flags");
+  }
+
+  if (!Bluefruit.Advertising.addTxPower()) {
+    logAdvertisingSetupFailure("tx_power");
+  }
+
+  // Bluefruit can only encode a single 128-bit service UUID per advertising field.
+  // Reconnect depends on the runtime service being visible during rediscovery, so
+  // keep that UUID in the primary advertising packet and leave the name in scan response.
+  if (!Bluefruit.Advertising.addService(runtimeService)) {
+    logAdvertisingSetupFailure("runtime service");
+  }
+
+  if (!Bluefruit.ScanResponse.addName()) {
+    logAdvertisingSetupFailure("device name");
+  }
+
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.setInterval(32, 244);
   Bluefruit.Advertising.setFastTimeout(30);
@@ -536,7 +551,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
-  enqueueRuntimeNotificationChunked(runtimeTelemetryCharacteristic, runtimeBleConnected, payload);
+  enqueueRuntimeNotificationChunked(runtimeTelemetryCharacteristic, payload);
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;

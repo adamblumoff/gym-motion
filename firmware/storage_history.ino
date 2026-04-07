@@ -317,7 +317,7 @@ void sendHistorySyncComplete(
   }
 
   payload += "}";
-  enqueueHistoryNotificationChunked(historyStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
 
   logRuntimeHistoryEvent(
     "Sync complete latestSequence=" + String(latestSequence) +
@@ -340,7 +340,7 @@ void sendHistoryError(
     "\",\"requestId\":\"" + escapeJsonString(requestId) +
     "\",\"code\":\"" + escapeJsonString(code) +
     "\",\"message\":\"" + escapeJsonString(message) + "\"}";
-  enqueueHistoryNotificationChunked(historyStatusCharacteristic, runtimeBleConnected, payload);
+  enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
   logRuntimeHistoryEvent(code + ": " + message);
 }
 
@@ -457,7 +457,6 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
 void queueHistoryRecord(const String& requestId, const String& line) {
   enqueueHistoryNotificationChunked(
     historyStatusCharacteristic,
-    runtimeBleConnected,
     "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"requestId\":\"" + escapeJsonString(requestId) +
     "\",\"record\":" + line + "}"
