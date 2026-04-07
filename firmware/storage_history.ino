@@ -298,7 +298,7 @@ void acknowledgeHistoryThrough(unsigned long sequence) {
   );
 }
 
-void sendHistorySyncComplete(
+bool sendHistorySyncComplete(
   const String& requestId,
   unsigned long latestSequence,
   unsigned long highWaterSequence,
@@ -317,7 +317,9 @@ void sendHistorySyncComplete(
   }
 
   payload += "}";
-  enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
+  if (!enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload)) {
+    return false;
+  }
 
   logRuntimeHistoryEvent(
     "Sync complete latestSequence=" + String(latestSequence) +
@@ -326,9 +328,10 @@ void sendHistorySyncComplete(
     " hasMore=" + String(latestSequence < highWaterSequence ? "true" : "false") +
     " overflowed=" + String(historyOverflowed ? "true" : "false")
   );
+  return true;
 }
 
-void sendHistoryError(
+bool sendHistoryError(
   const String& sessionId,
   const String& requestId,
   const String& code,
@@ -340,8 +343,11 @@ void sendHistoryError(
     "\",\"requestId\":\"" + escapeJsonString(requestId) +
     "\",\"code\":\"" + escapeJsonString(code) +
     "\",\"message\":\"" + escapeJsonString(message) + "\"}";
-  enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
+  if (!enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload)) {
+    return false;
+  }
   logRuntimeHistoryEvent(code + ": " + message);
+  return true;
 }
 
 void cancelHistoryWorker() {
@@ -454,8 +460,8 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
   }
 }
 
-void queueHistoryRecord(const String& requestId, const String& line) {
-  enqueueHistoryNotificationChunked(
+bool queueHistoryRecord(const String& requestId, const String& line) {
+  return enqueueHistoryNotificationChunked(
     historyStatusCharacteristic,
     "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"requestId\":\"" + escapeJsonString(requestId) +
@@ -473,13 +479,14 @@ void pumpHistoryWorker() {
   }
 
   if (!historyWorkerFile) {
-    historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
-    sendHistorySyncComplete(
-      historyWorkerState.requestId,
-      historyWorkerState.latestSequence,
-      historyWorkerState.highWaterSequence,
-      historyWorkerState.sentCount
-    );
+    if (sendHistorySyncComplete(
+          historyWorkerState.requestId,
+          historyWorkerState.latestSequence,
+          historyWorkerState.highWaterSequence,
+          historyWorkerState.sentCount
+        )) {
+      historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+    }
     return;
   }
 
@@ -502,7 +509,16 @@ void pumpHistoryWorker() {
       continue;
     }
 
-    queueHistoryRecord(historyWorkerState.requestId, line);
+    // History logs are append-only and sequences should be strictly increasing.
+    // If an older sequence reappears later in the file, treat it as stale
+    // corruption from a previously malformed sync and skip it.
+    if (sequence <= historyWorkerState.latestSequence) {
+      continue;
+    }
+
+    if (!queueHistoryRecord(historyWorkerState.requestId, line)) {
+      break;
+    }
     historyWorkerState.latestSequence = sequence;
     historyWorkerState.sentCount += 1;
     sentThisSlice += 1;
@@ -512,13 +528,17 @@ void pumpHistoryWorker() {
     historyWorkerState.sentCount >= historyWorkerState.maxRecords ||
     !historyWorkerFile.available()
   ) {
+    if (!historyWorkerFile.available()) {
+      historyWorkerState.highWaterSequence = historyWorkerState.latestSequence;
+    }
     historyWorkerFile.close();
-    historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
-    sendHistorySyncComplete(
-      historyWorkerState.requestId,
-      historyWorkerState.latestSequence,
-      historyWorkerState.highWaterSequence,
-      historyWorkerState.sentCount
-    );
+    if (sendHistorySyncComplete(
+          historyWorkerState.requestId,
+          historyWorkerState.latestSequence,
+          historyWorkerState.highWaterSequence,
+          historyWorkerState.sentCount
+        )) {
+      historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+    }
   }
 }

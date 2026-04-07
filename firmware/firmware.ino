@@ -192,10 +192,10 @@ void sendTelemetry(
   bool force = false,
   bool stateChanged = false
 );
-void enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
-void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
-void enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload);
-void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload);
+bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
+bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
+bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload);
+bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload);
 void processBleNotificationQueues();
 void pumpHistoryWorker();
 void cancelHistoryWorker();
@@ -205,7 +205,7 @@ void beginHistorySyncRequest(
 void acknowledgeHistorySyncRequest(
   const firmware_runtime::HistoryControlCommand& command
 );
-void sendHistoryError(
+bool sendHistoryError(
   const String& sessionId,
   const String& requestId,
   const String& code,

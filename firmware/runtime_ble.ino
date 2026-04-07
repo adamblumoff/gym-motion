@@ -100,44 +100,90 @@ bool enqueueBleTxMessage(
   return true;
 }
 
-void enqueueChunkedNotification(
+size_t bleTxQueueFreeSlots(const BleTxQueue& queue) {
+  return BLE_TX_QUEUE_CAPACITY - queue.length;
+}
+
+size_t chunkedNotificationSlotCount(size_t payloadLength) {
+  const size_t chunkCount =
+    payloadLength == 0 ? 0 : ((payloadLength + STATUS_CHUNK_SIZE - 1) / STATUS_CHUNK_SIZE);
+  return chunkCount + 2;  // BEGIN + payload chunks + END
+}
+
+void rollbackBleTxMessageEnqueue(BleTxQueue& queue, size_t count) {
+  while (count > 0 && queue.length > 0) {
+    queue.tail = (queue.tail + BLE_TX_QUEUE_CAPACITY - 1) % BLE_TX_QUEUE_CAPACITY;
+    queue.entries[queue.tail] = BleTxMessage();
+    queue.length -= 1;
+    count -= 1;
+  }
+}
+
+bool enqueueChunkedNotification(
   BleTxQueue& queue,
   BLECharacteristic* characteristic,
   bool* connectedFlag,
   const String& payload
 ) {
-  if (!enqueueBleTxMessage(queue, characteristic, connectedFlag, "BEGIN:" + String(payload.length()))) {
-    return;
+  const size_t requiredSlots = chunkedNotificationSlotCount(payload.length());
+  if (bleTxQueueFreeSlots(queue) < requiredSlots) {
+    Serial.print("BLE queue dropped (insufficient frame space): ");
+    Serial.println(payload);
+    return false;
   }
 
+  size_t enqueuedCount = 0;
   for (size_t offset = 0; offset < payload.length(); offset += STATUS_CHUNK_SIZE) {
+    if (offset == 0) {
+      if (!enqueueBleTxMessage(queue, characteristic, connectedFlag, "BEGIN:" + String(payload.length()))) {
+        rollbackBleTxMessageEnqueue(queue, enqueuedCount);
+        return false;
+      }
+      enqueuedCount += 1;
+    }
+
     if (!enqueueBleTxMessage(
           queue,
           characteristic,
           connectedFlag,
           payload.substring(offset, offset + STATUS_CHUNK_SIZE)
         )) {
-      return;
+      rollbackBleTxMessageEnqueue(queue, enqueuedCount);
+      return false;
     }
+    enqueuedCount += 1;
   }
 
-  enqueueBleTxMessage(queue, characteristic, connectedFlag, "END");
+  if (payload.length() == 0) {
+    if (!enqueueBleTxMessage(queue, characteristic, connectedFlag, "BEGIN:0")) {
+      rollbackBleTxMessageEnqueue(queue, enqueuedCount);
+      return false;
+    }
+    enqueuedCount += 1;
+  }
+
+  if (!enqueueBleTxMessage(queue, characteristic, connectedFlag, "END")) {
+    rollbackBleTxMessageEnqueue(queue, enqueuedCount);
+    return false;
+  }
+
+  return true;
 }
 
-void enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload) {
-  enqueueBleTxMessage(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
+bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload) {
+  return enqueueBleTxMessage(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
-  enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
+bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
+  return enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload) {
-  enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
+bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload) {
+  return enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
-void enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
-  enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
+bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
+  return enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
 bool processBleTxMessage(BleTxQueue& queue) {
