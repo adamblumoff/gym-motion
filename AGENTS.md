@@ -10,16 +10,14 @@
 ## Firmware Notes
 
 - Source-of-truth sketch: `/home/adamblumoff/gym-motion/firmware/firmware.ino`
-- Normal firmware rollouts should go through the OTA release flow, not manual Arduino uploads.
 - For bench USB flashing, prefer `bun run firmware:upload -- --port <serial-port>` so local flashes match the repo's OTA/CI partition settings.
 - After firmware changes, try a bench USB upload with `bun run firmware:upload -- --port <serial-port>` before handoff when hardware access is available and the local environment supports it.
 
 ## Windows Desktop Notes
 
 - The active desktop product path is Windows-only.
-- The supported BLE runtime path is Windows app + Rust WinRT sidecar + ESP32 firmware app-session protocol.
+- The supported BLE runtime path is Windows app + Rust WinRT sidecar + firmware app-session protocol.
 - Do not reintroduce the older noble/WinUSB BLE fallback.
 - The WinRT sidecar depends on the vendored patched `btleplug` at `/home/adamblumoff/gym-motion/native/windows-ble-sidecar/vendor/btleplug-winrt-patched`; treat it as product code.
 - Validate desktop changes from the current Windows repo checkout with `.env.local` present before running `bun install`, `bun run dev`, or `bun run build:win`.
 - Windows desktop dev and packaging require the Rust MSVC toolchain because the native sidecar is built locally.
-- Unless the user explicitly says not to, finish Windows desktop changes by committing and pushing the tested branch before handoff.
