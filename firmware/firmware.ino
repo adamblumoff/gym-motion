@@ -66,6 +66,8 @@ const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 12000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
+const bool DIAGNOSTIC_BYPASS_FILESYSTEM_STARTUP = false;
+const unsigned long PERSISTED_STATE_SAVE_DEBOUNCE_MS = 50;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
 const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
 const size_t HISTORY_SYNC_PAGE_SIZE = 80;
@@ -85,6 +87,7 @@ bool blePeripheralReady = false;
 void ensureFilesystemReady();
 void loadPersistedState();
 void savePersistedState();
+void flushPersistedStateIfNeeded();
 String escapeJsonString(const String& value);
 String extractJsonString(const String& json, const char* key);
 unsigned long extractJsonUnsignedLong(
@@ -118,7 +121,6 @@ bool provisioningBleConnected = false;
 bool runtimeBleConnected = false;
 bool runtimeAppSessionConnected = false;
 bool runtimeBootstrapLeasePending = false;
-bool runtimeLeaseRequired = false;
 bool runtimeBleConnIdKnown = false;
 bool pendingMotionUpdate = false;
 bool pendingOtaDfuRestart = false;
@@ -137,7 +139,6 @@ bool historyOverflowed = false;
 uint16_t runtimeBleConnId = 0;
 String runtimeAppSessionId;
 String runtimeAppSessionNonce;
-String runtimeBootstrapSessionNonce;
 
 struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
@@ -189,6 +190,13 @@ struct OtaTransferState {
 };
 
 OtaTransferState otaTransfer;
+
+void initStatusLeds();
+void setStatusLeds(bool redOn, bool greenOn, bool blueOn);
+void markNodeBooting();
+void markNodeAdvertising();
+void markNodeConnected();
+void markNodeBleFailure();
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version = "");
 void sendTelemetry(
@@ -340,6 +348,35 @@ String createBleDeviceName() {
   return "GymMotion-" + hardwareId.substring(suffixStart);
 }
 
+void initStatusLeds() {
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+  setStatusLeds(false, false, false);
+}
+
+void setStatusLeds(bool redOn, bool greenOn, bool blueOn) {
+  digitalWrite(LED_RED, redOn ? LOW : HIGH);
+  digitalWrite(LED_GREEN, greenOn ? LOW : HIGH);
+  digitalWrite(LED_BLUE, blueOn ? LOW : HIGH);
+}
+
+void markNodeBooting() {
+  setStatusLeds(true, false, false);
+}
+
+void markNodeAdvertising() {
+  setStatusLeds(false, false, true);
+}
+
+void markNodeConnected() {
+  setStatusLeds(false, true, false);
+}
+
+void markNodeBleFailure() {
+  setStatusLeds(true, false, false);
+}
+
 
 void finalizePendingRollback(bool healthy) {
   (void)healthy;
@@ -348,22 +385,43 @@ void finalizePendingRollback(bool healthy) {
 void setup() {
   Serial.begin(115200);
   delay(250);
+  Serial.println("[boot] setup start");
+  initStatusLeds();
+  markNodeBooting();
 
   pinMode(PROVISION_RESET_PIN, INPUT_PULLUP);
-  ensureFilesystemReady();
   hardwareId = createHardwareId();
   bootId = createBootId();
-  loadPersistedState();
+  Serial.println("[boot] identity");
+  if (DIAGNOSTIC_BYPASS_FILESYSTEM_STARTUP) {
+    Serial.println("[boot] filesystem mount only for diagnostics");
+    ensureFilesystemReady();
+    configuredDeviceId = "";
+    configuredSiteId = "";
+    configuredMachineLabel = "";
+    nextHistorySequence = 1;
+    ackedHistorySequence = 0;
+    historyOverflowed = false;
+    historyDroppedCount = 0;
+  } else {
+    Serial.println("[boot] filesystem");
+    ensureFilesystemReady();
+    loadPersistedState();
+  }
 
   if (digitalRead(PROVISION_RESET_PIN) == LOW) {
     Serial.println("Provision reset button held. Clearing saved identity.");
     clearProvisioningConfig();
   }
 
+  Serial.println("[boot] wire");
   Wire.begin();
   Wire.setClock(400000);
+  Serial.println("[boot] motion");
   setupMotionSensor();
+  Serial.println("[boot] ble");
   setupBle();
+  Serial.println("[boot] finalize");
   finalizePendingRollback(true);
   journalNodeLog("info", "device.boot", "BLE node booted.", millis());
   journalMotionState(currentDetectedState, 0, millis());
@@ -383,10 +441,12 @@ void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
   pumpHistoryWorker();
+  flushPersistedStateIfNeeded();
   processBleNotificationQueues();
   logConnectedRuntimeHeartbeat();
   logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
+  flushPersistedStateIfNeeded();
   processBleNotificationQueues();
   delay(LOOP_DELAY_MS);
 }

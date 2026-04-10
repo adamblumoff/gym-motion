@@ -17,19 +17,11 @@ fn test_config() -> Config {
 #[test]
 fn retryable_pre_session_setup_failures_use_the_inline_setup_retry() {
     let subscribe_error = anyhow::anyhow!("status subscribe step failed for Bench");
-    let bootstrap_error = anyhow::anyhow!("app-session-bootstrap step failed for Bench");
-    let closed_bootstrap_error = anyhow::anyhow!(
-        "app-session-bootstrap step failed for Bench: Error {{ code: HRESULT(0x80000013), message: \"The object has been closed.\" }}"
-    );
     let closed_lease_error = anyhow::anyhow!(
         "app-session-lease step failed for Bench: Error {{ code: HRESULT(0x80000013), message: \"The object has been closed.\" }}"
     );
 
     assert!(is_retryable_pre_session_setup_error(&subscribe_error));
-    assert!(!is_retryable_pre_session_setup_error(&bootstrap_error));
-    assert!(is_retryable_pre_session_setup_error(
-        &closed_bootstrap_error
-    ));
     assert!(is_retryable_pre_session_setup_error(&closed_lease_error));
 }
 
@@ -130,11 +122,7 @@ fn approved_reconnect_allows_visible_local_name_without_runtime_service() {
         &HashMap::new(),
     );
 
-    assert!(reconnect_candidate_ready(
-        &classification,
-        true,
-        None,
-    ));
+    assert!(reconnect_candidate_ready(&classification, true, None,));
 }
 
 #[test]

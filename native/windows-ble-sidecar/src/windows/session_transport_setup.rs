@@ -24,6 +24,7 @@ pub(super) struct PreparedSession {
     pub(super) notifications: NotificationStream,
     pub(super) live_control_characteristic: Characteristic,
     pub(super) history_control_characteristic: Characteristic,
+    pub(super) status_characteristic: Characteristic,
     pub(super) transport_ready_at: Option<Instant>,
     pub(super) gatt_ready_at: Option<Instant>,
 }
@@ -46,8 +47,6 @@ pub(super) async fn prepare_session_stream(
     writer: &EventWriter,
     config: &Config,
     reconnect: &Option<ReconnectStatus>,
-    app_session_id: &str,
-    app_session_nonce: &str,
     prepare_config: PrepareSessionConfig,
 ) -> Result<PreparedSession> {
     let mut transport_ready_at: Option<Instant> = None;
@@ -281,8 +280,6 @@ pub(super) async fn prepare_session_stream(
                 writer,
                 config,
                 reconnect,
-                app_session_id,
-                app_session_nonce,
                 PrepareSessionIoConfig {
                     cold_boot_ready_uptime_ms: prepare_config.cold_boot_ready_uptime_ms,
                     cold_boot_ready_max_wait_ms: prepare_config.cold_boot_ready_max_wait_ms,
@@ -329,11 +326,17 @@ pub(super) async fn prepare_session_stream(
     }
 
     match setup_result {
-        Ok((notifications, live_control_characteristic, history_control_characteristic)) => Ok(PreparedSession {
+        Ok((
+            notifications,
+            live_control_characteristic,
+            history_control_characteristic,
+            status_characteristic,
+        )) => Ok(PreparedSession {
             peripheral,
             notifications,
             live_control_characteristic,
             history_control_characteristic,
+            status_characteristic,
             transport_ready_at,
             gatt_ready_at,
         }),

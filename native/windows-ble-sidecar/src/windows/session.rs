@@ -235,6 +235,7 @@ async fn cleanup_session(context: &SessionContext, state: &SessionState) -> Resu
     if state.scanning {
         let _ = context.adapter.stop_scan().await;
     }
+    context.active_session_controls.lock().await.clear();
     if let Ok(peripherals) = context.adapter.peripherals().await {
         for peripheral in peripherals {
             if peripheral.is_connected().await.unwrap_or(false) {

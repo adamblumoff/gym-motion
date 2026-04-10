@@ -7,7 +7,7 @@ namespace firmware_runtime {
 
 enum class ControlCommandType {
   Unknown,
-  AppSessionBootstrap,
+  AppSessionBegin,
   AppSessionLease,
   SyncNow,
   OtaBegin,
@@ -24,7 +24,6 @@ enum class HistoryControlCommandType {
 enum class LeaseEnforcementResultKind {
   None,
   BootstrapTimedOut,
-  MissingLeaseTimedOut,
   LeaseExpired,
 };
 
@@ -32,14 +31,12 @@ struct AppSessionState {
   bool runtimeBleConnected = false;
   bool runtimeAppSessionConnected = false;
   bool runtimeBootstrapLeasePending = false;
-  bool runtimeLeaseRequired = false;
   unsigned long runtimeBleConnectedAt = 0;
   unsigned long lastAppSessionLeaseAt = 0;
   unsigned long lastRuntimeControlAt = 0;
   unsigned long appSessionLeaseTimeoutMs = 0;
   std::string runtimeAppSessionId;
   std::string runtimeAppSessionNonce;
-  std::string runtimeBootstrapSessionNonce;
 };
 
 struct SessionOnlineUpdate {

@@ -28,8 +28,6 @@ pub(super) fn is_retryable_pre_session_setup_error(error: &anyhow::Error) -> boo
     let message = format_error_chain(error);
     message.contains("status subscribe step failed")
         || message.contains("subscribe step failed")
-        || (message.contains("app-session-bootstrap step failed")
-            && message.contains("object has been closed"))
         || (message.contains("app-session-lease step failed")
             && message.contains("object has been closed"))
 }

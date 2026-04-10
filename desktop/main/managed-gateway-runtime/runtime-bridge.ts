@@ -51,7 +51,7 @@ type PendingCommand = {
 export type RuntimeBridge = {
   sendGatewayCommand: (command: Record<string, unknown>) => Promise<unknown>;
   sendGatewayCommandInBackground: (command: Record<string, unknown>, context: string) => void;
-  stopChild: () => void;
+  stopChild: () => Promise<void>;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
 };
@@ -169,7 +169,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     });
   }
 
-  function stopChild() {
+  async function stopChild() {
     const child = deps.getChild();
     if (!child) {
       return;
@@ -182,6 +182,20 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     deps.intentionalChildExits.add(child);
     deps.setChild(null);
     child.kill("SIGTERM");
+
+    if (child.exitCode !== null) {
+      return;
+    }
+
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+      }),
+      new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 2_000);
+        timeout.unref?.();
+      }),
+    ]);
   }
 
   function runtimeStartIssue() {

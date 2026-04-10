@@ -46,13 +46,12 @@ async fn send_history_control_command(
     drop(active_session_controls);
 
     let write_guard = control.history.write_lock.lock().await;
-    let result =
-        write_chunked_json_command(
-            &control.history.peripheral,
-            &control.history.characteristic,
-            &payload.to_string(),
-        )
-            .await;
+    let result = write_chunked_json_command(
+        &control.history.peripheral,
+        &control.history.characteristic,
+        &payload.to_string(),
+    )
+    .await;
     drop(write_guard);
     result?;
     Ok(true)
@@ -346,7 +345,11 @@ pub(super) async fn handle_session_command(
             let key = node_key(&node);
             state.connected_nodes.remove(&key);
             if let Some(device_id) = node.known_device_id.as_ref() {
-                context.active_session_controls.lock().await.remove(device_id);
+                context
+                    .active_session_controls
+                    .lock()
+                    .await
+                    .remove(device_id);
             }
             let allowed = context.allowed_nodes.read().await.clone();
             let was_manual_pair = state

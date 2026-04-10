@@ -140,8 +140,12 @@ pub struct HistoryErrorPayload {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     ListAdapters,
-    SelectAdapter { adapter_id: String },
-    SetAllowedNodes { nodes: Vec<ApprovedNodeRule> },
+    SelectAdapter {
+        adapter_id: String,
+    },
+    SetAllowedNodes {
+        nodes: Vec<ApprovedNodeRule>,
+    },
     Start,
     Stop,
     Rescan,
@@ -158,9 +162,15 @@ pub enum Command {
         sequence: u64,
         request_id: String,
     },
-    PairManualCandidate { candidate_id: String },
-    RecoverApprovedNode { rule_id: String },
-    ResumeApprovedNodeReconnect { rule_id: String },
+    PairManualCandidate {
+        candidate_id: String,
+    },
+    RecoverApprovedNode {
+        rule_id: String,
+    },
+    ResumeApprovedNodeReconnect {
+        rule_id: String,
+    },
     Shutdown,
 }
 

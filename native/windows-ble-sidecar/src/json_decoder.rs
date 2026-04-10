@@ -101,15 +101,13 @@ impl JsonObjectDecoder {
 
             let candidate = self.buffer[..=object_end].to_string();
             self.buffer = self.buffer[object_end + 1..].to_string();
-            objects.push(
-                serde_json::from_str(&candidate).map_err(|error| {
-                    anyhow!(
-                        "{} json parse failed: {error}; candidate={}",
-                        self.label,
-                        error_snippet(&candidate)
-                    )
-                })?,
-            );
+            objects.push(serde_json::from_str(&candidate).map_err(|error| {
+                anyhow!(
+                    "{} json parse failed: {error}; candidate={}",
+                    self.label,
+                    error_snippet(&candidate)
+                )
+            })?);
         }
 
         Ok(objects)
@@ -208,7 +206,10 @@ mod tests {
     #[test]
     fn waits_for_end_before_decoding_framed_messages() {
         let mut decoder = JsonObjectDecoder::new("status");
-        assert!(decoder.push_str("BEGIN:11").expect("begin should parse").is_empty());
+        assert!(decoder
+            .push_str("BEGIN:11")
+            .expect("begin should parse")
+            .is_empty());
         let framed = decoder
             .push_str("{\"ok\":true}")
             .expect("payload should not decode before END");
@@ -257,7 +258,10 @@ mod tests {
             .push_str(&format!("BEGIN:{}", candidate.len()))
             .expect("begin should parse")
             .is_empty());
-        assert!(decoder.push_str(candidate).expect("candidate should buffer").is_empty());
+        assert!(decoder
+            .push_str(candidate)
+            .expect("candidate should buffer")
+            .is_empty());
         let values = decoder
             .push_str("END")
             .expect("decoder should recover truncated history record");
@@ -401,7 +405,10 @@ fn build_best_effort_history_record(source: &str) -> Option<Value> {
         record.insert("bootId".to_string(), Value::String(boot_id));
     }
     if let Some(firmware_version) = extract_lenient_string_field(source, "firmwareVersion") {
-        record.insert("firmwareVersion".to_string(), Value::String(firmware_version));
+        record.insert(
+            "firmwareVersion".to_string(),
+            Value::String(firmware_version),
+        );
     }
     if let Some(hardware_id) = extract_lenient_string_field(source, "hardwareId") {
         record.insert("hardwareId".to_string(), Value::String(hardware_id));
@@ -425,7 +432,9 @@ fn extract_lenient_string_field(candidate: &str, key: &str) -> Option<String> {
         match ch {
             '\\' => escaped = true,
             '"' => return Some(remainder[..index].replace("\\\"", "\"").replace("\\/", "/")),
-            '}' | '{' | ',' => return Some(remainder[..index].replace("\\\"", "\"").replace("\\/", "/")),
+            '}' | '{' | ',' => {
+                return Some(remainder[..index].replace("\\\"", "\"").replace("\\/", "/"))
+            }
             _ => {}
         }
     }

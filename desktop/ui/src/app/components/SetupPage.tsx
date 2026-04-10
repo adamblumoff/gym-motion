@@ -146,10 +146,10 @@ export function SetupPage() {
     try {
       await recoverApprovedNode(deviceId);
       setPendingRecoverIds((current) => removeFromSet(current, deviceId));
-      toast.success('Recovery requested.');
+      toast.success('Reconnect requested.');
     } catch (error) {
       setPendingRecoverIds((current) => removeFromSet(current, deviceId));
-      toast.error(error instanceof Error ? error.message : 'Failed to recover device.');
+      toast.error(error instanceof Error ? error.message : 'Failed to reconnect device.');
     }
   };
 

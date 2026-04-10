@@ -72,7 +72,7 @@ export function PairedDevicesPanel({
                     disabled={recovering || removing}
                     className="bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
                   >
-                    {recovering ? "Recovering..." : "Recover"}
+                    {recovering ? "Reconnecting..." : "Reconnect"}
                   </Button>
                 ) : null}
                 <Button

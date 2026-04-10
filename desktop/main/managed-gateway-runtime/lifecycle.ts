@@ -9,7 +9,7 @@ type RuntimeLifecycleDeps = {
   getSnapshot: () => DesktopSnapshot;
   setSnapshot: (snapshot: DesktopSnapshot) => void;
   setStopped: (stopped: boolean) => void;
-  stopChild: () => void;
+  stopChild: () => Promise<void>;
   apiServerStart: () => Promise<void>;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
@@ -100,7 +100,7 @@ export function createRuntimeLifecycle(
 
   async function restartRuntime() {
     deps.setStopped(false);
-    deps.stopChild();
+    await deps.stopChild();
     setRuntimeState("restarting", null);
     await startRuntime({ preserveSnapshot: true });
     return deps.getSnapshot();

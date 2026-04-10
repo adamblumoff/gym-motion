@@ -52,15 +52,7 @@ TEST_CASE("evaluateAppSessionLease reports bootstrap and lease expiry regression
     CHECK(result.shouldResetSession);
   }
 
-  SUBCASE("missing lease timeout after bootstrap") {
-    state.runtimeLeaseRequired = true;
-    const auto result = evaluateAppSessionLease(state, 12'200, 12'000);
-    CHECK(result.kind == LeaseEnforcementResultKind::MissingLeaseTimedOut);
-    CHECK(result.shouldDisconnect);
-  }
-
   SUBCASE("active lease still healthy") {
-    state.runtimeLeaseRequired = true;
     state.runtimeAppSessionConnected = true;
     state.lastAppSessionLeaseAt = 1'000;
     state.appSessionLeaseTimeoutMs = 15'000;
@@ -69,7 +61,6 @@ TEST_CASE("evaluateAppSessionLease reports bootstrap and lease expiry regression
   }
 
   SUBCASE("expired lease") {
-    state.runtimeLeaseRequired = true;
     state.runtimeAppSessionConnected = true;
     state.lastAppSessionLeaseAt = 1'000;
     state.appSessionLeaseTimeoutMs = 5'000;
@@ -81,12 +72,14 @@ TEST_CASE("evaluateAppSessionLease reports bootstrap and lease expiry regression
 }
 
 TEST_CASE("parseRuntimeControlCommand validates runtime session payload defaults") {
-  const auto bootstrap = parseRuntimeControlCommand(
-    R"({"type":"app-session-bootstrap","sessionNonce":"nonce-1"})",
+  const auto begin = parseRuntimeControlCommand(
+    R"({"type":"app-session-begin","sessionId":"session-1","sessionNonce":"nonce-1"})",
     15'000
   );
-  CHECK(bootstrap.type == ControlCommandType::AppSessionBootstrap);
-  CHECK(bootstrap.sessionNonce == "nonce-1");
+  CHECK(begin.type == ControlCommandType::AppSessionBegin);
+  CHECK(begin.sessionId == "session-1");
+  CHECK(begin.sessionNonce == "nonce-1");
+  CHECK(begin.expiresInMs == 15'000);
 
   const auto lease = parseRuntimeControlCommand(
     R"({"type":"app-session-lease","sessionId":"session-1"})",

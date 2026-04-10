@@ -10,12 +10,7 @@ use serde_json::json;
 
 use crate::protocol::{DiscoveredNode, Event, ReconnectStatus, RuntimeStatusPayload};
 
-use super::{
-    config::Config,
-    handshake::{send_app_session_bootstrap, send_app_session_lease},
-    session_transport_recovery::emit_handshake_step,
-    writer::EventWriter,
-};
+use super::{config::Config, session_transport_recovery::emit_handshake_step, writer::EventWriter};
 
 pub(super) type NotificationStream = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
 
@@ -110,10 +105,13 @@ pub(super) async fn prepare_runtime_session_io(
     writer: &EventWriter,
     config: &Config,
     reconnect: &Option<ReconnectStatus>,
-    app_session_id: &str,
-    app_session_nonce: &str,
     io_config: PrepareSessionIoConfig,
-) -> Result<(NotificationStream, Characteristic, Characteristic)> {
+) -> Result<(
+    NotificationStream,
+    Characteristic,
+    Characteristic,
+    Characteristic,
+)> {
     emit_handshake_step(
         writer,
         config.verbose_logging,
@@ -122,11 +120,7 @@ pub(super) async fn prepare_runtime_session_io(
         "verifying runtime service",
     )
     .await?;
-    required_service(
-        peripheral,
-        config.service_uuid,
-        "runtime service not found",
-    )?;
+    required_service(peripheral, config.service_uuid, "runtime service not found")?;
     emit_handshake_step(
         writer,
         config.verbose_logging,
@@ -263,28 +257,10 @@ pub(super) async fn prepare_runtime_session_io(
         .subscribe(&telemetry_characteristic)
         .await
         .with_context(|| format!("subscribe step failed for {}", node.label))?;
-    emit_handshake_step(
-        writer,
-        config.verbose_logging,
-        node,
-        reconnect,
-        "sending app-session bootstrap",
-    )
-    .await?;
-    send_app_session_bootstrap(peripheral, &control_characteristic, app_session_nonce)
-        .await
-        .with_context(|| format!("app-session-bootstrap step failed for {}", node.label))?;
-    emit_handshake_step(
-        writer,
-        config.verbose_logging,
-        node,
-        reconnect,
-        "sending app-session lease",
-    )
-    .await?;
-    send_app_session_lease(peripheral, &control_characteristic, app_session_id)
-        .await
-        .with_context(|| format!("app-session-lease step failed for {}", node.label))?;
-
-    Ok((notifications, control_characteristic, history_control_characteristic))
+    Ok((
+        notifications,
+        control_characteristic,
+        history_control_characteristic,
+        status_characteristic,
+    ))
 }

@@ -462,8 +462,8 @@ export function createManagedGatewayRuntime(
     }
   }
 
-  function stopChild() {
-    runtimeBridge.stopChild();
+  async function stopChild() {
+    await runtimeBridge.stopChild();
   }
 
   function runtimeStartIssue() {
@@ -662,7 +662,7 @@ export function createManagedGatewayRuntime(
     async stop() {
       stopped = true;
 
-      stopChild();
+      await stopChild();
       emitSetup();
       await apiServer.stop();
       await dataIngestSpool.stop();

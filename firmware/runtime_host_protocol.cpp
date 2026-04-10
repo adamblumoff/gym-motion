@@ -87,7 +87,7 @@ AppSessionState createResetAppSessionState(unsigned long defaultLeaseTimeoutMs) 
 
 bool armBootstrapWatchdog(AppSessionState& state) {
   if (!state.runtimeBleConnected ||
-      state.runtimeLeaseRequired ||
+      state.runtimeAppSessionConnected ||
       state.runtimeBootstrapLeasePending) {
     return false;
   }
@@ -121,7 +121,7 @@ SessionOnlineUpdate markAppSessionOnline(
   state.lastAppSessionLeaseAt = timestamp;
   state.lastRuntimeControlAt = timestamp;
   state.appSessionLeaseTimeoutMs = nextTimeout;
-  state.runtimeBootstrapSessionNonce = sessionNonce;
+  state.runtimeBootstrapLeasePending = false;
 
   SessionOnlineUpdate update;
   update.sessionChanged = sessionChanged;
@@ -152,21 +152,7 @@ LeaseEnforcementResult evaluateAppSessionLease(
     return {};
   }
 
-  if (!state.runtimeLeaseRequired) {
-    return {};
-  }
-
   if (!state.runtimeAppSessionConnected || state.lastAppSessionLeaseAt == 0) {
-    if (state.runtimeBleConnectedAt > 0 &&
-        now - state.runtimeBleConnectedAt >= bootstrapTimeoutMs) {
-      LeaseEnforcementResult result;
-      result.kind = LeaseEnforcementResultKind::MissingLeaseTimedOut;
-      result.shouldDisconnect = true;
-      result.shouldRestartAdvertising = true;
-      result.shouldResetSession = true;
-      return result;
-    }
-
     return {};
   }
 
@@ -188,9 +174,12 @@ ControlCommand parseRuntimeControlCommand(
   ControlCommand command;
   const std::string type = extractJsonString(payload, "type");
 
-  if (type == "app-session-bootstrap") {
-    command.type = ControlCommandType::AppSessionBootstrap;
+  if (type == "app-session-begin") {
+    command.type = ControlCommandType::AppSessionBegin;
+    command.sessionId = extractJsonString(payload, "sessionId");
     command.sessionNonce = extractJsonString(payload, "sessionNonce");
+    command.expiresInMs =
+      extractJsonUnsignedLong(payload, "expiresInMs", defaultLeaseTimeoutMs);
     return command;
   }
 

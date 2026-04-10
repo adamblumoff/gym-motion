@@ -13,15 +13,29 @@ fn frames_runtime_control_commands_for_firmware_parser() {
 }
 
 #[test]
-fn frames_app_session_bootstrap_commands_for_firmware_parser() {
-    let payload = r#"{"type":"app-session-bootstrap","sessionNonce":"nonce-1"}"#;
-    let frames = control_command_frames(payload);
+fn frames_combined_app_session_begin_commands_for_firmware_parser() {
+    let payload = format!(
+        r#"{{"type":"app-session-begin","sessionId":"session-1","sessionNonce":"nonce-1","expiresInMs":{}}}"#,
+        15_000
+    );
+    let frames = control_command_frames(&payload);
 
     assert_eq!(
         frames.first().map(Vec::as_slice),
         Some(format!("BEGIN:{}", payload.len()).as_bytes())
     );
-    assert_eq!(frames.get(1).map(Vec::as_slice), Some(payload.as_bytes()));
+
+    let body = frames[1..frames.len() - 1]
+        .iter()
+        .flat_map(|frame| frame.iter().copied())
+        .collect::<Vec<_>>();
+    let decoded: Value =
+        serde_json::from_slice(&body).expect("combined payload should decode as JSON");
+
+    assert_eq!(decoded["type"], "app-session-begin");
+    assert_eq!(decoded["sessionId"], "session-1");
+    assert_eq!(decoded["sessionNonce"], "nonce-1");
+    assert_eq!(decoded["expiresInMs"], 15_000);
     assert_eq!(frames.last().map(Vec::as_slice), Some(&b"END"[..]));
 }
 

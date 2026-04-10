@@ -266,6 +266,17 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
+void notifyCurrentRuntimeStatus() {
+  if (runtimeAppSessionConnected &&
+      runtimeAppSessionId.length() > 0 &&
+      runtimeAppSessionNonce.length() > 0) {
+    sendRuntimeAppSessionOnline(runtimeAppSessionId, runtimeAppSessionNonce);
+    return;
+  }
+
+  notifyCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+}
+
 void sendRuntimeAppSessionOnline(
   const String& sessionId,
   const String& sessionNonce
@@ -276,12 +287,19 @@ void sendRuntimeAppSessionOnline(
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
-  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
+  notifyCharacteristic(runtimeStatusCharacteristic, payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
   Serial.print("[runtime] ");
   Serial.println(message);
+}
+
+void logRuntimeControlFrame(const String& stage, const String& payload) {
+  Serial.print("[runtime-control] ");
+  Serial.print(stage);
+  Serial.print(": ");
+  Serial.println(payload);
 }
 
 void logRuntimeHistoryEvent(const String& message) {
@@ -290,6 +308,7 @@ void logRuntimeHistoryEvent(const String& message) {
 }
 
 void logAdvertisingSetupFailure(const char* field) {
+  markNodeBleFailure();
   Serial.print("BLE advertising payload setup failed: ");
   Serial.println(field);
 }
@@ -329,7 +348,13 @@ void startRuntimeAdvertising(const String& reason) {
   }
 
   configureRuntimeAdvertisingPayload();
-  Bluefruit.Advertising.start(0);
+  if (!Bluefruit.Advertising.start(0)) {
+    markNodeBleFailure();
+    logRuntimeTransportEvent("BLE advertising failed to start.");
+    return;
+  }
+
+  markNodeAdvertising();
   lastDisconnectedAdvertisingLogAt = millis();
   logRuntimeTransportEvent(
     "Advertising for Windows app reconnect (" + reason + ") as " +
@@ -370,22 +395,27 @@ void resetRuntimeAppSessionState() {
     firmware_runtime::createResetAppSessionState(APP_SESSION_LEASE_DEFAULT_MS);
   runtimeAppSessionConnected = state.runtimeAppSessionConnected;
   runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
-  runtimeLeaseRequired = state.runtimeLeaseRequired;
   runtimeAppSessionId = state.runtimeAppSessionId.c_str();
   runtimeAppSessionNonce = state.runtimeAppSessionNonce.c_str();
-  runtimeBootstrapSessionNonce = state.runtimeBootstrapSessionNonce.c_str();
   lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
+  runtimeCommandBuffer = "";
   cancelHistoryWorker();
   lastCompletedHistoryRequestId = "";
+  if (runtimeStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  }
+  if (historyStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
+  }
 }
 
 void armRuntimeBootstrapWatchdog(const String& message) {
   firmware_runtime::AppSessionState state;
   state.runtimeBleConnected = runtimeBleConnected;
+  state.runtimeAppSessionConnected = runtimeAppSessionConnected;
   state.runtimeBootstrapLeasePending = runtimeBootstrapLeasePending;
-  state.runtimeLeaseRequired = runtimeLeaseRequired;
 
   if (!firmware_runtime::armBootstrapWatchdog(state)) {
     return;
@@ -406,7 +436,8 @@ void markRuntimeAppSessionOnline(
   const String& sessionId,
   const String& sessionNonce,
   unsigned long expiresInMs,
-  unsigned long timestamp
+  unsigned long timestamp,
+  bool forceStatusEmit = false
 ) {
   firmware_runtime::AppSessionState state;
   state.runtimeAppSessionConnected = runtimeAppSessionConnected;
@@ -415,7 +446,6 @@ void markRuntimeAppSessionOnline(
   state.lastAppSessionLeaseAt = lastAppSessionLeaseAt;
   state.lastRuntimeControlAt = lastRuntimeControlAt;
   state.appSessionLeaseTimeoutMs = appSessionLeaseTimeoutMs;
-  state.runtimeBootstrapSessionNonce = runtimeBootstrapSessionNonce.c_str();
 
   const firmware_runtime::SessionOnlineUpdate update =
     firmware_runtime::markAppSessionOnline(
@@ -433,16 +463,22 @@ void markRuntimeAppSessionOnline(
   lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
-  runtimeBootstrapSessionNonce = state.runtimeBootstrapSessionNonce.c_str();
+  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
 
-  if (!update.sessionChanged) {
+  if (!update.sessionChanged && !forceStatusEmit) {
     logRuntimeLeaseState("Lease refreshed.", timestamp);
     return;
   }
 
-  logRuntimeTransportEvent(
-    "Windows app session lease is active for session " + sessionId + "."
-  );
+  if (update.sessionChanged) {
+    logRuntimeTransportEvent(
+      "Windows app session lease is active for session " + sessionId + "."
+    );
+  } else {
+    logRuntimeTransportEvent(
+      "Re-sending Windows app session online ack for session " + sessionId + "."
+    );
+  }
   sendRuntimeAppSessionOnline(sessionId, sessionNonce);
 
   journalNodeLog(
@@ -501,14 +537,12 @@ void enforceRuntimeAppSessionLease() {
   state.runtimeBleConnected = runtimeBleConnected;
   state.runtimeAppSessionConnected = runtimeAppSessionConnected;
   state.runtimeBootstrapLeasePending = runtimeBootstrapLeasePending;
-  state.runtimeLeaseRequired = runtimeLeaseRequired;
   state.runtimeBleConnectedAt = runtimeBleConnectedAt;
   state.lastAppSessionLeaseAt = lastAppSessionLeaseAt;
   state.lastRuntimeControlAt = lastRuntimeControlAt;
   state.appSessionLeaseTimeoutMs = appSessionLeaseTimeoutMs;
   state.runtimeAppSessionId = runtimeAppSessionId.c_str();
   state.runtimeAppSessionNonce = runtimeAppSessionNonce.c_str();
-  state.runtimeBootstrapSessionNonce = runtimeBootstrapSessionNonce.c_str();
 
   const firmware_runtime::LeaseEnforcementResult result =
     firmware_runtime::evaluateAppSessionLease(
@@ -540,28 +574,6 @@ void enforceRuntimeAppSessionLease() {
     }
 
     startRuntimeAdvertising("missing runtime bootstrap");
-    return;
-  }
-
-  if (result.kind == firmware_runtime::LeaseEnforcementResultKind::MissingLeaseTimedOut) {
-    logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
-    journalNodeLog(
-      "warn",
-      "runtime.app_session.missing",
-      "BLE client connected without an app session lease; dropping stale client.",
-      now
-    );
-    logRuntimeTransportEvent(
-      "BLE client never leased the Windows app session; dropping stale client."
-    );
-    resetRuntimeAppSessionState();
-
-    if (runtimeBleConnIdKnown) {
-      Bluefruit.disconnect(runtimeBleConnId);
-      return;
-    }
-
-    startRuntimeAdvertising("missing app-session lease");
     return;
   }
 
@@ -606,7 +618,6 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
 }
 
 void handleProvisioningCommand(const String& payload) {
-  runtimeBootstrapLeasePending = false;
   const String type = extractJsonString(payload, "type");
 
   if (type != "provision") {
@@ -638,6 +649,7 @@ void handleProvisioningCommand(const String& payload) {
 }
 
 void handleRuntimeControl(const String& payload) {
+  logRuntimeControlFrame("payload", payload);
   const firmware_runtime::ControlCommand command =
     firmware_runtime::parseRuntimeControlCommand(
       payload.c_str(),
@@ -645,27 +657,37 @@ void handleRuntimeControl(const String& payload) {
     );
   lastRuntimeControlAt = millis();
 
-  if (command.type == firmware_runtime::ControlCommandType::AppSessionBootstrap) {
+  if (command.type == firmware_runtime::ControlCommandType::AppSessionBegin) {
     disarmRuntimeBootstrapWatchdog();
-    runtimeLeaseRequired = true;
+    const String sessionId = command.sessionId.c_str();
     const String sessionNonce = command.sessionNonce.c_str();
-    if (sessionNonce.length() == 0) {
+    const unsigned long expiresInMs = command.expiresInMs;
+
+    if (sessionId.length() == 0 || sessionNonce.length() == 0) {
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
-        "Ignored app session bootstrap without a session nonce.",
+        "Ignored combined app session begin command with missing session data.",
         millis()
       );
-      runtimeLeaseRequired = false;
       return;
     }
-    runtimeBootstrapSessionNonce = sessionNonce;
+
+    logRuntimeTransportEvent(
+      "Applying app-session-begin for session " + sessionId +
+      " (previous=" + (runtimeAppSessionId.length() > 0 ? runtimeAppSessionId : "(none)") + ")."
+    );
+    markRuntimeAppSessionOnline(
+      sessionId,
+      sessionNonce,
+      expiresInMs,
+      millis(),
+      true
+    );
     return;
   }
 
   if (command.type == firmware_runtime::ControlCommandType::AppSessionLease) {
-    disarmRuntimeBootstrapWatchdog();
-    runtimeLeaseRequired = true;
     const String sessionId = command.sessionId.c_str();
     const unsigned long expiresInMs = command.expiresInMs;
 
@@ -679,19 +701,37 @@ void handleRuntimeControl(const String& payload) {
       return;
     }
 
-    if (runtimeBootstrapSessionNonce.length() == 0) {
+    if (!runtimeAppSessionConnected ||
+        runtimeAppSessionId.length() == 0 ||
+        runtimeAppSessionNonce.length() == 0) {
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
-        "Ignored app session lease without a bootstrap session nonce.",
+        "Ignored app session lease without an active app session.",
         millis()
       );
       return;
     }
 
+    if (runtimeAppSessionId != sessionId) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.invalid",
+        "Ignored app session lease for a different active session id.",
+        millis()
+      );
+      logRuntimeTransportEvent(
+        "Rejected app-session-lease for session " + sessionId +
+        " because active session is " +
+        (runtimeAppSessionId.length() > 0 ? runtimeAppSessionId : "(none)") + "."
+      );
+      return;
+    }
+
+    logRuntimeTransportEvent("Refreshing app-session-lease for session " + sessionId + ".");
     markRuntimeAppSessionOnline(
       sessionId,
-      runtimeBootstrapSessionNonce,
+      runtimeAppSessionNonce,
       expiresInMs,
       millis()
     );
@@ -758,7 +798,10 @@ void handleProvisioningControlWrite(uint16_t conn_hdl, BLECharacteristic* charac
     return;
   }
 
-  disarmRuntimeBootstrapWatchdog();
+  if (value.startsWith("{") && value.endsWith("}")) {
+    handleProvisioningCommand(value);
+    return;
+  }
 
   if (value.startsWith("BEGIN:")) {
     provisioningCommandBuffer = "";
@@ -784,19 +827,27 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     return;
   }
 
+  if (value.startsWith("{") && value.endsWith("}")) {
+    handleRuntimeControl(value);
+    return;
+  }
+
   if (value.startsWith("BEGIN:")) {
     runtimeCommandBuffer = "";
+    logRuntimeControlFrame("begin", value);
     return;
   }
 
   if (value == "END") {
     const String command = runtimeCommandBuffer;
     runtimeCommandBuffer = "";
+    logRuntimeControlFrame("end", command);
     handleRuntimeControl(command);
     return;
   }
 
   runtimeCommandBuffer += value;
+  logRuntimeControlFrame("chunk", value);
 }
 
 void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
@@ -805,6 +856,11 @@ void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   const String value = bytesToString(data, len);
 
   if (value.length() == 0) {
+    return;
+  }
+
+  if (value.startsWith("{") && value.endsWith("}")) {
+    handleHistoryControl(value);
     return;
   }
 
@@ -832,41 +888,29 @@ void handleRuntimeOtaDataWrite(uint16_t conn_hdl, BLECharacteristic* characteris
 void handleProvisioningStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
   (void)conn_hdl;
   (void)characteristic;
-
-  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
-  if (!notificationsEnabled) {
-    return;
-  }
-
-  if (!runtimeBleConnected || !runtimeBootstrapLeasePending) {
-    return;
-  }
-
-  disarmRuntimeBootstrapWatchdog();
-  logRuntimeTransportEvent(
-    "Provisioning status notifications enabled; leaving runtime lease watchdog idle."
-  );
+  (void)cccd_value;
 }
 
 void handleRuntimeTelemetryCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
   (void)conn_hdl;
   (void)characteristic;
+  (void)cccd_value;
+}
+
+void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
+  (void)conn_hdl;
+  (void)characteristic;
 
   const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
-  if (!notificationsEnabled) {
+  if (!notificationsEnabled || !runtimeBleConnected) {
     return;
   }
 
-  if (runtimeLeaseRequired || runtimeBootstrapLeasePending) {
-    return;
-  }
-
-  armRuntimeBootstrapWatchdog(
-    "Runtime telemetry notifications enabled; waiting for runtime control traffic."
-  );
+  notifyCurrentRuntimeStatus();
 }
 
 void handleBleConnect(uint16_t conn_handle) {
+  markNodeConnected();
   provisioningBleConnected = true;
   runtimeBleConnected = true;
   runtimeBleConnectedAt = millis();
@@ -895,6 +939,7 @@ void handleBleConnect(uint16_t conn_handle) {
 void handleBleDisconnect(uint16_t conn_handle, uint8_t reason) {
   (void)conn_handle;
   (void)reason;
+  markNodeAdvertising();
   provisioningBleConnected = false;
   runtimeBleConnected = false;
   runtimeBleConnectedAt = 0;
@@ -996,6 +1041,7 @@ void setupBle() {
   )) {
     Serial.println("BLE characteristic registration failed: runtime status");
   }
+  runtimeStatusCharacteristicImpl.setCccdWriteCallback(handleRuntimeStatusCccd);
 
   if (!setupBleCharacteristic(
     runtimeOtaDataCharacteristicImpl,

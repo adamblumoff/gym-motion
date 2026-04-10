@@ -3,10 +3,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    handshake::send_app_session_lease,
-    session::ActiveLiveControl,
-    session_transport::APP_SESSION_HEARTBEAT_MS,
-    session_util::format_error_chain,
+    handshake::send_app_session_lease, session::ActiveLiveControl,
+    session_transport::APP_SESSION_HEARTBEAT_MS, session_util::format_error_chain,
 };
 
 pub(super) fn is_closed_handle_error_message(message: &str) -> bool {
