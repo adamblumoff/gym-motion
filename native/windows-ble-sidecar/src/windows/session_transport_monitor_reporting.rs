@@ -17,7 +17,7 @@ pub(super) async fn report_reconnect_completed(
     transport_ready_at: Option<Instant>,
     gatt_ready_at: Option<Instant>,
     reconnect_started_at: Instant,
-    used_telemetry_fallback: bool,
+    session_verification: &str,
 ) -> Result<()> {
     let _ = command_sender.send(SessionCommand::ConnectionHealthy { node: node.clone() });
     writer
@@ -46,7 +46,7 @@ pub(super) async fn report_reconnect_completed(
                 "sessionMs": Instant::now()
                     .duration_since(reconnect_started_at)
                     .as_millis() as u64,
-                "usedTelemetryFallback": used_telemetry_fallback,
+                "sessionVerification": session_verification,
             })),
         })
         .await?;
