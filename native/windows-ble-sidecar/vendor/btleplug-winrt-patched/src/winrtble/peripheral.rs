@@ -49,6 +49,8 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic;
 use windows::Devices::Bluetooth::{Advertisement::*, BluetoothAddressType};
 use windows::core::GUID;
 
+const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
+
 #[cfg_attr(
     feature = "serde",
     derive(Serialize, Deserialize),
@@ -92,7 +94,7 @@ struct Shared {
 
 impl Peripheral {
     pub(crate) fn new(adapter: Weak<AdapterManager<Self>>, address: BDAddr) -> Self {
-        let (broadcast_sender, _) = broadcast::channel(16);
+        let (broadcast_sender, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
         Peripheral {
             shared: Arc::new(Shared {
                 adapter,
@@ -469,7 +471,14 @@ impl ApiPeripheral for Peripheral {
         // the cached service objects will no longer be valid (they must be refreshed).
         self.shared.ble_services.clear();
         let mut device = self.shared.device.lock().await;
-        *device = None;
+        if let Some(existing_device) = device.take() {
+            if let Err(error) = existing_device.disconnect().await {
+                warn!(
+                    "Peripheral disconnect teardown for {} returned an error, but local WinRT handles will still be dropped: {:?}",
+                    self.shared.address, error
+                );
+            }
+        }
         self.shared.connected.store(false, Ordering::Relaxed);
         self.emit_event(CentralEvent::DeviceDisconnected(self.shared.address.into()));
         Ok(())

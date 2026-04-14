@@ -26,6 +26,16 @@ use windows::{
         },
     },
     Foundation::TypedEventHandler,
+    Win32::{
+        Devices::Bluetooth::{
+            BLUETOOTH_FIND_RADIO_PARAMS, BluetoothFindFirstRadio, BluetoothFindNextRadio,
+        },
+        Foundation::{CloseHandle, HANDLE},
+        System::{
+            IO::DeviceIoControl,
+            Ioctl::{FILE_ANY_ACCESS, FILE_DEVICE_BLUETOOTH, METHOD_BUFFERED},
+        },
+    },
 };
 
 /// Timeout for uncached GATT operations before falling back to cached mode.
@@ -33,16 +43,28 @@ use windows::{
 const GATT_CACHE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_WAIT_TIMEOUT: Duration = Duration::from_secs(4);
 const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const BTH_IOCTL_BASE: u32 = 0;
+const IOCTL_BTH_DISCONNECT_DEVICE: u32 = ctl_code(
+    FILE_DEVICE_BLUETOOTH,
+    BTH_IOCTL_BASE + 0x03,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
 
 pub type ConnectedEventHandler = Box<dyn Fn(bool) + Send>;
 pub type MaxPduSizeChangedEventHandler = Box<dyn Fn(u16) + Send>;
 
 pub struct BLEDevice {
+    address: BDAddr,
     device: BluetoothLEDevice,
     gatt_session: GattSession,
     connection_token: i64,
     pdu_change_token: i64,
     services: Vec<GattDeviceService>,
+}
+
+const fn ctl_code(device_type: u32, function: u32, method: u32, access: u32) -> u32 {
+    (device_type << 16) | (access << 14) | (function << 2) | method
 }
 
 impl BLEDevice {
@@ -88,12 +110,71 @@ impl BLEDevice {
             .map_err(|_| Error::Other("Could not add max pdu size changed handler".into()))?;
 
         Ok(BLEDevice {
+            address,
             device,
             gatt_session,
             connection_token,
             pdu_change_token,
             services: vec![],
         })
+    }
+
+    fn force_disconnect_via_radio(&self) -> Result<bool> {
+        let mut radio = HANDLE::default();
+        let find_params = BLUETOOTH_FIND_RADIO_PARAMS {
+            dwSize: std::mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32,
+        };
+        let find_handle = unsafe { BluetoothFindFirstRadio(&find_params, &mut radio) }
+            .map_err(|error| Error::Other(format!("BluetoothFindFirstRadio failed: {error:?}").into()))?;
+        let _find_handle = find_handle;
+        let remote_address = u64::from(self.address);
+        let mut issued_disconnect = false;
+        let mut last_error: Option<Error> = None;
+
+        loop {
+            let mut bytes_returned = 0u32;
+            match unsafe {
+                DeviceIoControl(
+                    radio,
+                    IOCTL_BTH_DISCONNECT_DEVICE,
+                    Some((&remote_address as *const u64).cast()),
+                    std::mem::size_of::<u64>() as u32,
+                    None,
+                    0,
+                    Some(&mut bytes_returned),
+                    None,
+                )
+            } {
+                Ok(()) => {
+                    issued_disconnect = true;
+                }
+                Err(error) => {
+                    last_error = Some(Error::Other(
+                        format!("IOCTL_BTH_DISCONNECT_DEVICE failed: {error:?}").into(),
+                    ));
+                }
+            }
+
+            unsafe {
+                let _ = CloseHandle(radio);
+            }
+
+            let mut next_radio = HANDLE::default();
+            if unsafe { BluetoothFindNextRadio(find_handle, &mut next_radio) }.is_err() {
+                break;
+            }
+            radio = next_radio;
+        }
+
+        if issued_disconnect {
+            return Ok(true);
+        }
+
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+
+        Ok(false)
     }
 
     async fn get_gatt_services(
@@ -138,6 +219,50 @@ impl BLEDevice {
         let service_result = self.get_gatt_services(BluetoothCacheMode::Uncached).await?;
         let status = service_result.Status().map_err(|_| Error::DeviceNotFound)?;
         utils::to_error(status)
+    }
+
+    pub async fn disconnect(&self) -> Result<()> {
+        let winrt_error = |e| Error::Other(format!("{:?}", e).into());
+        match self.force_disconnect_via_radio() {
+            Ok(true) => {
+                trace!("Forced Bluetooth radio disconnect for {}", self.address);
+            }
+            Ok(false) => {
+                trace!(
+                    "Bluetooth radio disconnect was not issued for {}; falling back to GattSession teardown",
+                    self.address
+                );
+            }
+            Err(error) => {
+                warn!(
+                    "Bluetooth radio disconnect failed for {}: {:?}",
+                    self.address, error
+                );
+            }
+        }
+        self.gatt_session
+            .SetMaintainConnection(false)
+            .map_err(winrt_error)?;
+        timeout(CONNECT_WAIT_TIMEOUT, async {
+            loop {
+                if !self.is_connected().await.unwrap_or(true) {
+                    return Ok::<(), Error>(());
+                }
+
+                sleep(CONNECT_POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            Error::Other(
+                format!(
+                    "timed out waiting for WinRT BLE device {} to disconnect after teardown",
+                    self.address
+                )
+                .into(),
+            )
+        })??;
+        Ok(())
     }
 
     async fn is_connected(&self) -> Result<bool> {
@@ -320,6 +445,12 @@ impl Drop for BLEDevice {
                 debug!("Drop:remove_gatt_Service {:?}", err);
             }
         });
+        self.services.clear();
+
+        let result = self.gatt_session.Close();
+        if let Err(err) = result {
+            debug!("Drop:close_gatt_session {:?}", err);
+        }
 
         let result = self.device.Close();
         if let Err(err) = result {
