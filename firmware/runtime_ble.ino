@@ -328,6 +328,28 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
+void enqueueBoardLogStatus(const String& tag, const String& message, const String& level) {
+  if (runtimeStatusCharacteristic == nullptr) {
+    return;
+  }
+
+  String payload =
+    "{\"type\":\"board-log\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"tag\":\"" + escapeJsonString(tag) +
+    "\",\"level\":\"" + escapeJsonString(level) +
+    "\",\"message\":\"" + escapeJsonString(message) +
+    "\",\"uptimeMs\":" + String(millis()) +
+    ",\"notifyMask\":" + String(runtimeNotifyMask) + "}";
+
+  if (payload.length() <= 244 && runtimeBleConnected) {
+    notifyRuntimeCharacteristic(runtimeStatusCharacteristic, payload);
+    return;
+  }
+
+  enqueueRuntimeStatusPayload(payload);
+}
+
 void sendHistoryDebugStatus(
   const String& stage,
   const String& requestId,
@@ -471,6 +493,7 @@ void sendRuntimeAppSessionOnline(
 void logRuntimeTransportEvent(const String& message) {
   Serial.print("[runtime] ");
   Serial.println(message);
+  enqueueBoardLogStatus("runtime", message);
 }
 
 void logRuntimeControlFrame(const String& stage, const String& payload) {
@@ -483,6 +506,7 @@ void logRuntimeControlFrame(const String& stage, const String& payload) {
 void logRuntimeHistoryEvent(const String& message) {
   Serial.print("[history] ");
   Serial.println(message);
+  enqueueBoardLogStatus("history", message);
 }
 
 bool isHistoryControlPayload(const String& payload) {

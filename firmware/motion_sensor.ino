@@ -293,10 +293,10 @@ void logConnectedRuntimeHeartbeat() {
 
   lastConnectedRuntimeDebugAt = now;
   logRuntimeLeaseState("Connected heartbeat.", now);
-  enqueueRuntimeNotificationChunked(
-    runtimeStatusCharacteristic,
-    "{\"type\":\"runtime-heartbeat\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"uptimeMs\":" + String(now) + "}"
+  enqueueBoardLogStatus(
+    "runtime-heartbeat",
+    "Connected heartbeat. appSession=" + String(runtimeAppSessionConnected ? 1 : 0) +
+      " notifyMask=" + String(runtimeNotifyMask)
   );
 }
 

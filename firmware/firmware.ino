@@ -171,7 +171,6 @@ String pendingHistoryControlDebugRequestId;
 unsigned long pendingHistoryControlDebugAfterSequence = 0;
 String publishedHistoryControlDebugPayload;
 bool runtimeHistoryChunkDirectNotified = false;
-
 struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
   bool* connectedFlag = nullptr;
@@ -234,6 +233,11 @@ void markNodeConnected();
 void markNodeBleFailure();
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version = "");
+void enqueueBoardLogStatus(
+  const String& tag,
+  const String& message,
+  const String& level = "info"
+);
 void sendHistoryDebugStatus(
   const String& stage,
   const String& requestId,

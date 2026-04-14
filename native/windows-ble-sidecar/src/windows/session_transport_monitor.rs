@@ -25,8 +25,7 @@ use super::{
     approval::is_approved,
     config::Config,
     handshake::{
-        control_write_mode, send_app_session_begin, send_app_session_lease,
-        write_chunked_json_command,
+        control_write_mode, send_app_session_begin, write_chunked_json_command,
     },
     session::{ActiveLiveControl, ActiveSessionChannels},
     session_lease::is_closed_handle_error_message,
@@ -236,7 +235,7 @@ pub(super) async fn monitor_active_session(
 
     async fn send_history_runtime_control_command(
         writer: &EventWriter,
-        node: &DiscoveredNode,
+        _node: &DiscoveredNode,
         live_control: &mut ActiveLiveControl,
         session_id: &str,
         command: &ActiveSessionCommand,
@@ -477,7 +476,7 @@ pub(super) async fn monitor_active_session(
                         match status_type.as_str() {
                             "app-session-online" => match serde_json::from_value::<RuntimeStatusPayload>(payload) {
                             Ok(status) => {
-                                let Some(session_id) = status.session_id.clone() else {
+                                    let Some(_session_id) = status.session_id.clone() else {
                                     writer
                                         .send(&Event::Log {
                                             level: "warn".to_string(),
@@ -492,7 +491,7 @@ pub(super) async fn monitor_active_session(
                                     continue;
                                 };
 
-                                let Some(session_nonce) = status.session_nonce.clone() else {
+                                    let Some(_session_nonce) = status.session_nonce.clone() else {
                                     writer
                                         .send(&Event::Log {
                                             level: "warn".to_string(),
@@ -631,6 +630,34 @@ pub(super) async fn monitor_active_session(
                                     .send(&Event::Log {
                                         level: "info".to_string(),
                                         message: "Received firmware history debug status.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "payload": payload,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                            "board-log" => {
+                                let level = payload
+                                    .get("level")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("info")
+                                    .to_string();
+                                let tag = payload
+                                    .get("tag")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("runtime");
+                                let message = payload
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .map(|value| format!("[board:{tag}] {value}"))
+                                    .unwrap_or_else(|| format!("[board:{tag}] firmware log"));
+                                writer
+                                    .send(&Event::Log {
+                                        level,
+                                        message,
                                         details: Some(json!({
                                             "peripheralId": node.peripheral_id,
                                             "knownDeviceId": node.known_device_id,
