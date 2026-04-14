@@ -73,6 +73,71 @@ bool resetMotionSensorAlgorithm() {
   return true;
 }
 
+String createMotionSensorDebugMessage(
+  uint8_t status,
+  bool dataReady,
+  uint8_t funcStatus,
+  bool motionDetected,
+  bool presenceDetected,
+  int16_t motionValue,
+  int16_t presenceValue,
+  int delta
+) {
+  return
+    "status=0x" + String(status, HEX) +
+    " drdy=" + String(dataReady ? 1 : 0) +
+    " " +
+    "func=0x" + String(funcStatus, HEX) +
+    " mot=" + String(motionDetected ? 1 : 0) +
+    " pres=" + String(presenceDetected ? 1 : 0) +
+    " tmotion=" + String(motionValue) +
+    " tpresence=" + String(presenceValue) +
+    " delta=" + String(delta) +
+    " state=" + String(currentDetectedState);
+}
+
+void logMotionSensorSample(
+  uint8_t status,
+  bool dataReady,
+  uint8_t funcStatus,
+  bool motionDetected,
+  bool presenceDetected,
+  int16_t motionValue,
+  int16_t presenceValue,
+  int delta,
+  unsigned long now,
+  bool force = false
+) {
+  const String message = createMotionSensorDebugMessage(
+    status,
+    dataReady,
+    funcStatus,
+    motionDetected,
+    presenceDetected,
+    motionValue,
+    presenceValue,
+    delta
+  );
+
+  if (!force &&
+      lastMotionSensorDebugAt > 0 &&
+      now - lastMotionSensorDebugAt < SENSOR_DEBUG_INTERVAL_MS) {
+  } else {
+    lastMotionSensorDebugAt = now;
+    Serial.print("[motion] ");
+    Serial.println(message);
+  }
+
+  if (!force &&
+      lastMotionSensorHistoryLogAt > 0 &&
+      now - lastMotionSensorHistoryLogAt < SENSOR_HISTORY_DEBUG_INTERVAL_MS) {
+    return;
+  }
+
+  lastMotionSensorHistoryLogAt = now;
+  journalNodeLog("debug", "sensor.motion.sample", message, now);
+}
+
 void setupMotionSensor() {
   const uint8_t whoAmI = readSensorRegister8(STHS34PF80_REG_WHO_AM_I);
   if (whoAmI != STHS34PF80_WHO_AM_I_VALUE) {
@@ -86,10 +151,13 @@ void setupMotionSensor() {
   delay(5);
   resetMotionSensorAlgorithm();
 
-  // Match the vendor library defaults closely for a conservative bring-up.
+  // Keep the algorithm in power-down while we restore the recommended defaults.
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, STHS34PF80_ODR_POWER_DOWN);
+
+  // Match the vendor library defaults, but keep a faster ODR for occupancy.
   writeSensorRegisterMasked(STHS34PF80_REG_AVG_TRIM, 0x07, 0x02);
   writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x10, 0x10);
-  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, 0x03);
+  writeSensorRegisterMasked(STHS34PF80_REG_CTRL1, 0x0F, STHS34PF80_ODR_15_HZ);
 
   motionSensorReady = true;
   Serial.println("STHS34PF80 motion sensor ready.");
@@ -100,18 +168,52 @@ void updateMotionState() {
     return;
   }
 
-  const uint8_t funcStatus = readSensorRegister8(STHS34PF80_REG_FUNC_STATUS);
+  const unsigned long now = millis();
+  if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
+    sendTelemetry(lastReportedDelta, now, false, false);
+  }
+  return;
+
+  const uint8_t status = readSensorRegister8(STHS34PF80_REG_STATUS);
+  const bool dataReady = (status & STHS34PF80_DRDY_FLAG) != 0;
+  const uint8_t funcStatus = dataReady ? readSensorRegister8(STHS34PF80_REG_FUNC_STATUS) : 0;
   const bool motionDetected = (funcStatus & STHS34PF80_MOT_FLAG) != 0;
   const bool presenceDetected = (funcStatus & STHS34PF80_PRES_FLAG) != 0;
-  const int16_t motionValue = readSensorRegister16(STHS34PF80_REG_TMOTION_L);
-  const int16_t presenceValue = readSensorRegister16(STHS34PF80_REG_TPRESENCE_L);
+  const int16_t motionValue = dataReady ? readSensorRegister16(STHS34PF80_REG_TMOTION_L) : 0;
+  const int16_t presenceValue = dataReady ? readSensorRegister16(STHS34PF80_REG_TPRESENCE_L) : 0;
   const int delta = max(abs(motionValue), abs(presenceValue));
-  const unsigned long now = millis();
 
   if (!haveLastReading) {
     haveLastReading = true;
     lastMotionTime = now;
     Serial.println("Calibrating STHS34PF80...");
+    logMotionSensorSample(
+      status,
+      dataReady,
+      funcStatus,
+      motionDetected,
+      presenceDetected,
+      motionValue,
+      presenceValue,
+      delta,
+      now,
+      true
+    );
+    return;
+  }
+
+  if (!dataReady) {
+    logMotionSensorSample(
+      status,
+      dataReady,
+      funcStatus,
+      motionDetected,
+      presenceDetected,
+      motionValue,
+      presenceValue,
+      delta,
+      now
+    );
     return;
   }
 
@@ -123,6 +225,18 @@ void updateMotionState() {
       pendingMotionUpdate = true;
       journalMotionState(currentDetectedState, delta, now);
       Serial.println("Detected -> MOVING");
+      logMotionSensorSample(
+        status,
+        dataReady,
+        funcStatus,
+        motionDetected,
+        presenceDetected,
+        motionValue,
+        presenceValue,
+        delta,
+        now,
+        true
+      );
     }
   } else if (
     strcmp(currentDetectedState, "moving") == 0 &&
@@ -132,7 +246,31 @@ void updateMotionState() {
     pendingMotionUpdate = true;
     journalMotionState(currentDetectedState, delta, now);
     Serial.println("Detected -> STILL");
+    logMotionSensorSample(
+      status,
+      dataReady,
+      funcStatus,
+      motionDetected,
+      presenceDetected,
+      motionValue,
+      presenceValue,
+      delta,
+      now,
+      true
+    );
   }
+
+  logMotionSensorSample(
+    status,
+    dataReady,
+    funcStatus,
+    motionDetected,
+    presenceDetected,
+    motionValue,
+    presenceValue,
+    delta,
+    now
+  );
 
   if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
     sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
@@ -155,6 +293,11 @@ void logConnectedRuntimeHeartbeat() {
 
   lastConnectedRuntimeDebugAt = now;
   logRuntimeLeaseState("Connected heartbeat.", now);
+  enqueueRuntimeNotificationChunked(
+    runtimeStatusCharacteristic,
+    "{\"type\":\"runtime-heartbeat\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"uptimeMs\":" + String(now) + "}"
+  );
 }
 
 void logDisconnectedAdvertisingHeartbeat() {
