@@ -525,24 +525,55 @@ void cancelHistoryWorker() {
 }
 
 void maybeStartAutomaticHistorySync() {
+  auto publishAutoHistoryDecision = [&](const String& message) {
+    if (message == lastAutoHistoryDecisionMessage) {
+      return;
+    }
+    lastAutoHistoryDecisionMessage = message;
+    enqueueBoardLogStatus("auto-history", message);
+    sendHistoryDebugStatus(
+      "auto-decision",
+      runtimeAppSessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      message
+    );
+  };
+
   if (!runtimeBleConnected || !runtimeAppSessionConnected) {
+    publishAutoHistoryDecision(
+      "Skipped automatic history start: runtime/session unavailable ble=" +
+      String(runtimeBleConnected ? "1" : "0") +
+      " session=" + String(runtimeAppSessionConnected ? "1" : "0")
+    );
     return;
   }
 
-  if ((runtimeNotifyMask & RUNTIME_NOTIFY_MASK_STATUS) == 0) {
+  if ((runtimeNotifyMask & RUNTIME_NOTIFY_MASK_HISTORY) == 0) {
+    publishAutoHistoryDecision(
+      "Skipped automatic history start: history notify disabled mask=" +
+      String(runtimeNotifyMask)
+    );
     return;
   }
 
   if (pendingHistorySyncRequest || historyWorkerState.phase != HistoryWorkerPhase::Idle) {
+    publishAutoHistoryDecision(
+      "Skipped automatic history start: pending=" +
+      String(pendingHistorySyncRequest ? "1" : "0") +
+      " phase=" + String(static_cast<int>(historyWorkerState.phase))
+    );
     return;
   }
 
   const unsigned long highWaterSequence = nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
-  const bool sameBaseline =
-    lastAutoHistorySessionId == runtimeAppSessionId &&
-    lastAutoHistoryAckedSequence == ackedHistorySequence &&
-    lastAutoHistoryHighWaterSequence == highWaterSequence;
-  if (sameBaseline) {
+  if (highWaterSequence <= ackedHistorySequence) {
+    publishAutoHistoryDecision(
+      "Skipped automatic history start: already caught up session=" +
+      runtimeAppSessionId + " acked=" + String(ackedHistorySequence) +
+      " highWater=" + String(highWaterSequence)
+    );
     return;
   }
 
@@ -554,9 +585,11 @@ void maybeStartAutomaticHistorySync() {
   command.afterSequence = ackedHistorySequence;
   command.maxRecords = HISTORY_SYNC_PAGE_SIZE;
 
-  lastAutoHistorySessionId = runtimeAppSessionId;
-  lastAutoHistoryAckedSequence = ackedHistorySequence;
-  lastAutoHistoryHighWaterSequence = highWaterSequence;
+  publishAutoHistoryDecision(
+    "Scheduling automatic history start session=" + runtimeAppSessionId +
+    " acked=" + String(ackedHistorySequence) +
+    " highWater=" + String(highWaterSequence)
+  );
 
   sendHistoryDebugStatus(
     "auto-request",

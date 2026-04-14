@@ -211,9 +211,7 @@ HistoryWorkerState historyWorkerState;
 File historyWorkerFile(SPIFFS);
 unsigned long lastBleTxAt = 0;
 String lastCompletedHistoryRequestId;
-String lastAutoHistorySessionId;
-unsigned long lastAutoHistoryAckedSequence = 0;
-unsigned long lastAutoHistoryHighWaterSequence = 0;
+String lastAutoHistoryDecisionMessage;
 
 struct OtaTransferState {
   bool active = false;

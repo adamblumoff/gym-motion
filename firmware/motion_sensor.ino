@@ -172,7 +172,6 @@ void updateMotionState() {
   if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
     sendTelemetry(lastReportedDelta, now, false, false);
   }
-  return;
 
   const uint8_t status = readSensorRegister8(STHS34PF80_REG_STATUS);
   const bool dataReady = (status & STHS34PF80_DRDY_FLAG) != 0;

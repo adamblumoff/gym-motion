@@ -86,7 +86,6 @@ void notifyProvisioningCharacteristic(BLECharacteristic* characteristic, const S
   Serial.print("BLE notify sent: ");
   Serial.println(payload);
   notifyCharacteristicValue(characteristic, payload);
-  delay(BLE_TX_MIN_INTERVAL_MS);
 }
 
 void notifyRuntimeCharacteristic(BLECharacteristic* characteristic, const String& payload) {
@@ -105,7 +104,6 @@ void notifyRuntimeCharacteristic(BLECharacteristic* characteristic, const String
   Serial.print("BLE notify sent: ");
   Serial.println(payload);
   notifyCharacteristicValue(characteristic, payload);
-  delay(BLE_TX_MIN_INTERVAL_MS);
 }
 
 bool enqueueBleTxMessage(
@@ -342,11 +340,6 @@ void enqueueBoardLogStatus(const String& tag, const String& message, const Strin
     "\",\"uptimeMs\":" + String(millis()) +
     ",\"notifyMask\":" + String(runtimeNotifyMask) + "}";
 
-  if (payload.length() <= 244 && runtimeBleConnected) {
-    notifyRuntimeCharacteristic(runtimeStatusCharacteristic, payload);
-    return;
-  }
-
   enqueueRuntimeStatusPayload(payload);
 }
 
@@ -388,42 +381,11 @@ void sendHistoryDebugStatus(
   }
 }
 
-void notifyHistoryDebugStatusForConnection(
-  uint16_t conn_hdl,
-  const String& stage,
-  const String& requestId,
-  unsigned long afterSequence = 0
-) {
-  String payload =
-    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"stage\":\"" + escapeJsonString(stage) +
-    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
-
-  if (afterSequence > 0) {
-    payload += ",\"afterSequence\":" + String(afterSequence);
-  }
-
-  payload += "}";
-  notifyCharacteristicValueForConnection(runtimeStatusCharacteristic, conn_hdl, payload);
-}
-
 void notePendingHistoryControlDebug(
   const String& stage,
   const String& requestId,
   unsigned long afterSequence
 ) {
-  String payload =
-    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"stage\":\"" + escapeJsonString(stage) +
-    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
-
-  if (afterSequence > 0) {
-    payload += ",\"afterSequence\":" + String(afterSequence);
-  }
-
-  payload += "}";
-  writeCharacteristicValue(historyStatusCharacteristic, payload);
-
   pendingHistoryControlDebugStage = stage;
   pendingHistoryControlDebugRequestId = requestId;
   pendingHistoryControlDebugAfterSequence = afterSequence;
@@ -452,7 +414,6 @@ void publishPendingHistoryControlDebug() {
   }
 
   publishedHistoryControlDebugPayload = payload;
-  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
   enqueueRuntimeStatusPayload(payload);
 }
 
@@ -467,16 +428,29 @@ void notifyCurrentRuntimeStatus() {
   notifyRuntimeCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
 }
 
+String createRuntimeAppSessionOnlinePayload(
+  const String& sessionId,
+  const String& sessionNonce
+) {
+  const unsigned long highWaterSequence = nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+  return
+    "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
+    "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
+    "\",\"hm\":" + String(runtimeNotifyMask) +
+    ",\"hp\":" + String(pendingHistorySyncRequest ? 1 : 0) +
+    ",\"ph\":" + String(static_cast<int>(historyWorkerState.phase)) +
+    ",\"ha\":" + String(ackedHistorySequence) +
+    ",\"hh\":" + String(highWaterSequence) + "}";
+}
+
 void sendRuntimeAppSessionOnline(
   const String& sessionId,
   const String& sessionNonce,
   int32_t notifyConnHandle
 ) {
-  String payload =
-    "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
-    "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) + "\"}";
+  String payload = createRuntimeAppSessionOnlinePayload(sessionId, sessionNonce);
   writeCharacteristicValue(runtimeStatusCharacteristic, payload);
   if (notifyConnHandle >= 0) {
     notifyCharacteristicValueForConnection(
@@ -663,11 +637,11 @@ void resetRuntimeAppSessionState() {
   pendingHistoryControlDebugRequestId = "";
   pendingHistoryControlDebugAfterSequence = 0;
   publishedHistoryControlDebugPayload = "";
+  pendingHistorySyncCommand = firmware_runtime::HistoryControlCommand();
+  pendingHistorySyncRequest = false;
   cancelHistoryWorker();
   lastCompletedHistoryRequestId = "";
-  lastAutoHistorySessionId = "";
-  lastAutoHistoryAckedSequence = 0;
-  lastAutoHistoryHighWaterSequence = 0;
+  lastAutoHistoryDecisionMessage = "";
   if (runtimeStatusCharacteristic != nullptr) {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
@@ -705,6 +679,8 @@ void markRuntimeAppSessionOnline(
   bool forceStatusEmit = false,
   int32_t notifyConnHandle = -1
 ) {
+  disarmRuntimeBootstrapWatchdog();
+
   firmware_runtime::AppSessionState state;
   state.runtimeAppSessionConnected = runtimeAppSessionConnected;
   state.runtimeAppSessionId = runtimeAppSessionId.c_str();
@@ -753,6 +729,8 @@ void markRuntimeAppSessionOnline(
     "Windows app session lease is active.",
     timestamp
   );
+
+  maybeStartAutomaticHistorySync();
 }
 
 void noteRuntimeAppSessionExpired(unsigned long timestamp) {
@@ -933,14 +911,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0 || sessionNonce.length() == 0) {
-      sendHistoryDebugStatus(
-        "app-session-begin-invalid",
-        sessionId,
-        ackedHistorySequence,
-        0,
-        "",
-        "sessionNonceLen=" + String(sessionNonce.length())
-      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -962,22 +932,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       true,
       notifyConnHandle
     );
-    sendHistoryDebugStatus(
-      "app-session-begin-applied",
-      sessionId,
-      ackedHistorySequence,
-      0,
-      "",
-      "sessionNonceLen=" + String(sessionNonce.length())
-    );
-    sendHistoryDebugStatus(
-      "callsite-app-session-begin",
-      sessionId,
-      ackedHistorySequence,
-      0,
-      "",
-      ""
-    );
     return;
   }
 
@@ -986,14 +940,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0) {
-      sendHistoryDebugStatus(
-        "lease-rejected-missing-session-id",
-        "",
-        ackedHistorySequence,
-        0,
-        "",
-        ""
-      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -1006,14 +952,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     if (!runtimeAppSessionConnected ||
         runtimeAppSessionId.length() == 0 ||
         runtimeAppSessionNonce.length() == 0) {
-      sendHistoryDebugStatus(
-        "lease-rejected-no-active-session",
-        sessionId,
-        ackedHistorySequence,
-        0,
-        "",
-        ""
-      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -1024,14 +962,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     }
 
     if (runtimeAppSessionId != sessionId) {
-      sendHistoryDebugStatus(
-        "lease-rejected-session-mismatch",
-        sessionId,
-        ackedHistorySequence,
-        0,
-        "",
-        "active=" + runtimeAppSessionId
-      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -1046,7 +976,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       return;
     }
 
-    logRuntimeTransportEvent("Refreshing app-session-lease for session " + sessionId + ".");
     markRuntimeAppSessionOnline(
       sessionId,
       runtimeAppSessionNonce,
@@ -1054,30 +983,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       millis(),
       false,
       notifyConnHandle
-    );
-    sendHistoryDebugStatus(
-      "app-session-lease-applied",
-      sessionId,
-      ackedHistorySequence,
-      0,
-      "",
-      ""
-    );
-    sendHistoryDebugStatus(
-      "callsite-app-session-lease",
-      sessionId,
-      ackedHistorySequence,
-      0,
-      "",
-      ""
-    );
-    sendHistoryDebugStatus(
-      "lease-accepted",
-      sessionId,
-      ackedHistorySequence,
-      0,
-      "",
-      ""
     );
     return;
   }
@@ -1175,6 +1080,11 @@ void handleHistoryControl(const String& payload) {
     );
 
   if (command.type == firmware_runtime::HistoryControlCommandType::Unknown) {
+    enqueueBoardLogStatus(
+      "history-control",
+      "History control payload did not parse into a supported command.",
+      "warn"
+    );
     sendHistoryError("", "", "history.invalid_command", "Unsupported history control command.");
     return;
   }
@@ -1183,11 +1093,23 @@ void handleHistoryControl(const String& payload) {
   lastRuntimeControlAt = millis();
 
   if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
+    const String requestId = String(command.requestId.c_str());
+    enqueueBoardLogStatus(
+      "history-control",
+      "Accepted history-page-request " + requestId + " after=" +
+        String(command.afterSequence) + " max=" + String(command.maxRecords)
+    );
     scheduleHistorySyncRequest(command);
     return;
   }
 
   if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageAck) {
+    const String requestId = String(command.requestId.c_str());
+    enqueueBoardLogStatus(
+      "history-control",
+      "Accepted history-page-ack " + requestId + " sequence=" +
+        String(command.sequence)
+    );
     acknowledgeHistorySyncRequest(command);
     return;
   }
@@ -1246,15 +1168,6 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     sendRuntimeControlDebugStatus("write-callback", controlType);
   }
 
-  if (isHistoryControlPayload(value)) {
-    const String requestId = historyControlRequestIdFromPayload(value);
-    writeCharacteristicValue(
-      runtimeStatusCharacteristic,
-      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-      "\",\"stage\":\"write-callback\",\"requestId\":\"" + escapeJsonString(requestId) + "\"}"
-    );
-  }
-
   if (value.startsWith("BEGIN:")) {
     sendRuntimeControlDebugStatus("frame-begin", "");
     notePendingHistoryControlDebug("runtime-begin", "", 0);
@@ -1276,12 +1189,6 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
       sendRuntimeControlDebugStatus("assembled-framed", framedControlType);
     }
     if (isHistoryControlPayload(command)) {
-      notifyHistoryDebugStatusForConnection(
-        conn_hdl,
-        "assembled-framed-direct",
-        historyControlRequestIdFromPayload(command),
-        0
-      );
       notePendingHistoryControlDebug(
         "assembled-framed",
         historyControlRequestIdFromPayload(command),
@@ -1310,12 +1217,6 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     if (!runtimeHistoryChunkDirectNotified &&
         runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
       runtimeHistoryChunkDirectNotified = true;
-      notifyHistoryDebugStatusForConnection(
-        conn_hdl,
-        "runtime-chunk-direct",
-        historyControlRequestIdFromPayload(runtimeCommandBuffer),
-        0
-      );
     }
     if (runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
       notePendingHistoryControlDebug(
@@ -1367,32 +1268,15 @@ void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   }
 
   historyControlWriteCount += 1;
-
-  writeCharacteristicValue(
-    runtimeStatusCharacteristic,
-    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"stage\":\"history-write-entered\"}"
+  enqueueBoardLogStatus(
+    "history-control",
+    "History control write callback entered len=" + String(value.length())
   );
-  notifyHistoryDebugStatusForConnection(conn_hdl, "history-write-entered", "", 0);
-
-  if (isHistoryControlPayload(value)) {
-    writeCharacteristicValue(
-      runtimeStatusCharacteristic,
-      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-      "\",\"stage\":\"history-write-callback\",\"requestId\":\"" +
-      escapeJsonString(historyControlRequestIdFromPayload(value)) + "\"}"
-    );
-  }
 
   if (value.startsWith("BEGIN:")) {
     notePendingHistoryControlDebug("history-begin", "", 0);
     historyCommandBuffer = "";
     historyCommandFramed = true;
-    writeCharacteristicValue(
-      runtimeStatusCharacteristic,
-      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-      "\",\"stage\":\"history-begin\"}"
-    );
     return;
   }
 
@@ -1426,12 +1310,6 @@ void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
         "history-chunk",
         historyControlRequestIdFromPayload(historyCommandBuffer),
         0
-      );
-      writeCharacteristicValue(
-        runtimeStatusCharacteristic,
-        "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-        "\",\"stage\":\"history-chunk\",\"requestId\":\"" +
-        escapeJsonString(historyControlRequestIdFromPayload(historyCommandBuffer)) + "\"}"
       );
     }
     return;
@@ -1500,10 +1378,7 @@ void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristi
       runtimeAppSessionId.length() > 0 &&
       runtimeAppSessionNonce.length() > 0) {
     const String payload =
-      "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-      "\",\"bootId\":\"" + escapeJsonString(bootId) +
-      "\",\"sessionId\":\"" + escapeJsonString(runtimeAppSessionId) +
-      "\",\"sessionNonce\":\"" + escapeJsonString(runtimeAppSessionNonce) + "\"}";
+      createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce);
     notifyCharacteristicValueForConnection(characteristic, conn_hdl, payload);
     return;
   }
