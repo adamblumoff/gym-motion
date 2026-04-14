@@ -159,6 +159,84 @@ async fn handle_history_status_payload(
     }
 }
 
+async fn emit_aux_status_payload(
+    writer: &EventWriter,
+    source: &str,
+    node: &DiscoveredNode,
+    payload: Value,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
+    current_session_device_id: &mut Option<String>,
+    active_session_command_sender: &mpsc::UnboundedSender<ActiveSessionCommand>,
+) -> Result<bool> {
+    let status_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    match status_type.as_str() {
+        "history-debug" => {
+            writer
+                .send(&Event::Log {
+                    level: "info".to_string(),
+                    message: "Received firmware history debug status.".to_string(),
+                    details: Some(json!({
+                        "source": source,
+                        "peripheralId": node.peripheral_id,
+                        "knownDeviceId": node.known_device_id,
+                        "address": node.address,
+                        "payload": payload,
+                    })),
+                })
+                .await?;
+            Ok(true)
+        }
+        "board-log" => {
+            let level = payload
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("info")
+                .to_string();
+            let tag = payload
+                .get("tag")
+                .and_then(Value::as_str)
+                .unwrap_or("runtime");
+            let message = payload
+                .get("message")
+                .and_then(Value::as_str)
+                .map(|value| format!("[board:{tag}] {value}"))
+                .unwrap_or_else(|| format!("[board:{tag}] firmware log"));
+            writer
+                .send(&Event::Log {
+                    level,
+                    message,
+                    details: Some(json!({
+                        "source": source,
+                        "peripheralId": node.peripheral_id,
+                        "knownDeviceId": node.known_device_id,
+                        "address": node.address,
+                        "payload": payload,
+                    })),
+                })
+                .await?;
+            Ok(true)
+        }
+        _ => {
+            handle_history_status_payload(
+                writer,
+                node,
+                payload,
+                known_device_ids,
+                active_session_controls,
+                current_session_device_id,
+                active_session_command_sender,
+            )
+            .await
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RuntimeSessionStatusDisposition {
     Ignore,
@@ -233,14 +311,13 @@ pub(super) async fn monitor_active_session(
         }
     }
 
-    async fn send_history_runtime_control_command(
+    async fn send_history_control_command(
         writer: &EventWriter,
         _node: &DiscoveredNode,
         live_control: &mut ActiveLiveControl,
         session_id: &str,
         command: &ActiveSessionCommand,
     ) -> Result<()> {
-        *live_control = refresh_active_live_control_handles(&live_control.peripheral, live_control).await?;
         let (payload, request_id) = match command {
             ActiveSessionCommand::BeginHistorySync {
                 device_id: _,
@@ -273,11 +350,12 @@ pub(super) async fn monitor_active_session(
         };
 
         let payload_text = payload.to_string();
+        let target_characteristic = &live_control.characteristic;
         let write_guard = live_control.write_lock.lock().await;
         let write_mode = control_write_mode(&payload_text);
         write_chunked_json_command(
             &live_control.peripheral,
-            &live_control.history_control_characteristic,
+            target_characteristic,
             &payload_text,
         )
         .await?;
@@ -286,7 +364,8 @@ pub(super) async fn monitor_active_session(
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
-                message: "Sent history control command to firmware.".to_string(),
+                message: "Sent history control command to firmware over runtime control."
+                    .to_string(),
                 details: Some(json!({
                     "deviceId": match command {
                         ActiveSessionCommand::BeginHistorySync { device_id, .. } => device_id,
@@ -296,67 +375,43 @@ pub(super) async fn monitor_active_session(
                     "requestId": request_id,
                     "sessionId": session_id,
                     "writeMode": write_mode,
-                    "controlUuid": live_control.history_control_characteristic.uuid.to_string(),
+                    "controlUuid": target_characteristic.uuid.to_string(),
+                })),
+            })
+            .await?;
+
+        sleep(Duration::from_millis(400)).await;
+        let runtime_status_readback = live_control
+            .peripheral
+            .read(&live_control.status_characteristic)
+            .await
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let history_status_readback = live_control
+            .peripheral
+            .read(&live_control.history_status_characteristic)
+            .await
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Read back status characteristics after history control command."
+                    .to_string(),
+                details: Some(json!({
+                    "deviceId": match command {
+                        ActiveSessionCommand::BeginHistorySync { device_id, .. } => device_id,
+                        ActiveSessionCommand::AcknowledgeHistorySync { device_id, .. } => device_id,
+                    },
+                    "requestId": request_id,
+                    "sessionId": session_id,
+                    "runtimeStatusValue": runtime_status_readback,
+                    "historyStatusValue": history_status_readback,
                 })),
             })
             .await?;
 
         Ok(())
-    }
-
-    async fn refresh_active_live_control_handles(
-        peripheral: &btleplug::platform::Peripheral,
-        live_control: &ActiveLiveControl,
-    ) -> Result<ActiveLiveControl> {
-        peripheral
-            .discover_services()
-            .await
-            .context("refresh active live control services failed")?;
-
-        let characteristics = peripheral.characteristics();
-        let control_uuid = live_control.characteristic.uuid;
-        let status_uuid = live_control.status_characteristic.uuid;
-        let history_control_uuid = live_control.history_control_characteristic.uuid;
-        let history_status_uuid = live_control.history_status_characteristic.uuid;
-
-        let characteristic = characteristics
-            .iter()
-            .find(|candidate| candidate.uuid == control_uuid)
-            .cloned()
-            .ok_or_else(|| anyhow!("runtime control characteristic not found during refresh"))?;
-        let status_characteristic = characteristics
-            .iter()
-            .find(|candidate| candidate.uuid == status_uuid)
-            .cloned()
-            .ok_or_else(|| anyhow!("runtime status characteristic not found during refresh"))?;
-        let history_control_characteristic = characteristics
-            .iter()
-            .find(|candidate| candidate.uuid == history_control_uuid)
-            .cloned()
-            .ok_or_else(|| anyhow!("history control characteristic not found during refresh"))?;
-        let history_status_characteristic = characteristics
-            .iter()
-            .find(|candidate| candidate.uuid == history_status_uuid)
-            .cloned()
-            .ok_or_else(|| anyhow!("history status characteristic not found during refresh"))?;
-
-        peripheral
-            .subscribe(&status_characteristic)
-            .await
-            .context("runtime status resubscribe failed during live control refresh")?;
-        peripheral
-            .subscribe(&history_status_characteristic)
-            .await
-            .context("history status resubscribe failed during live control refresh")?;
-
-        Ok(ActiveLiveControl {
-            peripheral: peripheral.clone(),
-            characteristic,
-            history_control_characteristic,
-            status_characteristic,
-            history_status_characteristic,
-            write_lock: live_control.write_lock.clone(),
-        })
     }
 
     emit_handshake_step(
@@ -398,6 +453,11 @@ pub(super) async fn monitor_active_session(
     lease_heartbeat.tick().await;
     let mut lease_heartbeat_enabled = false;
     let mut first_lease_logged = false;
+    let mut status_poll = tokio::time::interval(Duration::from_millis(500));
+    status_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    status_poll.tick().await;
+    let mut last_polled_runtime_status: Option<String> = None;
+    let mut last_polled_history_status: Option<String> = None;
 
     if monitor_config.post_subscribe_ready_settle_ms > 0 {
         sleep(Duration::from_millis(
@@ -451,7 +511,7 @@ pub(super) async fn monitor_active_session(
                 }
             }
             Some(active_command) = active_session_commands.recv() => {
-                send_history_runtime_control_command(
+                send_history_control_command(
                     &writer,
                     &node,
                     &mut current_live_control,
@@ -459,6 +519,85 @@ pub(super) async fn monitor_active_session(
                     &active_command,
                 )
                 .await?;
+            }
+            _ = status_poll.tick(), if session_healthy_reported => {
+                let runtime_status_readback = current_live_control
+                    .peripheral
+                    .read(&current_live_control.status_characteristic)
+                    .await
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                if runtime_status_readback != last_polled_runtime_status {
+                    last_polled_runtime_status = runtime_status_readback.clone();
+                    if let Some(raw) = runtime_status_readback {
+                        if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+                            let handled = emit_aux_status_payload(
+                                &writer,
+                                "runtime-status-poll",
+                                &node,
+                                payload,
+                                &known_device_ids,
+                                &active_session_controls,
+                                &mut current_session_device_id,
+                                &active_session_command_sender,
+                            )
+                            .await?;
+                            if !handled {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: "Polled runtime status characteristic changed.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "rawValue": raw,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                        }
+                    }
+                }
+
+                let history_status_readback = current_live_control
+                    .peripheral
+                    .read(&current_live_control.history_status_characteristic)
+                    .await
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                if history_status_readback != last_polled_history_status {
+                    last_polled_history_status = history_status_readback.clone();
+                    if let Some(raw) = history_status_readback {
+                        if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+                            let handled = emit_aux_status_payload(
+                                &writer,
+                                "history-status-poll",
+                                &node,
+                                payload,
+                                &known_device_ids,
+                                &active_session_controls,
+                                &mut current_session_device_id,
+                                &active_session_command_sender,
+                            )
+                            .await?;
+                            if !handled {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: "Polled history status characteristic changed.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "rawValue": raw,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                        }
+                    }
+                }
             }
             notification = prepared.notifications.next() => {
                 let Some(notification) = notification else {
@@ -993,11 +1132,6 @@ pub(super) async fn monitor_active_session(
                 ));
             }
             _ = lease_heartbeat.tick(), if lease_heartbeat_enabled => {
-                current_live_control = refresh_active_live_control_handles(
-                    &current_live_control.peripheral,
-                    &current_live_control,
-                )
-                .await?;
                 let write_guard = current_live_control.write_lock.lock().await;
                 let lease_result = super::handshake::send_app_session_lease(
                     &current_live_control.peripheral,
