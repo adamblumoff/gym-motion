@@ -20,6 +20,7 @@
     "firmware:build": "bash ./scripts/build-firmware.sh",
     "firmware:test:host": "python ./scripts/test-firmware-host.py",
     "firmware:upload": "bash ./scripts/upload-firmware.sh",
+    "firmware:logs": "powershell -ExecutionPolicy Bypass -File ./scripts/monitor-board-logs.ps1",
     "firmware:publish": "bun run ./scripts/publish-firmware.ts",
     "device:purge": "bun run ./scripts/purge-device.ts",
     "lint": "eslint \"backend/**/*.ts\" \"desktop/**/*.ts\" \"desktop/**/*.tsx\" \"shared/**/*.ts\" \"scripts/**/*.ts\" \"*.config.ts\"",
