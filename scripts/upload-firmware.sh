@@ -68,16 +68,35 @@ fi
 FQBN="${FQBN:-Seeeduino:nrf52:xiaonRF52840:softdevice=s140v6,debug=l0}"
 SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
-upload_args=(
+BUILD_TAG="${BUILD_TAG:-}"
+
+if [[ -z "$BUILD_TAG" ]] && command -v git >/dev/null 2>&1; then
+  if BUILD_TAG="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null)"; then
+    if ! git -C "$REPO_ROOT" diff --quiet --no-ext-diff --exit-code 2>/dev/null; then
+      BUILD_TAG="${BUILD_TAG}_dirty"
+    fi
+  else
+    BUILD_TAG="unknown"
+  fi
+fi
+
+BUILD_TAG="${BUILD_TAG:-unknown}"
+compile_args=(
   --fqbn "$FQBN"
   --port "$PORT"
+  --upload
+  --clean
+  --build-property "compiler.cpp.extra_flags=-DGM_BUILD_TAG=$BUILD_TAG"
 )
 
 if [[ "$FQBN" == esp32:* ]]; then
-  upload_args+=(--board-options "PartitionScheme=$PARTITIONS")
+  compile_args+=(--board-options "PartitionScheme=$PARTITIONS")
 fi
 
-"$ARDUINO_CLI_BIN" upload \
-  "${upload_args[@]}" \
+echo "Compiling and uploading firmware from $SKETCH_PATH to $PORT"
+echo "Embedding firmware build tag $BUILD_TAG"
+
+"$ARDUINO_CLI_BIN" compile \
+  "${compile_args[@]}" \
   "${EXTRA_ARGS[@]}" \
   "$SKETCH_PATH"

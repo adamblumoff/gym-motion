@@ -3,7 +3,6 @@ bool filesystemReady = false;
 bool filesystemInitAttempted = false;
 bool persistedStateDirty = false;
 unsigned long persistedStateLastDirtyAt = 0;
-
 void logStorageEvent(const String& message) {
   Serial.print("[storage] ");
   Serial.println(message);
@@ -407,7 +406,7 @@ void journalNodeLog(
     "\",\"message\":\"" + escapeJsonString(message) +
     "\",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"firmwareVersion\":\"" + firmwareVersionString() +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}"
   );
 }
@@ -420,7 +419,7 @@ void journalMotionState(const char* state, int delta, unsigned long timestamp) {
     "\",\"delta\":" + String(delta) +
     ",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"firmwareVersion\":\"" + firmwareVersionString() +
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}"
   );
 }
@@ -478,7 +477,9 @@ bool sendHistorySyncComplete(
   }
 
   payload += "}";
-  if (!enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload)) {
+  writeCharacteristicValue(historyStatusCharacteristic, payload);
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  if (!enqueueRuntimeStatusPayload(payload)) {
     return false;
   }
 
@@ -489,6 +490,7 @@ bool sendHistorySyncComplete(
     " hasMore=" + String(latestSequence < highWaterSequence ? "true" : "false") +
     " overflowed=" + String(historyOverflowed ? "true" : "false")
   );
+  sendHistoryDebugStatus("complete", requestId, latestSequence, sentCount, "", "");
   return true;
 }
 
@@ -504,10 +506,13 @@ bool sendHistoryError(
     "\",\"requestId\":\"" + escapeJsonString(requestId) +
     "\",\"code\":\"" + escapeJsonString(code) +
     "\",\"message\":\"" + escapeJsonString(message) + "\"}";
-  if (!enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload)) {
+  writeCharacteristicValue(historyStatusCharacteristic, payload);
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  if (!enqueueRuntimeStatusPayload(payload)) {
     return false;
   }
   logRuntimeHistoryEvent(code + ": " + message);
+  sendHistoryDebugStatus("error", requestId, 0, 0, code, message);
   return true;
 }
 
@@ -519,13 +524,75 @@ void cancelHistoryWorker() {
   historyWorkerState = HistoryWorkerState();
 }
 
+void maybeStartAutomaticHistorySync() {
+  if (!runtimeBleConnected || !runtimeAppSessionConnected) {
+    return;
+  }
+
+  if ((runtimeNotifyMask & RUNTIME_NOTIFY_MASK_STATUS) == 0) {
+    return;
+  }
+
+  if (pendingHistorySyncRequest || historyWorkerState.phase != HistoryWorkerPhase::Idle) {
+    return;
+  }
+
+  const unsigned long highWaterSequence = nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
+  const bool sameBaseline =
+    lastAutoHistorySessionId == runtimeAppSessionId &&
+    lastAutoHistoryAckedSequence == ackedHistorySequence &&
+    lastAutoHistoryHighWaterSequence == highWaterSequence;
+  if (sameBaseline) {
+    return;
+  }
+
+  firmware_runtime::HistoryControlCommand command;
+  command.type = firmware_runtime::HistoryControlCommandType::HistoryPageRequest;
+  command.sessionId = runtimeAppSessionId.c_str();
+  command.requestId =
+    ("auto-" + runtimeAppSessionId + "-" + String(ackedHistorySequence)).c_str();
+  command.afterSequence = ackedHistorySequence;
+  command.maxRecords = HISTORY_SYNC_PAGE_SIZE;
+
+  lastAutoHistorySessionId = runtimeAppSessionId;
+  lastAutoHistoryAckedSequence = ackedHistorySequence;
+  lastAutoHistoryHighWaterSequence = highWaterSequence;
+
+  sendHistoryDebugStatus(
+    "auto-request",
+    command.requestId.c_str(),
+    command.afterSequence,
+    0,
+    "",
+    "highWater=" + String(highWaterSequence)
+  );
+  scheduleHistorySyncRequest(command);
+}
+
+void scheduleHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command) {
+  pendingHistorySyncCommand = command;
+  pendingHistorySyncRequest = true;
+}
+
+void processPendingHistorySyncRequest() {
+  if (!pendingHistorySyncRequest) {
+    return;
+  }
+
+  const firmware_runtime::HistoryControlCommand command = pendingHistorySyncCommand;
+  pendingHistorySyncRequest = false;
+  beginHistorySyncRequest(command);
+}
+
 void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command) {
   const firmware_runtime::HistorySyncRequest request =
     firmware_runtime::createHistorySyncRequest(command, HISTORY_SYNC_PAGE_SIZE);
+  const String effectiveSessionId =
+    request.sessionId.length() > 0 ? String(request.sessionId.c_str()) : runtimeAppSessionId;
 
   if (!runtimeBleConnected || !runtimeAppSessionConnected) {
     sendHistoryError(
-      request.sessionId.c_str(),
+      effectiveSessionId,
       request.requestId.c_str(),
       "history.session_unavailable",
       "History sync requires an active runtime app session."
@@ -533,19 +600,19 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
     return;
   }
 
-  if (request.sessionId.length() == 0 || request.requestId.length() == 0) {
+  if (request.requestId.length() == 0) {
     sendHistoryError(
-      request.sessionId.c_str(),
+      effectiveSessionId,
       request.requestId.c_str(),
       "history.invalid_request",
-      "History page request requires both sessionId and requestId."
+      "History page request requires a requestId."
     );
     return;
   }
 
-  if (String(request.sessionId.c_str()) != runtimeAppSessionId) {
+  if (effectiveSessionId != runtimeAppSessionId) {
     sendHistoryError(
-      request.sessionId.c_str(),
+      effectiveSessionId,
       request.requestId.c_str(),
       "history.session_mismatch",
       "History page request did not match the active runtime app session."
@@ -555,7 +622,7 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
 
   cancelHistoryWorker();
   historyWorkerState.phase = HistoryWorkerPhase::Streaming;
-  historyWorkerState.sessionId = request.sessionId.c_str();
+  historyWorkerState.sessionId = effectiveSessionId;
   historyWorkerState.requestId = request.requestId.c_str();
   historyWorkerState.requestedAfterSequence = request.afterSequence;
   historyWorkerState.maxRecords = request.maxRecords;
@@ -564,7 +631,39 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
   historyWorkerState.overflowed = historyOverflowed;
   historyWorkerState.droppedCount = historyDroppedCount;
 
+  sendHistoryDebugStatus(
+    "request",
+    historyWorkerState.requestId,
+    historyWorkerState.requestedAfterSequence,
+    0,
+    "",
+    "highWater=" + String(historyWorkerState.highWaterSequence)
+  );
+
+  if (historyWorkerState.requestedAfterSequence >= historyWorkerState.highWaterSequence) {
+    if (sendHistorySyncComplete(
+          historyWorkerState.requestId,
+          historyWorkerState.requestedAfterSequence,
+          historyWorkerState.highWaterSequence,
+          0
+        )) {
+      lastCompletedHistoryRequestId = historyWorkerState.requestId;
+      cancelHistoryWorker();
+    }
+    return;
+  }
+
   historyWorkerFile = SPIFFS.open(HISTORY_LOG_PATH, FILE_READ);
+  if (!historyWorkerFile) {
+    sendHistoryDebugStatus(
+      "request-no-file",
+      historyWorkerState.requestId,
+      historyWorkerState.requestedAfterSequence,
+      0,
+      "",
+      ""
+    );
+  }
   logRuntimeHistoryEvent(
     "Queued history page request requestId=" + historyWorkerState.requestId +
     " afterSequence=" + String(historyWorkerState.requestedAfterSequence) +
@@ -575,10 +674,12 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
 void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command) {
   const firmware_runtime::HistoryAckRequest request =
     firmware_runtime::createHistoryAckRequest(command);
+  const String effectiveSessionId =
+    request.sessionId.length() > 0 ? String(request.sessionId.c_str()) : runtimeAppSessionId;
 
-  if (!runtimeAppSessionConnected || String(request.sessionId.c_str()) != runtimeAppSessionId) {
+  if (!runtimeAppSessionConnected || effectiveSessionId != runtimeAppSessionId) {
     sendHistoryError(
-      request.sessionId.c_str(),
+      effectiveSessionId,
       request.requestId.c_str(),
       "history.ack_session_mismatch",
       "History page ack did not match the active runtime app session."
@@ -599,11 +700,8 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
   const bool matchesActive =
     historyWorkerState.requestId.length() > 0 &&
     String(request.requestId.c_str()) == historyWorkerState.requestId;
-  const bool matchesCompleted =
-    lastCompletedHistoryRequestId.length() > 0 &&
-    String(request.requestId.c_str()) == lastCompletedHistoryRequestId;
 
-  if (!matchesActive && !matchesCompleted) {
+  if (!matchesActive) {
     sendHistoryError(
       request.sessionId.c_str(),
       request.requestId.c_str(),
@@ -615,27 +713,39 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
 
   acknowledgeHistoryThrough(request.sequence);
 
-  if (matchesActive && historyWorkerState.phase == HistoryWorkerPhase::AwaitingAck) {
+  if (historyWorkerState.phase == HistoryWorkerPhase::AwaitingAck) {
+    const String nextSessionId = historyWorkerState.sessionId;
+    const String nextRequestId = historyWorkerState.requestId;
+    const size_t nextMaxRecords = historyWorkerState.maxRecords;
+    const unsigned long nextHighWaterSequence = historyWorkerState.highWaterSequence;
+    const unsigned long nextLatestSequence = historyWorkerState.latestSequence;
     lastCompletedHistoryRequestId = request.requestId.c_str();
     cancelHistoryWorker();
-  }
-}
+    if (request.sequence < nextHighWaterSequence) {
+      firmware_runtime::HistoryControlCommand nextCommand;
+      nextCommand.type = firmware_runtime::HistoryControlCommandType::HistoryPageRequest;
+      nextCommand.sessionId = nextSessionId.c_str();
+      nextCommand.requestId = nextRequestId.c_str();
+      nextCommand.afterSequence = request.sequence;
+      nextCommand.maxRecords = nextMaxRecords;
 
-bool queueHistoryRecord(const String& requestId, const String& line) {
-  return enqueueHistoryNotificationChunked(
-    historyStatusCharacteristic,
-    "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"requestId\":\"" + escapeJsonString(requestId) +
-    "\",\"record\":" + line + "}"
-  );
+      logRuntimeHistoryEvent(
+        "Continuing firmware-owned history sync requestId=" + nextRequestId +
+        " afterSequence=" + String(request.sequence) +
+        " highWaterSequence=" + String(nextHighWaterSequence) +
+        " latestSequence=" + String(nextLatestSequence)
+      );
+      scheduleHistorySyncRequest(nextCommand);
+    }
+
+    return;
+  }
+
+  cancelHistoryWorker();
 }
 
 void pumpHistoryWorker() {
   if (historyWorkerState.phase != HistoryWorkerPhase::Streaming) {
-    return;
-  }
-
-  if (historyTxQueue.length >= (BLE_TX_QUEUE_CAPACITY / 2)) {
     return;
   }
 
@@ -646,17 +756,34 @@ void pumpHistoryWorker() {
           historyWorkerState.highWaterSequence,
           historyWorkerState.sentCount
         )) {
-      historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+      if (historyWorkerState.sentCount == 0 &&
+          historyWorkerState.latestSequence >= historyWorkerState.highWaterSequence) {
+        lastCompletedHistoryRequestId = historyWorkerState.requestId;
+        cancelHistoryWorker();
+      } else {
+        historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
+      }
     }
     return;
+  }
+
+  if (!historyWorkerState.pumpStartedLogged) {
+    historyWorkerState.pumpStartedLogged = true;
+    sendHistoryDebugStatus(
+      "pump-start",
+      historyWorkerState.requestId,
+      historyWorkerState.requestedAfterSequence,
+      historyWorkerState.sentCount,
+      "",
+      "fileSize=" + String(historyWorkerFile.size())
+    );
   }
 
   size_t sentThisSlice = 0;
   while (
     historyWorkerFile.available() &&
     historyWorkerState.sentCount < historyWorkerState.maxRecords &&
-    sentThisSlice < HISTORY_WORKER_RECORDS_PER_SLICE &&
-    historyTxQueue.length < (BLE_TX_QUEUE_CAPACITY - 8)
+    sentThisSlice < HISTORY_WORKER_RECORDS_PER_SLICE
   ) {
     String line = historyWorkerFile.readStringUntil('\n');
     line.trim();
@@ -677,8 +804,53 @@ void pumpHistoryWorker() {
       continue;
     }
 
-    if (!queueHistoryRecord(historyWorkerState.requestId, line)) {
+    const String payload =
+      "{\"type\":\"history-record\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"requestId\":\"" + escapeJsonString(historyWorkerState.requestId) +
+      "\",\"record\":" + line + "}";
+    const size_t requiredSlots =
+      payload.length() <= 244 ? 1 : chunkedNotificationSlotCount(payload.length());
+    if (requiredSlots > BLE_TX_QUEUE_CAPACITY) {
+      sendHistoryDebugStatus(
+        "record-too-large",
+        historyWorkerState.requestId,
+        sequence,
+        historyWorkerState.sentCount,
+        "",
+        "payloadLen=" + String(payload.length())
+      );
+      continue;
+    }
+
+    if (payload.length() <= 244) {
+      writeCharacteristicValue(historyStatusCharacteristic, payload);
+      writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+    }
+
+    if (!enqueueRuntimeStatusPayload(payload)) {
+      sendHistoryDebugStatus(
+        "record-queue-blocked",
+        historyWorkerState.requestId,
+        sequence,
+        historyWorkerState.sentCount,
+        "",
+        "payloadLen=" + String(payload.length()) +
+          " requiredSlots=" + String(requiredSlots) +
+          " runtimeQueueLen=" + String(runtimeTxQueue.length)
+      );
       break;
+    }
+
+    if (!historyWorkerState.firstRecordLogged) {
+      historyWorkerState.firstRecordLogged = true;
+      sendHistoryDebugStatus(
+        "first-record-queued",
+        historyWorkerState.requestId,
+        sequence,
+        historyWorkerState.sentCount + 1,
+        "",
+        "payloadLen=" + String(payload.length())
+      );
     }
     historyWorkerState.latestSequence = sequence;
     historyWorkerState.sentCount += 1;

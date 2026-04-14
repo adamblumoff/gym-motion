@@ -17,6 +17,9 @@ String bytesToString(const uint8_t* data, size_t length) {
   value.reserve(length);
 
   for (size_t index = 0; index < length; index++) {
+    if (data[index] == '\0') {
+      continue;
+    }
     value += static_cast<char>(data[index]);
   }
 
@@ -49,7 +52,25 @@ bool notifyCharacteristicValue(BLECharacteristic* characteristic, const String& 
   return characteristic->notify(runtimeBleConnId, payload.c_str());
 }
 
-void notifyCharacteristic(BLECharacteristic* characteristic, const String& payload) {
+bool notifyCharacteristicValueForConnection(
+  BLECharacteristic* characteristic,
+  uint16_t conn_hdl,
+  const String& payload
+) {
+  if (characteristic == nullptr) {
+    return false;
+  }
+
+  characteristic->write(payload.c_str());
+
+  if (!characteristic->notifyEnabled(conn_hdl)) {
+    return true;
+  }
+
+  return characteristic->notify(conn_hdl, payload.c_str());
+}
+
+void notifyProvisioningCharacteristic(BLECharacteristic* characteristic, const String& payload) {
   if (characteristic == nullptr) {
     Serial.print("BLE notify skipped (missing characteristic): ");
     Serial.println(payload);
@@ -57,6 +78,25 @@ void notifyCharacteristic(BLECharacteristic* characteristic, const String& paylo
   }
 
   if (!provisioningBleConnected) {
+    Serial.print("BLE notify skipped (runtime client disconnected): ");
+    Serial.println(payload);
+    return;
+  }
+
+  Serial.print("BLE notify sent: ");
+  Serial.println(payload);
+  notifyCharacteristicValue(characteristic, payload);
+  delay(BLE_TX_MIN_INTERVAL_MS);
+}
+
+void notifyRuntimeCharacteristic(BLECharacteristic* characteristic, const String& payload) {
+  if (characteristic == nullptr) {
+    Serial.print("BLE notify skipped (missing runtime characteristic): ");
+    Serial.println(payload);
+    return;
+  }
+
+  if (!runtimeBleConnected) {
     Serial.print("BLE notify skipped (runtime client disconnected): ");
     Serial.println(payload);
     return;
@@ -179,12 +219,28 @@ bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const 
   return enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
+bool enqueueRuntimeStatusPayload(const String& payload) {
+  if (payload.length() <= 244) {
+    return enqueueRuntimeNotification(runtimeStatusCharacteristic, payload);
+  }
+
+  return enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
+}
+
 bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload) {
   return enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
 }
 
 bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
   return enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
+}
+
+bool enqueueHistoryStatusPayload(const String& payload) {
+  if (payload.length() <= 244) {
+    return enqueueHistoryNotification(historyStatusCharacteristic, payload);
+  }
+
+  return enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
 }
 
 bool processBleTxMessage(BleTxQueue& queue) {
@@ -229,7 +285,7 @@ void processBleNotificationQueues() {
 }
 
 void sendProvisioningStatus(const String& payload) {
-  notifyCharacteristic(provisioningStatusCharacteristic, payload);
+  notifyProvisioningCharacteristic(provisioningStatusCharacteristic, payload);
 }
 
 String createRuntimeReadyPayload() {
@@ -237,21 +293,27 @@ String createRuntimeReadyPayload() {
     "{\"type\":\"ready\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"bootUptimeMs\":" + String(millis()) +
-    ",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
-    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
-    "\",\"deviceName\":\"" + escapeJsonString(createBleDeviceName()) + "\"}";
+    ",\"notifyMask\":" + String(runtimeNotifyMask) +
+    ",\"connectionEpoch\":" + String(runtimeConnectionEpoch) +
+    ",\"disconnectCount\":" + String(runtimeDisconnectCount) + "}";
 }
 
 String createProvisioningReadyPayload() {
   return
     "{\"type\":\"ready\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
-    "\",\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) +
+    "\",\"firmwareVersion\":\"" + firmwareVersionString() +
     "\",\"deviceName\":\"" + escapeJsonString(createBleDeviceName()) + "\"}";
 }
 
 void sendProvisioningReady() {
   sendProvisioningStatus(createProvisioningReadyPayload());
 }
+
+void sendRuntimeAppSessionOnline(
+  const String& sessionId,
+  const String& sessionNonce,
+  int32_t notifyConnHandle = -1
+);
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version) {
   String payload = "{\"type\":\"ota-status\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
@@ -266,6 +328,112 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
+void sendHistoryDebugStatus(
+  const String& stage,
+  const String& requestId,
+  unsigned long afterSequence,
+  size_t sentCount,
+  const String& code,
+  const String& message
+) {
+  String payload =
+    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"" + escapeJsonString(stage) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
+
+  if (afterSequence > 0) {
+    payload += ",\"afterSequence\":" + String(afterSequence);
+  }
+
+  if (sentCount > 0) {
+    payload += ",\"sentCount\":" + String(sentCount);
+  }
+
+  if (code.length() > 0) {
+    payload += ",\"code\":\"" + escapeJsonString(code) + "\"";
+  }
+
+  if (message.length() > 0) {
+    payload += ",\"message\":\"" + escapeJsonString(message) + "\"";
+  }
+
+  payload += "}";
+  writeCharacteristicValue(historyStatusCharacteristic, payload);
+  enqueueHistoryStatusPayload(payload);
+  if (runtimeStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+    enqueueRuntimeStatusPayload(payload);
+  }
+}
+
+void notifyHistoryDebugStatusForConnection(
+  uint16_t conn_hdl,
+  const String& stage,
+  const String& requestId,
+  unsigned long afterSequence = 0
+) {
+  String payload =
+    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"" + escapeJsonString(stage) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
+
+  if (afterSequence > 0) {
+    payload += ",\"afterSequence\":" + String(afterSequence);
+  }
+
+  payload += "}";
+  notifyCharacteristicValueForConnection(runtimeStatusCharacteristic, conn_hdl, payload);
+}
+
+void notePendingHistoryControlDebug(
+  const String& stage,
+  const String& requestId,
+  unsigned long afterSequence
+) {
+  String payload =
+    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"" + escapeJsonString(stage) +
+    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
+
+  if (afterSequence > 0) {
+    payload += ",\"afterSequence\":" + String(afterSequence);
+  }
+
+  payload += "}";
+  writeCharacteristicValue(historyStatusCharacteristic, payload);
+
+  pendingHistoryControlDebugStage = stage;
+  pendingHistoryControlDebugRequestId = requestId;
+  pendingHistoryControlDebugAfterSequence = afterSequence;
+  pendingHistoryControlDebugPublish = true;
+}
+
+void publishPendingHistoryControlDebug() {
+  if (!pendingHistoryControlDebugPublish) {
+    return;
+  }
+
+  String payload =
+    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"" + escapeJsonString(pendingHistoryControlDebugStage) +
+    "\",\"requestId\":\"" + escapeJsonString(pendingHistoryControlDebugRequestId) + "\"";
+
+  if (pendingHistoryControlDebugAfterSequence > 0) {
+    payload += ",\"afterSequence\":" + String(pendingHistoryControlDebugAfterSequence);
+  }
+
+  payload += "}";
+
+  pendingHistoryControlDebugPublish = false;
+  if (payload == publishedHistoryControlDebugPayload) {
+    return;
+  }
+
+  publishedHistoryControlDebugPayload = payload;
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  enqueueRuntimeStatusPayload(payload);
+}
+
 void notifyCurrentRuntimeStatus() {
   if (runtimeAppSessionConnected &&
       runtimeAppSessionId.length() > 0 &&
@@ -274,20 +442,30 @@ void notifyCurrentRuntimeStatus() {
     return;
   }
 
-  notifyCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  notifyRuntimeCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
 }
 
 void sendRuntimeAppSessionOnline(
   const String& sessionId,
-  const String& sessionNonce
+  const String& sessionNonce,
+  int32_t notifyConnHandle
 ) {
   String payload =
     "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
-    "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
-    "\",\"firmwareVersion\":\"" + escapeJsonString(String(FIRMWARE_VERSION)) +
-    "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) + "\"}";
-  notifyCharacteristic(runtimeStatusCharacteristic, payload);
+    "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) + "\"}";
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  if (notifyConnHandle >= 0) {
+    notifyCharacteristicValueForConnection(
+      runtimeStatusCharacteristic,
+      static_cast<uint16_t>(notifyConnHandle),
+      payload
+    );
+    return;
+  }
+
+  notifyRuntimeCharacteristic(runtimeStatusCharacteristic, payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
@@ -305,6 +483,57 @@ void logRuntimeControlFrame(const String& stage, const String& payload) {
 void logRuntimeHistoryEvent(const String& message) {
   Serial.print("[history] ");
   Serial.println(message);
+}
+
+bool isHistoryControlPayload(const String& payload) {
+  return payload.indexOf("\"history-page-request\"") >= 0 ||
+         payload.indexOf("\"history-page-ack\"") >= 0;
+}
+
+String classifyRuntimeControlPayloadType(const String& payload) {
+  if (payload.indexOf("\"app-session-begin\"") >= 0) {
+    return "app-session-begin";
+  }
+
+  if (payload.indexOf("\"app-session-lease\"") >= 0) {
+    return "app-session-lease";
+  }
+
+  if (payload.indexOf("\"sync-now\"") >= 0) {
+    return "sync-now";
+  }
+
+  if (payload.indexOf("\"history-page-request\"") >= 0) {
+    return "history-page-request";
+  }
+
+  if (payload.indexOf("\"history-page-ack\"") >= 0) {
+    return "history-page-ack";
+  }
+
+  return "";
+}
+
+void sendRuntimeControlDebugStatus(const String& stage, const String& controlType) {
+  if (runtimeStatusCharacteristic == nullptr) {
+    return;
+  }
+
+  String payload =
+    "{\"type\":\"runtime-control-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"" + escapeJsonString(stage) + "\"";
+
+  if (controlType.length() > 0) {
+    payload += ",\"controlType\":\"" + escapeJsonString(controlType) + "\"";
+  }
+
+  payload += "}";
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  enqueueRuntimeStatusPayload(payload);
+}
+
+String historyControlRequestIdFromPayload(const String& payload) {
+  return extractJsonString(payload, "requestId");
 }
 
 void logAdvertisingSetupFailure(const char* field) {
@@ -401,8 +630,20 @@ void resetRuntimeAppSessionState() {
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
   runtimeCommandBuffer = "";
+  historyCommandBuffer = "";
+  runtimeCommandFramed = false;
+  historyCommandFramed = false;
+  runtimeHistoryChunkDirectNotified = false;
+  pendingHistoryControlDebugPublish = false;
+  pendingHistoryControlDebugStage = "";
+  pendingHistoryControlDebugRequestId = "";
+  pendingHistoryControlDebugAfterSequence = 0;
+  publishedHistoryControlDebugPayload = "";
   cancelHistoryWorker();
   lastCompletedHistoryRequestId = "";
+  lastAutoHistorySessionId = "";
+  lastAutoHistoryAckedSequence = 0;
+  lastAutoHistoryHighWaterSequence = 0;
   if (runtimeStatusCharacteristic != nullptr) {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
@@ -437,7 +678,8 @@ void markRuntimeAppSessionOnline(
   const String& sessionNonce,
   unsigned long expiresInMs,
   unsigned long timestamp,
-  bool forceStatusEmit = false
+  bool forceStatusEmit = false,
+  int32_t notifyConnHandle = -1
 ) {
   firmware_runtime::AppSessionState state;
   state.runtimeAppSessionConnected = runtimeAppSessionConnected;
@@ -479,7 +721,7 @@ void markRuntimeAppSessionOnline(
       "Re-sending Windows app session online ack for session " + sessionId + "."
     );
   }
-  sendRuntimeAppSessionOnline(sessionId, sessionNonce);
+  sendRuntimeAppSessionOnline(sessionId, sessionNonce, notifyConnHandle);
 
   journalNodeLog(
     "info",
@@ -511,6 +753,7 @@ void noteRuntimeAppSessionExpired(unsigned long timestamp) {
 
 void noteRuntimeTransportDisconnected(unsigned long timestamp) {
   const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
+  runtimeDisconnectCount += 1;
   resetRuntimeAppSessionState();
   runtimeBleConnIdKnown = false;
   runtimeBleConnId = 0;
@@ -648,8 +891,10 @@ void handleProvisioningCommand(const String& payload) {
   );
 }
 
-void handleRuntimeControl(const String& payload) {
+void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) {
   logRuntimeControlFrame("payload", payload);
+  const bool historyPayload = isHistoryControlPayload(payload);
+  const String historyRequestId = historyControlRequestIdFromPayload(payload);
   const firmware_runtime::ControlCommand command =
     firmware_runtime::parseRuntimeControlCommand(
       payload.c_str(),
@@ -664,6 +909,14 @@ void handleRuntimeControl(const String& payload) {
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0 || sessionNonce.length() == 0) {
+      sendHistoryDebugStatus(
+        "app-session-begin-invalid",
+        sessionId,
+        ackedHistorySequence,
+        0,
+        "",
+        "sessionNonceLen=" + String(sessionNonce.length())
+      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -682,7 +935,24 @@ void handleRuntimeControl(const String& payload) {
       sessionNonce,
       expiresInMs,
       millis(),
-      true
+      true,
+      notifyConnHandle
+    );
+    sendHistoryDebugStatus(
+      "app-session-begin-applied",
+      sessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      "sessionNonceLen=" + String(sessionNonce.length())
+    );
+    sendHistoryDebugStatus(
+      "callsite-app-session-begin",
+      sessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      ""
     );
     return;
   }
@@ -692,6 +962,14 @@ void handleRuntimeControl(const String& payload) {
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0) {
+      sendHistoryDebugStatus(
+        "lease-rejected-missing-session-id",
+        "",
+        ackedHistorySequence,
+        0,
+        "",
+        ""
+      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -704,6 +982,14 @@ void handleRuntimeControl(const String& payload) {
     if (!runtimeAppSessionConnected ||
         runtimeAppSessionId.length() == 0 ||
         runtimeAppSessionNonce.length() == 0) {
+      sendHistoryDebugStatus(
+        "lease-rejected-no-active-session",
+        sessionId,
+        ackedHistorySequence,
+        0,
+        "",
+        ""
+      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -714,6 +1000,14 @@ void handleRuntimeControl(const String& payload) {
     }
 
     if (runtimeAppSessionId != sessionId) {
+      sendHistoryDebugStatus(
+        "lease-rejected-session-mismatch",
+        sessionId,
+        ackedHistorySequence,
+        0,
+        "",
+        "active=" + runtimeAppSessionId
+      );
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -733,7 +1027,33 @@ void handleRuntimeControl(const String& payload) {
       sessionId,
       runtimeAppSessionNonce,
       expiresInMs,
-      millis()
+      millis(),
+      false,
+      notifyConnHandle
+    );
+    sendHistoryDebugStatus(
+      "app-session-lease-applied",
+      sessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      ""
+    );
+    sendHistoryDebugStatus(
+      "callsite-app-session-lease",
+      sessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      ""
+    );
+    sendHistoryDebugStatus(
+      "lease-accepted",
+      sessionId,
+      ackedHistorySequence,
+      0,
+      "",
+      ""
     );
     return;
   }
@@ -761,6 +1081,66 @@ void handleRuntimeControl(const String& payload) {
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
+
+  const firmware_runtime::HistoryControlCommand historyCommand =
+    firmware_runtime::parseHistoryControlCommand(
+      payload.c_str(),
+      HISTORY_SYNC_PAGE_SIZE
+    );
+
+  if (historyCommand.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
+    disarmRuntimeBootstrapWatchdog();
+    notePendingHistoryControlDebug(
+      "parsed-request",
+      historyCommand.requestId.c_str(),
+      historyCommand.afterSequence
+    );
+    sendHistoryDebugStatus(
+      "parsed-request",
+      historyCommand.requestId.c_str(),
+      historyCommand.afterSequence,
+      0,
+      "",
+      ""
+    );
+    scheduleHistorySyncRequest(historyCommand);
+    return;
+  }
+
+  if (historyCommand.type == firmware_runtime::HistoryControlCommandType::HistoryPageAck) {
+    disarmRuntimeBootstrapWatchdog();
+    notePendingHistoryControlDebug(
+      "parsed-ack",
+      historyCommand.requestId.c_str(),
+      historyCommand.sequence
+    );
+    sendHistoryDebugStatus(
+      "parsed-ack",
+      historyCommand.requestId.c_str(),
+      historyCommand.sequence,
+      0,
+      "",
+      ""
+    );
+    acknowledgeHistorySyncRequest(historyCommand);
+    return;
+  }
+
+  if (historyPayload) {
+    notePendingHistoryControlDebug(
+      "invalid-control",
+      historyRequestId,
+      0
+    );
+    sendHistoryDebugStatus(
+      "invalid-control",
+      historyRequestId,
+      0,
+      0,
+      "history.invalid_control",
+      "Runtime control payload mentioned history sync but did not parse."
+    );
+  }
 }
 
 void handleHistoryControl(const String& payload) {
@@ -779,7 +1159,7 @@ void handleHistoryControl(const String& payload) {
   lastRuntimeControlAt = millis();
 
   if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
-    beginHistorySyncRequest(command);
+    scheduleHistorySyncRequest(command);
     return;
   }
 
@@ -798,23 +1178,31 @@ void handleProvisioningControlWrite(uint16_t conn_hdl, BLECharacteristic* charac
     return;
   }
 
+  if (value.startsWith("BEGIN:")) {
+    provisioningCommandBuffer = "";
+    provisioningCommandFramed = true;
+    return;
+  }
+
+  if (provisioningCommandFramed && value == "END") {
+    const String command = provisioningCommandBuffer;
+    provisioningCommandBuffer = "";
+    provisioningCommandFramed = false;
+    handleProvisioningCommand(command);
+    return;
+  }
+
+  if (provisioningCommandFramed) {
+    provisioningCommandBuffer += value;
+    return;
+  }
+
   if (value.startsWith("{") && value.endsWith("}")) {
     handleProvisioningCommand(value);
     return;
   }
 
-  if (value.startsWith("BEGIN:")) {
-    provisioningCommandBuffer = "";
-    return;
-  }
-
-  if (value == "END") {
-    const String command = provisioningCommandBuffer;
-    provisioningCommandBuffer = "";
-    handleProvisioningCommand(command);
-    return;
-  }
-
+  provisioningCommandBuffer = "";
   provisioningCommandBuffer += value;
 }
 
@@ -822,30 +1210,125 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   (void)conn_hdl;
   (void)characteristic;
   const String value = bytesToString(data, len);
+  const String controlType = classifyRuntimeControlPayloadType(value);
 
   if (value.length() == 0) {
     return;
   }
 
-  if (value.startsWith("{") && value.endsWith("}")) {
-    handleRuntimeControl(value);
-    return;
+  runtimeControlWriteCount += 1;
+
+  if (controlType.length() > 0) {
+    sendRuntimeControlDebugStatus("write-callback", controlType);
+  }
+
+  if (isHistoryControlPayload(value)) {
+    const String requestId = historyControlRequestIdFromPayload(value);
+    writeCharacteristicValue(
+      runtimeStatusCharacteristic,
+      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"stage\":\"write-callback\",\"requestId\":\"" + escapeJsonString(requestId) + "\"}"
+    );
   }
 
   if (value.startsWith("BEGIN:")) {
+    sendRuntimeControlDebugStatus("frame-begin", "");
+    notePendingHistoryControlDebug("runtime-begin", "", 0);
     runtimeCommandBuffer = "";
+    runtimeCommandFramed = true;
+    runtimeHistoryChunkDirectNotified = false;
     logRuntimeControlFrame("begin", value);
     return;
   }
 
-  if (value == "END") {
+  if (runtimeCommandFramed && value == "END") {
     const String command = runtimeCommandBuffer;
+    const String framedControlType = classifyRuntimeControlPayloadType(command);
+    notePendingHistoryControlDebug("runtime-end", framedControlType, 0);
     runtimeCommandBuffer = "";
+    runtimeCommandFramed = false;
     logRuntimeControlFrame("end", command);
-    handleRuntimeControl(command);
+    if (framedControlType.length() > 0) {
+      sendRuntimeControlDebugStatus("assembled-framed", framedControlType);
+    }
+    if (isHistoryControlPayload(command)) {
+      notifyHistoryDebugStatusForConnection(
+        conn_hdl,
+        "assembled-framed-direct",
+        historyControlRequestIdFromPayload(command),
+        0
+      );
+      notePendingHistoryControlDebug(
+        "assembled-framed",
+        historyControlRequestIdFromPayload(command),
+        0
+      );
+      sendHistoryDebugStatus(
+        "assembled-framed",
+        historyControlRequestIdFromPayload(command),
+        0,
+        0,
+        "",
+        ""
+      );
+    }
+    handleRuntimeControl(command, conn_hdl);
     return;
   }
 
+  if (runtimeCommandFramed) {
+    runtimeCommandBuffer += value;
+    const String chunkedControlType = classifyRuntimeControlPayloadType(runtimeCommandBuffer);
+    notePendingHistoryControlDebug("runtime-frame-chunk", chunkedControlType, 0);
+    if (chunkedControlType.length() > 0) {
+      sendRuntimeControlDebugStatus("frame-chunk", chunkedControlType);
+    }
+    if (!runtimeHistoryChunkDirectNotified &&
+        runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
+      runtimeHistoryChunkDirectNotified = true;
+      notifyHistoryDebugStatusForConnection(
+        conn_hdl,
+        "runtime-chunk-direct",
+        historyControlRequestIdFromPayload(runtimeCommandBuffer),
+        0
+      );
+    }
+    if (runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
+      notePendingHistoryControlDebug(
+        "runtime-chunk",
+        historyControlRequestIdFromPayload(runtimeCommandBuffer),
+        0
+      );
+    }
+    logRuntimeControlFrame("chunk", value);
+    return;
+  }
+
+  if (value.startsWith("{") && value.endsWith("}")) {
+    notePendingHistoryControlDebug("runtime-inline", controlType, 0);
+    if (controlType.length() > 0) {
+      sendRuntimeControlDebugStatus("assembled-inline", controlType);
+    }
+    if (isHistoryControlPayload(value)) {
+      notePendingHistoryControlDebug(
+        "assembled-inline",
+        historyControlRequestIdFromPayload(value),
+        0
+      );
+      sendHistoryDebugStatus(
+        "assembled-inline",
+        historyControlRequestIdFromPayload(value),
+        0,
+        0,
+        "",
+        ""
+      );
+    }
+    handleRuntimeControl(value, conn_hdl);
+    return;
+  }
+
+  runtimeCommandBuffer = "";
   runtimeCommandBuffer += value;
   logRuntimeControlFrame("chunk", value);
 }
@@ -859,23 +1342,98 @@ void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     return;
   }
 
-  if (value.startsWith("{") && value.endsWith("}")) {
-    handleHistoryControl(value);
-    return;
+  historyControlWriteCount += 1;
+
+  writeCharacteristicValue(
+    runtimeStatusCharacteristic,
+    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"stage\":\"history-write-entered\"}"
+  );
+  notifyHistoryDebugStatusForConnection(conn_hdl, "history-write-entered", "", 0);
+
+  if (isHistoryControlPayload(value)) {
+    writeCharacteristicValue(
+      runtimeStatusCharacteristic,
+      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"stage\":\"history-write-callback\",\"requestId\":\"" +
+      escapeJsonString(historyControlRequestIdFromPayload(value)) + "\"}"
+    );
   }
 
   if (value.startsWith("BEGIN:")) {
+    notePendingHistoryControlDebug("history-begin", "", 0);
     historyCommandBuffer = "";
+    historyCommandFramed = true;
+    writeCharacteristicValue(
+      runtimeStatusCharacteristic,
+      "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"stage\":\"history-begin\"}"
+    );
     return;
   }
 
-  if (value == "END") {
+  if (historyCommandFramed && value == "END") {
     const String command = historyCommandBuffer;
     historyCommandBuffer = "";
+    historyCommandFramed = false;
+    if (isHistoryControlPayload(command)) {
+      notePendingHistoryControlDebug(
+        "history-assembled-framed",
+        historyControlRequestIdFromPayload(command),
+        0
+      );
+      sendHistoryDebugStatus(
+        "history-assembled-framed",
+        historyControlRequestIdFromPayload(command),
+        0,
+        0,
+        "",
+        ""
+      );
+    }
     handleHistoryControl(command);
     return;
   }
 
+  if (historyCommandFramed) {
+    historyCommandBuffer += value;
+    if (historyCommandBuffer.indexOf("\"history-page-") >= 0) {
+      notePendingHistoryControlDebug(
+        "history-chunk",
+        historyControlRequestIdFromPayload(historyCommandBuffer),
+        0
+      );
+      writeCharacteristicValue(
+        runtimeStatusCharacteristic,
+        "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+        "\",\"stage\":\"history-chunk\",\"requestId\":\"" +
+        escapeJsonString(historyControlRequestIdFromPayload(historyCommandBuffer)) + "\"}"
+      );
+    }
+    return;
+  }
+
+  if (value.startsWith("{") && value.endsWith("}")) {
+    if (isHistoryControlPayload(value)) {
+      notePendingHistoryControlDebug(
+        "history-assembled-inline",
+        historyControlRequestIdFromPayload(value),
+        0
+      );
+      sendHistoryDebugStatus(
+        "history-assembled-inline",
+        historyControlRequestIdFromPayload(value),
+        0,
+        0,
+        "",
+        ""
+      );
+    }
+    handleHistoryControl(value);
+    return;
+  }
+
+  historyCommandBuffer = "";
   historyCommandBuffer += value;
 }
 
@@ -892,25 +1450,63 @@ void handleProvisioningStatusCccd(uint16_t conn_hdl, BLECharacteristic* characte
 }
 
 void handleRuntimeTelemetryCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
+  ensureRuntimeConnectionInitialized(conn_hdl, "runtime telemetry cccd");
   (void)conn_hdl;
   (void)characteristic;
-  (void)cccd_value;
+  if ((cccd_value & 0x0001) != 0) {
+    runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_TELEMETRY;
+  } else {
+    runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_TELEMETRY);
+  }
 }
 
 void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
-  (void)conn_hdl;
-  (void)characteristic;
-
+  ensureRuntimeConnectionInitialized(conn_hdl, "runtime status cccd");
   const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
-  if (!notificationsEnabled || !runtimeBleConnected) {
+  if (notificationsEnabled) {
+    runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_STATUS;
+  } else {
+    runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_STATUS);
+  }
+  if (!notificationsEnabled) {
     return;
   }
 
-  notifyCurrentRuntimeStatus();
+  if (runtimeAppSessionConnected &&
+      runtimeAppSessionId.length() > 0 &&
+      runtimeAppSessionNonce.length() > 0) {
+    const String payload =
+      "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+      "\",\"bootId\":\"" + escapeJsonString(bootId) +
+      "\",\"sessionId\":\"" + escapeJsonString(runtimeAppSessionId) +
+      "\",\"sessionNonce\":\"" + escapeJsonString(runtimeAppSessionNonce) + "\"}";
+    notifyCharacteristicValueForConnection(characteristic, conn_hdl, payload);
+    return;
+  }
+
+  notifyCharacteristicValueForConnection(characteristic, conn_hdl, createRuntimeReadyPayload());
 }
 
-void handleBleConnect(uint16_t conn_handle) {
+void handleHistoryStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
+  ensureRuntimeConnectionInitialized(conn_hdl, "history status cccd");
+  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
+  if (notificationsEnabled) {
+    runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_HISTORY;
+  } else {
+    runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_HISTORY);
+  }
+
+  writeCharacteristicValue(characteristic, createRuntimeReadyPayload());
+  if (!notificationsEnabled) {
+    return;
+  }
+
+  notifyCharacteristicValueForConnection(characteristic, conn_hdl, createRuntimeReadyPayload());
+}
+
+void initializeRuntimeConnection(uint16_t conn_handle) {
   markNodeConnected();
+  runtimeConnectionEpoch += 1;
   provisioningBleConnected = true;
   runtimeBleConnected = true;
   runtimeBleConnectedAt = millis();
@@ -918,6 +1514,7 @@ void handleBleConnect(uint16_t conn_handle) {
   lastConnectedRuntimeDebugAt = 0;
   runtimeBleConnIdKnown = true;
   runtimeBleConnId = conn_handle;
+  runtimeNotifyMask = 0;
   resetRuntimeAppSessionState();
   armRuntimeBootstrapWatchdog(
     "BLE client connected; waiting for runtime or provisioning traffic."
@@ -936,6 +1533,22 @@ void handleBleConnect(uint16_t conn_handle) {
   sendTelemetry(lastReportedDelta, millis(), true, false);
 }
 
+void ensureRuntimeConnectionInitialized(uint16_t conn_handle, const char* source) {
+  if (runtimeBleConnected &&
+      runtimeBleConnIdKnown &&
+      runtimeBleConnId == conn_handle) {
+    return;
+  }
+
+  Serial.print("[runtime] recovering connection state from ");
+  Serial.println(source);
+  initializeRuntimeConnection(conn_handle);
+}
+
+void handleBleConnect(uint16_t conn_handle) {
+  initializeRuntimeConnection(conn_handle);
+}
+
 void handleBleDisconnect(uint16_t conn_handle, uint8_t reason) {
   (void)conn_handle;
   (void)reason;
@@ -944,6 +1557,7 @@ void handleBleDisconnect(uint16_t conn_handle, uint8_t reason) {
   runtimeBleConnected = false;
   runtimeBleConnectedAt = 0;
   lastConnectedRuntimeDebugAt = 0;
+  runtimeNotifyMask = 0;
   runtimeTxQueue = BleTxQueue();
   historyTxQueue = BleTxQueue();
   cancelHistoryWorker();
@@ -988,14 +1602,14 @@ void setupBle() {
   setupBleService(provisioningService, "provisioning");
   if (!setupBleCharacteristic(
     provisioningControlCharacteristicImpl,
-    CHR_PROPS_WRITE,
+    CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP,
     SECMODE_NO_ACCESS,
     SECMODE_OPEN,
     244
   )) {
     Serial.println("BLE characteristic registration failed: provisioning control");
   }
-  provisioningControlCharacteristicImpl.setWriteCallback(handleProvisioningControlWrite);
+  provisioningControlCharacteristicImpl.setWriteCallback(handleProvisioningControlWrite, true);
 
   if (!setupBleCharacteristic(
     provisioningStatusCharacteristicImpl,
@@ -1023,14 +1637,14 @@ void setupBle() {
 
   if (!setupBleCharacteristic(
     runtimeControlCharacteristicImpl,
-    CHR_PROPS_WRITE,
+    CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP,
     SECMODE_NO_ACCESS,
     SECMODE_OPEN,
     244
   )) {
     Serial.println("BLE characteristic registration failed: runtime control");
   }
-  runtimeControlCharacteristicImpl.setWriteCallback(handleRuntimeControlWrite);
+  runtimeControlCharacteristicImpl.setWriteCallback(handleRuntimeControlWrite, true);
 
   if (!setupBleCharacteristic(
     runtimeStatusCharacteristicImpl,
@@ -1058,14 +1672,14 @@ void setupBle() {
   setupBleService(historyService, "history");
   if (!setupBleCharacteristic(
     historyControlCharacteristicImpl,
-    CHR_PROPS_WRITE,
+    CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP,
     SECMODE_NO_ACCESS,
     SECMODE_OPEN,
     244
   )) {
     Serial.println("BLE characteristic registration failed: history control");
   }
-  historyControlCharacteristicImpl.setWriteCallback(handleHistoryControlWrite);
+  historyControlCharacteristicImpl.setWriteCallback(handleHistoryControlWrite, true);
 
   if (!setupBleCharacteristic(
     historyStatusCharacteristicImpl,
@@ -1076,6 +1690,7 @@ void setupBle() {
   )) {
     Serial.println("BLE characteristic registration failed: history status");
   }
+  historyStatusCharacteristicImpl.setCccdWriteCallback(handleHistoryStatusCccd);
   historyStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
 
   provisioningControlCharacteristic = &provisioningControlCharacteristicImpl;

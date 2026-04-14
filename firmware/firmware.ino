@@ -14,6 +14,11 @@ using namespace Adafruit_LittleFS_Namespace;
 #define FILE_APPEND FILE_O_WRITE
 
 const char* FIRMWARE_VERSION = "0.6.0-xiao.1";
+#define GM_STRINGIFY_INNER(value) #value
+#define GM_STRINGIFY(value) GM_STRINGIFY_INNER(value)
+#ifndef GM_BUILD_TAG
+#define GM_BUILD_TAG dev
+#endif
 const int PROVISION_RESET_PIN = 0;
 const char* PREFS_FILE_PATH = "/prefs.json";
 const char* PREFS_TEMP_FILE_PATH = "/prefs.tmp";
@@ -44,6 +49,7 @@ const uint8_t STHS34PF80_REG_WHO_AM_I = 0x0F;
 const uint8_t STHS34PF80_REG_AVG_TRIM = 0x10;
 const uint8_t STHS34PF80_REG_CTRL1 = 0x20;
 const uint8_t STHS34PF80_REG_CTRL2 = 0x21;
+const uint8_t STHS34PF80_REG_STATUS = 0x23;
 const uint8_t STHS34PF80_REG_FUNC_STATUS = 0x25;
 const uint8_t STHS34PF80_REG_TPRESENCE_L = 0x3A;
 const uint8_t STHS34PF80_REG_TMOTION_L = 0x3C;
@@ -52,8 +58,11 @@ const uint8_t STHS34PF80_REG_FUNC_CFG_DATA = 0x09;
 const uint8_t STHS34PF80_REG_PAGE_RW = 0x11;
 const uint8_t STHS34PF80_EMBEDDED_RESET_ALGO = 0x2A;
 const uint8_t STHS34PF80_WHO_AM_I_VALUE = 0xD3;
+const uint8_t STHS34PF80_DRDY_FLAG = 0x04;
 const uint8_t STHS34PF80_PRES_FLAG = 0x04;
 const uint8_t STHS34PF80_MOT_FLAG = 0x02;
+const uint8_t STHS34PF80_ODR_POWER_DOWN = 0x00;
+const uint8_t STHS34PF80_ODR_15_HZ = 0x07;
 
 const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
@@ -66,6 +75,11 @@ const unsigned long APP_SESSION_BOOTSTRAP_TIMEOUT_MS = 12000;
 const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
+const uint8_t RUNTIME_NOTIFY_MASK_STATUS = 0x01;
+const uint8_t RUNTIME_NOTIFY_MASK_HISTORY = 0x02;
+const uint8_t RUNTIME_NOTIFY_MASK_TELEMETRY = 0x04;
+const unsigned long SENSOR_DEBUG_INTERVAL_MS = 500;
+const unsigned long SENSOR_HISTORY_DEBUG_INTERVAL_MS = 2000;
 const bool DIAGNOSTIC_BYPASS_FILESYSTEM_STARTUP = false;
 const unsigned long PERSISTED_STATE_SAVE_DEBOUNCE_MS = 50;
 const size_t HISTORY_MAX_BYTES = 48 * 1024;
@@ -106,6 +120,9 @@ BLECharacteristic* historyStatusCharacteristic = nullptr;
 String provisioningCommandBuffer;
 String runtimeCommandBuffer;
 String historyCommandBuffer;
+bool provisioningCommandFramed = false;
+bool runtimeCommandFramed = false;
+bool historyCommandFramed = false;
 
 String hardwareId;
 String bootId;
@@ -122,14 +139,22 @@ bool runtimeBleConnected = false;
 bool runtimeAppSessionConnected = false;
 bool runtimeBootstrapLeasePending = false;
 bool runtimeBleConnIdKnown = false;
+uint8_t runtimeNotifyMask = 0;
 bool pendingMotionUpdate = false;
 bool pendingOtaDfuRestart = false;
+bool pendingHistorySyncRequest = false;
 unsigned long pendingRebootAt = 0;
+unsigned long runtimeConnectionEpoch = 0;
+unsigned long runtimeDisconnectCount = 0;
 unsigned long runtimeBleConnectedAt = 0;
 unsigned long lastAppSessionLeaseAt = 0;
 unsigned long lastDisconnectedAdvertisingLogAt = 0;
 unsigned long lastConnectedRuntimeDebugAt = 0;
+unsigned long lastMotionSensorDebugAt = 0;
+unsigned long lastMotionSensorHistoryLogAt = 0;
 unsigned long lastRuntimeControlAt = 0;
+unsigned long runtimeControlWriteCount = 0;
+unsigned long historyControlWriteCount = 0;
 unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 unsigned long nextHistorySequence = 1;
 unsigned long ackedHistorySequence = 0;
@@ -139,6 +164,13 @@ bool historyOverflowed = false;
 uint16_t runtimeBleConnId = 0;
 String runtimeAppSessionId;
 String runtimeAppSessionNonce;
+firmware_runtime::HistoryControlCommand pendingHistorySyncCommand;
+bool pendingHistoryControlDebugPublish = false;
+String pendingHistoryControlDebugStage;
+String pendingHistoryControlDebugRequestId;
+unsigned long pendingHistoryControlDebugAfterSequence = 0;
+String publishedHistoryControlDebugPayload;
+bool runtimeHistoryChunkDirectNotified = false;
 
 struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
@@ -170,8 +202,8 @@ struct HistoryWorkerState {
   size_t sentCount = 0;
   bool overflowed = false;
   unsigned long droppedCount = 0;
-  bool completionQueued = false;
-  bool completionDelivered = false;
+  bool pumpStartedLogged = false;
+  bool firstRecordLogged = false;
 };
 
 BleTxQueue runtimeTxQueue;
@@ -180,6 +212,9 @@ HistoryWorkerState historyWorkerState;
 File historyWorkerFile(SPIFFS);
 unsigned long lastBleTxAt = 0;
 String lastCompletedHistoryRequestId;
+String lastAutoHistorySessionId;
+unsigned long lastAutoHistoryAckedSequence = 0;
+unsigned long lastAutoHistoryHighWaterSequence = 0;
 
 struct OtaTransferState {
   bool active = false;
@@ -199,6 +234,20 @@ void markNodeConnected();
 void markNodeBleFailure();
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version = "");
+void sendHistoryDebugStatus(
+  const String& stage,
+  const String& requestId,
+  unsigned long afterSequence = 0,
+  size_t sentCount = 0,
+  const String& code = "",
+  const String& message = ""
+);
+void notePendingHistoryControlDebug(
+  const String& stage,
+  const String& requestId,
+  unsigned long afterSequence = 0
+);
+void publishPendingHistoryControlDebug();
 void sendTelemetry(
   int delta,
   unsigned long timestamp,
@@ -207,11 +256,16 @@ void sendTelemetry(
 );
 bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
 bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
+bool enqueueRuntimeStatusPayload(const String& payload);
 bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload);
 bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload);
+bool enqueueHistoryStatusPayload(const String& payload);
 void processBleNotificationQueues();
+void maybeStartAutomaticHistorySync();
+void processPendingHistorySyncRequest();
 void pumpHistoryWorker();
 void cancelHistoryWorker();
+void scheduleHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command);
 void beginHistorySyncRequest(
   const firmware_runtime::HistoryControlCommand& command
 );
@@ -348,6 +402,10 @@ String createBleDeviceName() {
   return "GymMotion-" + hardwareId.substring(suffixStart);
 }
 
+String firmwareVersionString() {
+  return String(FIRMWARE_VERSION) + "+" + String(GM_STRINGIFY(GM_BUILD_TAG));
+}
+
 void initStatusLeds() {
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_GREEN, OUTPUT);
@@ -433,14 +491,17 @@ void setup() {
   Serial.print("Device ID: ");
   Serial.println(activeDeviceId());
   Serial.print("Firmware version: ");
-  Serial.println(FIRMWARE_VERSION);
+  Serial.println(firmwareVersionString());
   Serial.println("BLE motion runtime ready.");
 }
 
 void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
+  maybeStartAutomaticHistorySync();
+  processPendingHistorySyncRequest();
   pumpHistoryWorker();
+  publishPendingHistoryControlDebug();
   flushPersistedStateIfNeeded();
   processBleNotificationQueues();
   logConnectedRuntimeHeartbeat();

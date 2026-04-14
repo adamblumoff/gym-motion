@@ -48,8 +48,22 @@ FQBN="${FQBN:-Seeeduino:nrf52:xiaonRF52840:softdevice=s140v6,debug=l0}"
 SKETCH_PATH="${SKETCH_PATH:-firmware/firmware.ino}"
 BUILD_PATH="${BUILD_PATH:-build/firmware}"
 PARTITIONS="${PARTITIONS:-min_spiffs}"
+BUILD_TAG="${BUILD_TAG:-}"
+
+if [[ -z "$BUILD_TAG" ]] && command -v git >/dev/null 2>&1; then
+  if BUILD_TAG="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null)"; then
+    if ! git -C "$REPO_ROOT" diff --quiet --no-ext-diff --exit-code 2>/dev/null; then
+      BUILD_TAG="${BUILD_TAG}_dirty"
+    fi
+  else
+    BUILD_TAG="unknown"
+  fi
+fi
+
+BUILD_TAG="${BUILD_TAG:-unknown}"
 
 echo "Building reference BLE node firmware from $SKETCH_PATH"
+echo "Embedding firmware build tag $BUILD_TAG"
 rm -rf "$BUILD_PATH"
 mkdir -p "$BUILD_PATH"
 
@@ -57,6 +71,7 @@ compile_args=(
   --fqbn "$FQBN"
   --export-binaries
   --output-dir "$BUILD_PATH"
+  --build-property "compiler.cpp.extra_flags=-DGM_BUILD_TAG=$BUILD_TAG"
 )
 
 if [[ "$FQBN" == esp32:* ]]; then
