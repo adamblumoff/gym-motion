@@ -7,8 +7,9 @@ use super::{
     session_transport::APP_SESSION_HEARTBEAT_MS, session_util::format_error_chain,
 };
 
-pub(super) fn is_closed_handle_error_message(message: &str) -> bool {
+pub(super) fn is_recoverable_write_handle_error_message(message: &str) -> bool {
     message.contains("The object has been closed.")
+        || message.contains("Service not found for write")
 }
 
 pub(super) fn spawn_lease_task(

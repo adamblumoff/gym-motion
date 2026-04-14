@@ -112,6 +112,7 @@ pub(super) async fn prepare_runtime_session_io(
     Characteristic,
     Characteristic,
     Characteristic,
+    Characteristic,
 )> {
     emit_handshake_step(
         writer,
@@ -246,20 +247,9 @@ pub(super) async fn prepare_runtime_session_io(
         .subscribe(&history_status_characteristic)
         .await
         .with_context(|| format!("history status subscribe step failed for {}", node.label))?;
-    emit_handshake_step(
-        writer,
-        config.verbose_logging,
-        node,
-        reconnect,
-        "subscribing to telemetry",
-    )
-    .await?;
-    peripheral
-        .subscribe(&telemetry_characteristic)
-        .await
-        .with_context(|| format!("subscribe step failed for {}", node.label))?;
     Ok((
         notifications,
+        telemetry_characteristic,
         control_characteristic,
         status_characteristic,
         history_control_characteristic,

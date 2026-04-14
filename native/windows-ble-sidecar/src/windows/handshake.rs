@@ -6,6 +6,8 @@ use btleplug::{
 use serde_json::json;
 use tokio::time::{sleep, Duration};
 
+// Keep the session lease short enough that reconnect can recover promptly when
+// Windows tears down the BLE link without delivering a clean disconnect event.
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
 // Keep control writes comfortably below common negotiated ATT MTUs so the
 // firmware always receives each framed body chunk as a normal write callback.

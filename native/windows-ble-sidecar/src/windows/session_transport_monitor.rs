@@ -28,7 +28,7 @@ use super::{
         control_write_mode, send_app_session_begin, write_chunked_json_command,
     },
     session::{ActiveLiveControl, ActiveSessionChannels},
-    session_lease::is_closed_handle_error_message,
+    session_lease::is_recoverable_write_handle_error_message,
     session_transport::APP_SESSION_HEARTBEAT_MS,
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
@@ -241,7 +241,7 @@ async fn emit_aux_status_payload(
 enum RuntimeSessionStatusDisposition {
     Ignore,
     MatchRequested,
-    ReuseObserved {
+    ObservedDifferent {
         session_id: String,
         session_nonce: String,
     },
@@ -267,7 +267,7 @@ fn classify_runtime_session_status(
         return RuntimeSessionStatusDisposition::MatchRequested;
     }
 
-    RuntimeSessionStatusDisposition::ReuseObserved {
+    RuntimeSessionStatusDisposition::ObservedDifferent {
         session_id,
         session_nonce,
     }
@@ -350,7 +350,7 @@ pub(super) async fn monitor_active_session(
         };
 
         let payload_text = payload.to_string();
-        let target_characteristic = &live_control.characteristic;
+        let target_characteristic = &live_control.history_control_characteristic;
         let write_guard = live_control.write_lock.lock().await;
         let write_mode = control_write_mode(&payload_text);
         write_chunked_json_command(
@@ -364,7 +364,7 @@ pub(super) async fn monitor_active_session(
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
-                message: "Sent history control command to firmware over runtime control."
+                message: "Sent history control command to firmware over dedicated history control."
                     .to_string(),
                 details: Some(json!({
                     "deviceId": match command {
@@ -414,6 +414,60 @@ pub(super) async fn monitor_active_session(
         Ok(())
     }
 
+    async fn promote_active_session_control_path(
+        writer: &EventWriter,
+        node: &DiscoveredNode,
+        reconnect: &Option<ReconnectStatus>,
+        config: &Config,
+        peripheral: &btleplug::platform::Peripheral,
+        current_live_control: &mut ActiveLiveControl,
+        current_app_session_id: &str,
+        current_app_session_nonce: &str,
+        active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
+        current_session_device_id: &Option<String>,
+        active_session_command_sender: &mpsc::UnboundedSender<ActiveSessionCommand>,
+    ) -> Result<()> {
+        let (
+            recovered_control_characteristic,
+            recovered_status_characteristic,
+            recovered_history_control_characteristic,
+            recovered_history_status_characteristic,
+        ) = recover_active_session_control_path(
+            peripheral,
+            writer,
+            node,
+            reconnect,
+            config.telemetry_uuid,
+            config.control_uuid,
+            config.status_uuid,
+            config.history_control_uuid,
+            config.history_status_uuid,
+            current_app_session_id,
+            current_app_session_nonce,
+        )
+        .await?;
+
+        *current_live_control = ActiveLiveControl {
+            peripheral: peripheral.clone(),
+            characteristic: recovered_control_characteristic,
+            history_control_characteristic: recovered_history_control_characteristic,
+            status_characteristic: recovered_status_characteristic,
+            history_status_characteristic: recovered_history_status_characteristic,
+            write_lock: current_live_control.write_lock.clone(),
+        };
+
+        if let Some(device_id) = current_session_device_id.as_deref() {
+            remember_active_session_control(
+                active_session_controls,
+                device_id,
+                active_session_command_sender,
+            )
+            .await;
+        }
+
+        Ok(())
+    }
+
     emit_handshake_step(
         &writer,
         config.verbose_logging,
@@ -430,19 +484,18 @@ pub(super) async fn monitor_active_session(
         Instant::now() + Duration::from_millis(monitor_config.session_health_ack_timeout_ms);
     let session_health_sleep = tokio::time::sleep_until(session_health_deadline.into());
     tokio::pin!(session_health_sleep);
-    let mut ack_received = false;
     let mut session_begin_retry_count = 0_u32;
-    let mut ack_confirmed_node: Option<DiscoveredNode> = None;
-    let mut ack_confirmed_boot_id: Option<String> = None;
+    let mut handshake_control_path_recovered = false;
     let mut current_session_device_id: Option<String> = None;
-    let mut current_app_session_id = app_session_id;
-    let mut current_app_session_nonce = app_session_nonce;
+    let current_app_session_id = app_session_id;
+    let current_app_session_nonce = app_session_nonce;
+    let mut active_app_session_id = current_app_session_id.to_string();
     let (active_session_command_sender, mut active_session_commands) =
         mpsc::unbounded_channel::<ActiveSessionCommand>();
     let mut current_live_control = ActiveLiveControl {
         peripheral: prepared.peripheral.clone(),
-        characteristic: prepared.live_control_characteristic,
-        history_control_characteristic: prepared.history_control_characteristic,
+        characteristic: prepared.live_control_characteristic.clone(),
+        history_control_characteristic: prepared.history_control_characteristic.clone(),
         status_characteristic: prepared.status_characteristic.clone(),
         history_status_characteristic: prepared.history_status_characteristic.clone(),
         write_lock: std::sync::Arc::new(Mutex::new(())),
@@ -453,6 +506,7 @@ pub(super) async fn monitor_active_session(
     lease_heartbeat.tick().await;
     let mut lease_heartbeat_enabled = false;
     let mut first_lease_logged = false;
+    let mut telemetry_subscribed = false;
     let mut status_poll = tokio::time::interval(Duration::from_millis(500));
     status_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     status_poll.tick().await;
@@ -515,12 +569,12 @@ pub(super) async fn monitor_active_session(
                     &writer,
                     &node,
                     &mut current_live_control,
-                    &current_app_session_id,
+                    &active_app_session_id,
                     &active_command,
                 )
                 .await?;
             }
-            _ = status_poll.tick(), if session_healthy_reported => {
+            _ = status_poll.tick() => {
                 let runtime_status_readback = current_live_control
                     .peripheral
                     .read(&current_live_control.status_characteristic)
@@ -531,6 +585,125 @@ pub(super) async fn monitor_active_session(
                     last_polled_runtime_status = runtime_status_readback.clone();
                     if let Some(raw) = runtime_status_readback {
                         if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+                            let polled_runtime_status =
+                                serde_json::from_value::<RuntimeStatusPayload>(payload.clone()).ok();
+                            if !session_healthy_reported {
+                                if let Some(status) = polled_runtime_status.as_ref() {
+                                    match classify_runtime_session_status(
+                                        status,
+                                        &current_app_session_id,
+                                        &current_app_session_nonce,
+                                    ) {
+                                        RuntimeSessionStatusDisposition::Ignore => {}
+                                        RuntimeSessionStatusDisposition::MatchRequested => {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "Recovering reconnect from a matched runtime status poll because the WinRT notification ack did not arrive.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                        "expectedSessionId": current_app_session_id,
+                                                        "expectedSessionNonce": current_app_session_nonce,
+                                                        "rawStatusValue": raw,
+                                                        "bootId": status.boot_id,
+                                                    })),
+                                                })
+                                                .await?;
+                                            let mut enriched = node.clone();
+                                            if let Some(device_id) = status.device_id.clone() {
+                                                if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                                    known_device_ids
+                                                        .write()
+                                                        .await
+                                                        .insert(peripheral_id, device_id.clone());
+                                                }
+                                                current_session_device_id = Some(device_id.clone());
+                                                enriched.known_device_id = Some(device_id.clone());
+                                                remember_active_session_control(
+                                                    &active_session_controls,
+                                                    &device_id,
+                                                    &active_session_command_sender,
+                                                )
+                                                .await;
+                                            }
+                                            promote_active_session_control_path(
+                                                &writer,
+                                                &node,
+                                                &reconnect,
+                                                &config,
+                                                &prepared.peripheral,
+                                                &mut current_live_control,
+                                                &current_app_session_id,
+                                                &current_app_session_nonce,
+                                                &active_session_controls,
+                                                &current_session_device_id,
+                                                &active_session_command_sender,
+                                            )
+                                            .await?;
+                                            if !telemetry_subscribed {
+                                                emit_handshake_step(
+                                                    &writer,
+                                                    config.verbose_logging,
+                                                    &node,
+                                                    &reconnect,
+                                                    "subscribing to telemetry after matched runtime status poll",
+                                                )
+                                                .await?;
+                                                prepared
+                                                    .peripheral
+                                                    .subscribe(&prepared.telemetry_characteristic)
+                                                    .await
+                                                    .with_context(|| {
+                                                        format!(
+                                                            "telemetry subscribe after matched runtime status poll failed for {}",
+                                                            node.label
+                                                        )
+                                                    })?;
+                                                telemetry_subscribed = true;
+                                            }
+                                            session_healthy_reported = true;
+                                            lease_heartbeat_enabled = true;
+                                            report_reconnect_completed(
+                                                &writer,
+                                                &command_sender,
+                                                &enriched,
+                                                &reconnect,
+                                                status.boot_id.clone(),
+                                                prepared.transport_ready_at,
+                                                prepared.gatt_ready_at,
+                                                reconnect_started_at,
+                                                true,
+                                            )
+                                            .await?;
+                                            continue;
+                                        }
+                                        RuntimeSessionStatusDisposition::ObservedDifferent {
+                                            session_id,
+                                            session_nonce,
+                                        } => {
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "warn".to_string(),
+                                                    message: "Ignoring a non-matching runtime status poll during reconnect until the exact requested session appears.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                        "expectedSessionId": current_app_session_id,
+                                                        "expectedSessionNonce": current_app_session_nonce,
+                                                        "observedSessionId": session_id,
+                                                        "observedSessionNonce": session_nonce,
+                                                        "rawStatusValue": raw,
+                                                        "bootId": status.boot_id,
+                                                    })),
+                                                })
+                                                .await?;
+                                        }
+                                    }
+                                }
+                            }
                             let handled = emit_aux_status_payload(
                                 &writer,
                                 "runtime-status-poll",
@@ -661,14 +834,14 @@ pub(super) async fn monitor_active_session(
                                         )
                                         .await?;
                                     }
-                                    RuntimeSessionStatusDisposition::ReuseObserved {
+                                    RuntimeSessionStatusDisposition::ObservedDifferent {
                                         session_id,
                                         session_nonce,
                                     } => {
                                         writer
                                             .send(&Event::Log {
-                                                level: "info".to_string(),
-                                                message: "Observed an existing live runtime app session; reusing it for reconnect.".to_string(),
+                                                level: "warn".to_string(),
+                                                message: "Ignoring a non-matching runtime status notification during reconnect until the exact requested session appears.".to_string(),
                                                 details: Some(json!({
                                                     "peripheralId": node.peripheral_id,
                                                     "knownDeviceId": node.known_device_id,
@@ -681,24 +854,19 @@ pub(super) async fn monitor_active_session(
                                                 })),
                                             })
                                             .await?;
-                                        current_app_session_id = session_id;
-                                        current_app_session_nonce = session_nonce;
+                                        continue;
                                     }
                                 }
-                                ack_received = true;
-                                lease_heartbeat_enabled = true;
                                 let mut enriched = node.clone();
                                 if let Some(device_id) = status.device_id.clone() {
                                     if let Some(peripheral_id) = node.peripheral_id.clone() {
                                         known_device_ids
                                             .write()
                                             .await
-                                            .insert(peripheral_id, device_id.clone());
+                                        .insert(peripheral_id, device_id.clone());
                                     }
                                     enriched.known_device_id = Some(device_id);
                                 }
-                                ack_confirmed_boot_id = status.boot_id.clone();
-                                ack_confirmed_node = Some(enriched.clone());
                                 if let Some(device_id) = status.device_id.as_deref() {
                                     current_session_device_id = Some(device_id.to_string());
                                     remember_active_session_control(
@@ -708,45 +876,56 @@ pub(super) async fn monitor_active_session(
                                     )
                                     .await;
                                 }
+                                promote_active_session_control_path(
+                                    &writer,
+                                    &node,
+                                    &reconnect,
+                                    &config,
+                                    &prepared.peripheral,
+                                    &mut current_live_control,
+                                    &current_app_session_id,
+                                    &current_app_session_nonce,
+                                    &active_session_controls,
+                                    &current_session_device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await?;
+                                if !telemetry_subscribed {
+                                    emit_handshake_step(
+                                        &writer,
+                                        config.verbose_logging,
+                                        &node,
+                                        &reconnect,
+                                        "subscribing to telemetry after session health",
+                                    )
+                                    .await?;
+                                    prepared
+                                        .peripheral
+                                        .subscribe(&prepared.telemetry_characteristic)
+                                        .await
+                                        .with_context(|| {
+                                            format!(
+                                                "telemetry subscribe after session health failed for {}",
+                                                node.label
+                                            )
+                                        })?;
+                                    telemetry_subscribed = true;
+                                }
                                 if !session_healthy_reported {
                                     session_healthy_reported = true;
+                                    lease_heartbeat_enabled = true;
                                     report_reconnect_completed(
                                         &writer,
                                         &command_sender,
                                         &enriched,
                                         &reconnect,
-                                        ack_confirmed_boot_id.clone(),
+                                        status.boot_id.clone(),
                                         prepared.transport_ready_at,
                                         prepared.gatt_ready_at,
                                         reconnect_started_at,
                                         false,
                                     )
                                     .await?;
-                                    let runtime_status_readback = current_live_control
-                                        .peripheral
-                                        .read(&current_live_control.status_characteristic)
-                                        .await
-                                        .ok()
-                                        .and_then(|bytes| String::from_utf8(bytes).ok());
-                                    let history_status_readback = current_live_control
-                                        .peripheral
-                                        .read(&current_live_control.history_status_characteristic)
-                                        .await
-                                        .ok()
-                                        .and_then(|bytes| String::from_utf8(bytes).ok());
-                                    writer
-                                        .send(&Event::Log {
-                                            level: "info".to_string(),
-                                            message: "Read back status characteristics immediately after reconnect.".to_string(),
-                                            details: Some(json!({
-                                                "peripheralId": node.peripheral_id,
-                                                "knownDeviceId": node.known_device_id,
-                                                "address": node.address,
-                                                "runtimeStatusValue": runtime_status_readback,
-                                                "historyStatusValue": history_status_readback,
-                                            })),
-                                        })
-                                        .await?;
                                     continue;
                                 }
                                 session_health_sleep.as_mut().reset(
@@ -919,42 +1098,6 @@ pub(super) async fn monitor_active_session(
                 }
             }
             _ = &mut session_health_sleep, if !session_healthy_reported => {
-                if ack_received {
-                    let completed_node = ack_confirmed_node.clone().unwrap_or_else(|| node.clone());
-                    session_healthy_reported = true;
-                    report_reconnect_completed(
-                        &writer,
-                        &command_sender,
-                        &completed_node,
-                        &reconnect,
-                        ack_confirmed_boot_id.clone(),
-                        prepared.transport_ready_at,
-                        prepared.gatt_ready_at,
-                        reconnect_started_at,
-                        false,
-                    )
-                    .await?;
-                    let runtime_status_readback = current_live_control
-                        .peripheral
-                        .read(&current_live_control.status_characteristic)
-                        .await
-                        .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok());
-                    writer
-                        .send(&Event::Log {
-                            level: "info".to_string(),
-                            message: "Read back runtime status characteristic immediately after reconnect.".to_string(),
-                            details: Some(json!({
-                                "peripheralId": node.peripheral_id,
-                                "knownDeviceId": completed_node.known_device_id,
-                                "address": node.address,
-                                "runtimeStatusValue": runtime_status_readback,
-                            })),
-                        })
-                        .await?;
-                    continue;
-                }
-
                 if session_begin_retry_count < monitor_config.session_begin_retry_limit
                     && prepared.peripheral.is_connected().await.unwrap_or(false)
                 {
@@ -1013,29 +1156,19 @@ pub(super) async fn monitor_active_session(
                         RuntimeSessionStatusDisposition::MatchRequested => {
                             writer
                                 .send(&Event::Log {
-                                    level: "info".to_string(),
-                                    message: "Session health ack notification was missed, but the runtime status characteristic already reflects the requested app session.".to_string(),
+                                    level: "warn".to_string(),
+                                    message: "Recovering reconnect from a matched runtime status readback because the WinRT notification ack did not arrive.".to_string(),
                                     details: Some(json!({
                                         "peripheralId": node.peripheral_id,
                                         "knownDeviceId": node.known_device_id,
                                         "address": node.address,
-                                        "sessionId": current_app_session_id,
+                                        "expectedSessionId": current_app_session_id,
+                                        "expectedSessionNonce": current_app_session_nonce,
+                                        "rawStatusValue": raw_status_value,
                                         "bootId": status.boot_id,
                                     })),
                                 })
                                 .await?;
-                            ack_received = true;
-                            ack_confirmed_boot_id = status.boot_id.clone();
-                            lease_heartbeat_enabled = true;
-                            if let Some(device_id) = status.device_id.as_deref() {
-                                current_session_device_id = Some(device_id.to_string());
-                                remember_active_session_control(
-                                    &active_session_controls,
-                                    device_id,
-                                    &active_session_command_sender,
-                                )
-                                .await;
-                            }
                             let mut enriched = node.clone();
                             if let Some(device_id) = status.device_id.clone() {
                                 if let Some(peripheral_id) = node.peripheral_id.clone() {
@@ -1044,26 +1177,74 @@ pub(super) async fn monitor_active_session(
                                         .await
                                         .insert(peripheral_id, device_id.clone());
                                 }
-                                enriched.known_device_id = Some(device_id);
+                                current_session_device_id = Some(device_id.clone());
+                                enriched.known_device_id = Some(device_id.clone());
+                                remember_active_session_control(
+                                    &active_session_controls,
+                                    &device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await;
                             }
-                            ack_confirmed_node = Some(enriched);
-                            session_health_sleep.as_mut().reset(
-                                (Instant::now()
-                                    + Duration::from_millis(
-                                        monitor_config.session_health_ack_timeout_ms,
-                                    ))
-                                .into(),
-                            );
+                            promote_active_session_control_path(
+                                &writer,
+                                &node,
+                                &reconnect,
+                                &config,
+                                &prepared.peripheral,
+                                &mut current_live_control,
+                                &current_app_session_id,
+                                &current_app_session_nonce,
+                                &active_session_controls,
+                                &current_session_device_id,
+                                &active_session_command_sender,
+                            )
+                            .await?;
+                            if !telemetry_subscribed {
+                                emit_handshake_step(
+                                    &writer,
+                                    config.verbose_logging,
+                                    &node,
+                                    &reconnect,
+                                    "subscribing to telemetry after matched readback recovery",
+                                )
+                                .await?;
+                                prepared
+                                    .peripheral
+                                    .subscribe(&prepared.telemetry_characteristic)
+                                    .await
+                                    .with_context(|| {
+                                        format!(
+                                            "telemetry subscribe after matched readback recovery failed for {}",
+                                            node.label
+                                        )
+                                    })?;
+                                telemetry_subscribed = true;
+                            }
+                            session_healthy_reported = true;
+                            lease_heartbeat_enabled = true;
+                            report_reconnect_completed(
+                                &writer,
+                                &command_sender,
+                                &enriched,
+                                &reconnect,
+                                status.boot_id.clone(),
+                                prepared.transport_ready_at,
+                                prepared.gatt_ready_at,
+                                reconnect_started_at,
+                                true,
+                            )
+                            .await?;
                             continue;
                         }
-                        RuntimeSessionStatusDisposition::ReuseObserved {
+                        RuntimeSessionStatusDisposition::ObservedDifferent {
                             session_id,
                             session_nonce,
                         } => {
                             writer
                                 .send(&Event::Log {
-                                    level: "info".to_string(),
-                                    message: "Observed an existing live runtime app session during reconnect bootstrap; reusing it.".to_string(),
+                                    level: "warn".to_string(),
+                                    message: "Fresh reconnect session did not take, but the board is still advertising a live app session; adopting that session instead of failing reconnect.".to_string(),
                                     details: Some(json!({
                                         "peripheralId": node.peripheral_id,
                                         "knownDeviceId": node.known_device_id,
@@ -1072,21 +1253,11 @@ pub(super) async fn monitor_active_session(
                                         "expectedSessionNonce": current_app_session_nonce,
                                         "observedSessionId": session_id,
                                         "observedSessionNonce": session_nonce,
+                                        "rawStatusValue": raw_status_value,
                                         "bootId": status.boot_id,
                                     })),
                                 })
                                 .await?;
-                            current_app_session_id = session_id;
-                            current_app_session_nonce = session_nonce;
-                            if let Some(device_id) = status.device_id.as_deref() {
-                                current_session_device_id = Some(device_id.to_string());
-                                remember_active_session_control(
-                                    &active_session_controls,
-                                    device_id,
-                                    &active_session_command_sender,
-                                )
-                                .await;
-                            }
                             let mut enriched = node.clone();
                             if let Some(device_id) = status.device_id.clone() {
                                 if let Some(peripheral_id) = node.peripheral_id.clone() {
@@ -1095,21 +1266,126 @@ pub(super) async fn monitor_active_session(
                                         .await
                                         .insert(peripheral_id, device_id.clone());
                                 }
-                                enriched.known_device_id = Some(device_id);
+                                current_session_device_id = Some(device_id.clone());
+                                enriched.known_device_id = Some(device_id.clone());
+                                remember_active_session_control(
+                                    &active_session_controls,
+                                    &device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await;
                             }
-                            ack_confirmed_boot_id = status.boot_id.clone();
-                            ack_confirmed_node = Some(enriched);
-                            session_health_sleep.as_mut().reset(
-                                (Instant::now()
-                                    + Duration::from_millis(
-                                        monitor_config.session_health_ack_timeout_ms,
-                                    ))
-                                .into(),
-                            );
+                            promote_active_session_control_path(
+                                &writer,
+                                &node,
+                                &reconnect,
+                                &config,
+                                &prepared.peripheral,
+                                &mut current_live_control,
+                                &current_app_session_id,
+                                &current_app_session_nonce,
+                                &active_session_controls,
+                                &current_session_device_id,
+                                &active_session_command_sender,
+                            )
+                            .await?;
+                            if !telemetry_subscribed {
+                                emit_handshake_step(
+                                    &writer,
+                                    config.verbose_logging,
+                                    &node,
+                                    &reconnect,
+                                    "subscribing to telemetry after adopting existing runtime session",
+                                )
+                                .await?;
+                                prepared
+                                    .peripheral
+                                    .subscribe(&prepared.telemetry_characteristic)
+                                    .await
+                                    .with_context(|| {
+                                        format!(
+                                            "telemetry subscribe after adopting existing runtime session failed for {}",
+                                            node.label
+                                        )
+                                    })?;
+                                telemetry_subscribed = true;
+                            }
+                            active_app_session_id = session_id;
+                            let _ = session_nonce;
+                            session_healthy_reported = true;
+                            lease_heartbeat_enabled = true;
+                            report_reconnect_completed(
+                                &writer,
+                                &command_sender,
+                                &enriched,
+                                &reconnect,
+                                status.boot_id.clone(),
+                                prepared.transport_ready_at,
+                                prepared.gatt_ready_at,
+                                reconnect_started_at,
+                                true,
+                            )
+                            .await?;
                             continue;
                         }
                         RuntimeSessionStatusDisposition::Ignore => {}
                     }
+                }
+
+                if !handshake_control_path_recovered
+                    && prepared.peripheral.is_connected().await.unwrap_or(false)
+                {
+                    writer
+                        .send(&Event::Log {
+                            level: "warn".to_string(),
+                            message: "Session health ack is still missing after retry; refreshing the active control path and replaying app-session begin once before failing.".to_string(),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": node.known_device_id,
+                                "address": node.address,
+                                "expectedSessionId": current_app_session_id,
+                                "rawStatusValue": raw_status_value,
+                            })),
+                        })
+                        .await?;
+                    promote_active_session_control_path(
+                        &writer,
+                        &node,
+                        &reconnect,
+                        &config,
+                        &prepared.peripheral,
+                        &mut current_live_control,
+                        &current_app_session_id,
+                        &current_app_session_nonce,
+                        &active_session_controls,
+                        &current_session_device_id,
+                        &active_session_command_sender,
+                    )
+                    .await?;
+                    let write_guard = current_live_control.write_lock.lock().await;
+                    let replay_begin_result = send_app_session_begin(
+                        &current_live_control.peripheral,
+                        &current_live_control.characteristic,
+                        &current_app_session_nonce,
+                        &current_app_session_id,
+                    )
+                    .await;
+                    drop(write_guard);
+                    replay_begin_result.with_context(|| {
+                        format!(
+                            "app-session begin replay after active control-path refresh failed for {}",
+                            node.label
+                        )
+                    })?;
+                    handshake_control_path_recovered = true;
+                    session_begin_retry_count = 0;
+                    last_polled_runtime_status = None;
+                    session_health_sleep.as_mut().reset(
+                        (Instant::now()
+                            + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
+                        .into(),
+                    );
+                    continue;
                 }
 
                 writer
@@ -1136,53 +1412,32 @@ pub(super) async fn monitor_active_session(
                 let lease_result = super::handshake::send_app_session_lease(
                     &current_live_control.peripheral,
                     &current_live_control.characteristic,
-                    &current_app_session_id,
+                    &active_app_session_id,
                 )
                 .await;
                 drop(write_guard);
 
                 if let Err(error) = lease_result {
                     let reason = format!("{:#}", error);
-                    if is_closed_handle_error_message(&reason)
+                    if is_recoverable_write_handle_error_message(&reason)
                         && prepared.peripheral.is_connected().await.unwrap_or(false)
                     {
-                        match recover_active_session_control_path(
-                            &prepared.peripheral,
+                        match promote_active_session_control_path(
                             &writer,
                             &node,
                             &reconnect,
-                            config.telemetry_uuid,
-                            config.control_uuid,
-                            config.status_uuid,
-                            config.history_control_uuid,
-                            config.history_status_uuid,
+                            &config,
+                            &prepared.peripheral,
+                            &mut current_live_control,
                             &current_app_session_id,
                             &current_app_session_nonce,
+                            &active_session_controls,
+                            &current_session_device_id,
+                            &active_session_command_sender,
                         )
                         .await
                         {
-                            Ok((
-                                recovered_control_characteristic,
-                                recovered_status_characteristic,
-                                recovered_history_control_characteristic,
-                                recovered_history_status_characteristic,
-                            )) => {
-                                current_live_control = ActiveLiveControl {
-                                    peripheral: prepared.peripheral.clone(),
-                                    characteristic: recovered_control_characteristic,
-                                    history_control_characteristic: recovered_history_control_characteristic,
-                                    status_characteristic: recovered_status_characteristic,
-                                    history_status_characteristic: recovered_history_status_characteristic,
-                                    write_lock: current_live_control.write_lock.clone(),
-                                };
-                                if let Some(device_id) = current_session_device_id.as_deref() {
-                                    remember_active_session_control(
-                                        &active_session_controls,
-                                        device_id,
-                                        &active_session_command_sender,
-                                    )
-                                    .await;
-                                }
+                            Ok(()) => {
                                 continue;
                             }
                             Err(recovery_error) => {
@@ -1232,7 +1487,7 @@ pub(super) async fn monitor_active_session(
                                 "peripheralId": node.peripheral_id,
                                 "knownDeviceId": current_session_device_id,
                                 "address": node.address,
-                                "sessionId": current_app_session_id,
+                                "sessionId": active_app_session_id,
                                 "runtimeStatusValue": runtime_status_readback,
                                 "historyStatusValue": history_status_readback,
                             })),
@@ -1346,7 +1601,7 @@ mod tests {
 
         assert_eq!(
             classify_runtime_session_status(&status, "session-new", "nonce-new"),
-            RuntimeSessionStatusDisposition::ReuseObserved {
+            RuntimeSessionStatusDisposition::ObservedDifferent {
                 session_id: "session-live".to_string(),
                 session_nonce: "nonce-live".to_string(),
             }

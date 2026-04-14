@@ -22,6 +22,7 @@ use super::{
 pub(super) struct PreparedSession {
     pub(super) peripheral: Peripheral,
     pub(super) notifications: NotificationStream,
+    pub(super) telemetry_characteristic: Characteristic,
     pub(super) live_control_characteristic: Characteristic,
     pub(super) status_characteristic: Characteristic,
     pub(super) history_control_characteristic: Characteristic,
@@ -329,6 +330,7 @@ pub(super) async fn prepare_session_stream(
     match setup_result {
         Ok((
             notifications,
+            telemetry_characteristic,
             live_control_characteristic,
             status_characteristic,
             history_control_characteristic,
@@ -336,6 +338,7 @@ pub(super) async fn prepare_session_stream(
         )) => Ok(PreparedSession {
             peripheral,
             notifications,
+            telemetry_characteristic,
             live_control_characteristic,
             status_characteristic,
             history_control_characteristic,
