@@ -37,10 +37,14 @@ pub(super) async fn recover_active_session_control_path(
     writer: &EventWriter,
     node: &DiscoveredNode,
     reconnect: &Option<ReconnectStatus>,
+    telemetry_uuid: uuid::Uuid,
     control_uuid: uuid::Uuid,
+    status_uuid: uuid::Uuid,
+    history_control_uuid: uuid::Uuid,
+    history_status_uuid: uuid::Uuid,
     app_session_id: &str,
     app_session_nonce: &str,
-) -> Result<Characteristic> {
+) -> Result<(Characteristic, Characteristic, Characteristic, Characteristic)> {
     writer
         .send(&Event::Log {
             level: "warn".to_string(),
@@ -61,12 +65,74 @@ pub(super) async fn recover_active_session_control_path(
         )
     })?;
 
-    let control_characteristic = peripheral
-        .characteristics()
-        .into_iter()
+    let characteristics = peripheral.characteristics();
+
+    let control_characteristic = characteristics
+        .iter()
         .find(|candidate| candidate.uuid == control_uuid)
+        .cloned()
         .ok_or_else(|| {
             anyhow!("runtime control characteristic not found during active session recovery")
+        })?;
+
+    let telemetry_characteristic = characteristics
+        .iter()
+        .find(|candidate| candidate.uuid == telemetry_uuid)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!("telemetry characteristic not found during active session recovery")
+        })?;
+
+    let status_characteristic = characteristics
+        .iter()
+        .find(|candidate| candidate.uuid == status_uuid)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!("runtime status characteristic not found during active session recovery")
+        })?;
+
+    let history_control_characteristic = characteristics
+        .iter()
+        .find(|candidate| candidate.uuid == history_control_uuid)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!("history control characteristic not found during active session recovery")
+        })?;
+
+    let history_status_characteristic = characteristics
+        .iter()
+        .find(|candidate| candidate.uuid == history_status_uuid)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!("history status characteristic not found during active session recovery")
+        })?;
+
+    peripheral
+        .subscribe(&status_characteristic)
+        .await
+        .with_context(|| {
+            format!(
+                "runtime status resubscribe failed during active session recovery for {}",
+                node.label
+            )
+        })?;
+    peripheral
+        .subscribe(&history_status_characteristic)
+        .await
+        .with_context(|| {
+            format!(
+                "history status resubscribe failed during active session recovery for {}",
+                node.label
+            )
+        })?;
+    peripheral
+        .subscribe(&telemetry_characteristic)
+        .await
+        .with_context(|| {
+            format!(
+                "telemetry resubscribe failed during active session recovery for {}",
+                node.label
+            )
         })?;
 
     send_app_session_begin(
@@ -99,5 +165,10 @@ pub(super) async fn recover_active_session_control_path(
         })
         .await?;
 
-    Ok(control_characteristic)
+    Ok((
+        control_characteristic,
+        status_characteristic,
+        history_control_characteristic,
+        history_status_characteristic,
+    ))
 }

@@ -34,23 +34,19 @@ function createHistorySyncState({
   bootId,
   firmwareVersion,
   hardwareId,
-  nextEligibleAt,
 }) {
   return {
     deviceId,
     bootId,
     firmwareVersion,
     hardwareId,
-    status: "waiting_for_stable_live",
+    status: "waiting_to_request",
     requestedAfterSequence: null,
     latestSequence: 0,
     highWaterSequence: 0,
     requestId: null,
     records: [],
     recordSequences: new Set(),
-    nextEligibleAt,
-    timerHandle: null,
-    timerToken: 0,
     pausedReason: null,
     completionPending: false,
   };
@@ -67,15 +63,12 @@ export function createRuntimeBridge({
   setTimeoutImpl = setTimeout,
   clearTimeoutImpl = clearTimeout,
 }) {
-  const historySyncStabilityWindowMs =
-    config.historySyncStabilityWindowMs ?? config.historySyncDelayMs ?? 5_000;
-  const historySyncPageSize = config.historySyncPageSize ?? 256;
-  const historySyncInterPageDelayMs = config.historySyncInterPageDelayMs ?? 0;
   const deviceContexts = new Map();
   const pendingNodeLogs = new Map();
   const liveTaskChains = new Map();
   const historyTaskChains = new Map();
   const historySyncByDevice = new Map();
+  const pendingHistorySyncTimers = new Map();
 
   function emitPersistMessage(type, deviceId, payload) {
     if (!sendToDesktop({ type, deviceId, payload }, debug)) {
@@ -195,24 +188,21 @@ export function createRuntimeBridge({
   function syncBackfillContext(context, state) {
     context.backfillStatus = state?.status ?? "idle";
     context.backfillBootId = state?.bootId ?? null;
-    context.backfillNextEligibleAt = state?.nextEligibleAt ?? null;
+    context.backfillNextEligibleAt = null;
     context.backfillPausedReason = state?.pausedReason ?? null;
   }
 
-  function clearBackfillTimer(state) {
-    if (!state?.timerHandle) {
-      return;
+  function clearPendingHistorySyncTimer(deviceId) {
+    const timer = pendingHistorySyncTimers.get(deviceId);
+    if (timer !== undefined) {
+      clearTimeoutImpl(timer);
+      pendingHistorySyncTimers.delete(deviceId);
     }
-
-    clearTimeoutImpl(state.timerHandle);
-    state.timerHandle = null;
   }
 
   function removeBackfillState(deviceId) {
-    const existing = historySyncByDevice.get(deviceId);
-
-    if (existing) {
-      clearBackfillTimer(existing);
+    clearPendingHistorySyncTimer(deviceId);
+    if (historySyncByDevice.has(deviceId)) {
       historySyncByDevice.delete(deviceId);
     }
 
@@ -229,60 +219,105 @@ export function createRuntimeBridge({
   }
 
   function pauseBackfill(context, state, reason, details = undefined) {
-    clearBackfillTimer(state);
     setBackfillStatus(context, state, "paused_after_error", {
       records: [],
       recordSequences: new Set(),
       pausedReason: reason,
-      nextEligibleAt: null,
     });
     logBackfill(reason, details);
   }
 
   function completeBackfill(context, state, details = undefined) {
-    clearBackfillTimer(state);
+    clearPendingHistorySyncTimer(state.deviceId);
     setBackfillStatus(context, state, "complete", {
       records: [],
       recordSequences: new Set(),
       pausedReason: null,
-      nextEligibleAt: null,
     });
     if (details) {
       logBackfill("history sync complete", details);
     }
   }
 
-  function scheduleBackfillPump(deviceId, delayMs = 0) {
-    const state = historySyncByDevice.get(deviceId);
+  function createHistoryRequestId() {
+    const nowToken = Math.max(0, Math.trunc(nowFn())).toString(36);
+    const randomToken = Math.floor(Math.random() * 0xffffffff)
+      .toString(36)
+      .padStart(6, "0")
+      .slice(0, 6);
+    return `h${nowToken}-${randomToken}`;
+  }
 
-    if (!state || state.status === "paused_after_error" || state.status === "complete") {
+  async function requestHistorySyncNow(deviceId, bootId) {
+    clearPendingHistorySyncTimer(deviceId);
+
+    const state = historySyncByDevice.get(deviceId);
+    const context = deviceContexts.get(deviceId);
+    if (!state || !context || state.bootId !== bootId || context.bootId !== bootId) {
       return;
     }
 
-    clearBackfillTimer(state);
-    state.timerToken += 1;
-    const token = state.timerToken;
-
-    if (delayMs <= 0) {
-      Promise.resolve().then(() => {
-        const current = historySyncByDevice.get(deviceId);
-        if (!current || current.timerToken !== token) {
-          return;
-        }
-        current.timerHandle = null;
-        void queueHistoryDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
+    if (context.lastGatewayConnectionState !== "connected") {
+      logBackfill("skipping history sync request because the node is no longer connected", {
+        deviceId,
+        bootId,
+        gatewayConnectionState: context.lastGatewayConnectionState ?? null,
       });
       return;
     }
 
-    state.timerHandle = setTimeoutImpl(() => {
-      const current = historySyncByDevice.get(deviceId);
-      if (!current || current.timerToken !== token) {
-        return;
-      }
-      current.timerHandle = null;
-      void queueHistoryDeviceTask(deviceId, () => pumpBackfillNow(deviceId));
-    }, delayMs);
+    setBackfillStatus(context, state, "buffering_page", {
+      requestedAfterSequence: state.latestSequence ?? 0,
+      latestSequence: state.latestSequence ?? 0,
+      highWaterSequence: state.highWaterSequence ?? state.latestSequence ?? 0,
+      requestId: null,
+      records: [],
+      recordSequences: new Set(),
+      pausedReason: null,
+      completionPending: false,
+    });
+
+    logBackfill("awaiting firmware-owned history sync", {
+      deviceId,
+      bootId,
+      requestedAfterSequence: state.latestSequence ?? 0,
+    });
+  }
+
+  function scheduleHistorySyncRequest(context, state) {
+    if (pendingHistorySyncTimers.has(state.deviceId)) {
+      return;
+    }
+
+    const waitMs = Math.max(0, Number(config.historySyncStabilityWindowMs ?? 0));
+    setBackfillStatus(context, state, "waiting_to_request", {
+      pausedReason: null,
+      completionPending: false,
+      requestId: null,
+      records: [],
+      recordSequences: new Set(),
+    });
+
+    logBackfill("waiting for stable live session before history sync", {
+      deviceId: state.deviceId,
+      bootId: state.bootId,
+      waitMs,
+    });
+
+    if (waitMs === 0) {
+      void queueHistoryDeviceTask(state.deviceId, () =>
+        requestHistorySyncNow(state.deviceId, state.bootId),
+      );
+      return;
+    }
+
+    const timer = setTimeoutImpl(() => {
+      pendingHistorySyncTimers.delete(state.deviceId);
+      void queueHistoryDeviceTask(state.deviceId, () =>
+        requestHistorySyncNow(state.deviceId, state.bootId),
+      );
+    }, waitMs);
+    pendingHistorySyncTimers.set(state.deviceId, timer);
   }
 
   function ensureBackfillState(context, payload) {
@@ -302,110 +337,31 @@ export function createRuntimeBridge({
         bootId: payload.bootId,
         firmwareVersion: payload.firmwareVersion ?? null,
         hardwareId: payload.hardwareId ?? null,
-        nextEligibleAt: nowFn() + historySyncStabilityWindowMs,
       });
       historySyncByDevice.set(payload.deviceId, state);
       syncBackfillContext(context, state);
-      logBackfill("waiting for stable live session before history sync", {
-        deviceId: payload.deviceId,
-        bootId: payload.bootId,
-        waitMs: historySyncStabilityWindowMs,
-      });
     } else {
       state.firmwareVersion = payload.firmwareVersion ?? state.firmwareVersion ?? null;
       state.hardwareId = payload.hardwareId ?? state.hardwareId ?? null;
     }
 
-    if (context.lastTelemetryConnectionState === "connected") {
-      const delayMs = Math.max(0, (state.nextEligibleAt ?? nowFn()) - nowFn());
-      scheduleBackfillPump(payload.deviceId, delayMs);
+    if (
+      state.status === "waiting_to_request" ||
+      state.status === "buffering_page" ||
+      state.status === "persisting_page" ||
+      state.status === "acking_page"
+    ) {
+      if (!pendingHistorySyncTimers.has(state.deviceId) && state.status === "waiting_to_request") {
+        scheduleHistorySyncRequest(context, state);
+      }
+      return state;
+    }
+
+    if (state.status !== "complete" && state.status !== "paused_after_error") {
+      scheduleHistorySyncRequest(context, state);
     }
 
     return state;
-  }
-
-  async function requestHistoryPage(context, state) {
-    if (state.requestedAfterSequence == null) {
-      const syncResponse = await fetchDesktopJson(
-        `/api/device-sync/${encodeURIComponent(state.deviceId)}?bootId=${encodeURIComponent(state.bootId)}`,
-      );
-      const historySyncState = syncResponse?.historySyncState ?? {};
-      state.requestedAfterSequence = historySyncState.lastAckedHistorySequence ?? 0;
-      state.latestSequence = state.requestedAfterSequence;
-      state.highWaterSequence = state.requestedAfterSequence;
-    }
-
-    setBackfillStatus(context, state, "buffering_page", {
-      requestId: `${state.deviceId}:${state.bootId}:${state.requestedAfterSequence ?? 0}:${nowFn()}`,
-      records: [],
-      recordSequences: new Set(),
-      pausedReason: null,
-      nextEligibleAt: null,
-    });
-
-    logBackfill("requesting history sync", {
-      deviceId: state.deviceId,
-      bootId: state.bootId,
-      afterSequence: state.requestedAfterSequence,
-      maxRecords: historySyncPageSize,
-      requestId: state.requestId,
-    });
-
-    await sendSidecarCommand({
-      type: "begin_history_sync",
-      device_id: state.deviceId,
-      after_sequence: state.requestedAfterSequence,
-      max_records: historySyncPageSize,
-      request_id: state.requestId,
-    });
-  }
-
-  async function pumpBackfillNow(deviceId) {
-    const state = historySyncByDevice.get(deviceId);
-    const context = deviceContexts.get(deviceId);
-
-    if (!state || !context) {
-      return;
-    }
-
-    if (
-      context.lastTelemetryConnectionState !== "connected" ||
-      context.bootId !== state.bootId
-    ) {
-      return;
-    }
-
-    const now = nowFn();
-
-    if (state.status === "waiting_for_stable_live") {
-      if ((state.nextEligibleAt ?? now) > now) {
-        scheduleBackfillPump(deviceId, state.nextEligibleAt - now);
-        return;
-      }
-
-      setBackfillStatus(context, state, "requesting_page", {
-        nextEligibleAt: now,
-      });
-    }
-
-    if (state.status !== "requesting_page") {
-      return;
-    }
-
-    if ((state.nextEligibleAt ?? now) > now) {
-      scheduleBackfillPump(deviceId, state.nextEligibleAt - now);
-      return;
-    }
-
-    try {
-      await requestHistoryPage(context, state);
-    } catch (error) {
-      pauseBackfill(context, state, "history sync request failed", {
-        deviceId: state.deviceId,
-        bootId: state.bootId,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   async function handleHistorySyncCompleteNow(event) {
@@ -447,6 +403,14 @@ export function createRuntimeBridge({
         status: state.status,
       });
       return;
+    }
+
+    if (!state.requestId && payload.request_id) {
+      state.requestId = payload.request_id;
+      logBackfill("bound history sync completion", {
+        deviceId,
+        requestId: state.requestId,
+      });
     }
 
     if (payload.request_id !== state.requestId) {
@@ -534,53 +498,45 @@ export function createRuntimeBridge({
       });
 
       setBackfillStatus(context, state, "acking_page", {
+        records: [],
+        recordSequences: new Set(),
         pausedReason: null,
       });
 
       await sendSidecarCommand({
         type: "acknowledge_history_sync",
-        device_id: deviceId,
+        deviceId,
         sequence: provenAckSequence,
-        request_id: payload.request_id,
+        requestId: payload.request_id ?? state.requestId ?? null,
       });
 
-      const noProgress = provenAckSequence <= (state.requestedAfterSequence ?? 0);
-      const shouldContinue =
-        payload.has_more === true ||
-        (provenAckSequence < (payload.latest_sequence ?? 0) && !noProgress);
+      logBackfill("acked persisted history batch", {
+        deviceId,
+        bootId: state.bootId,
+        ackSequence: provenAckSequence,
+        requestId: payload.request_id ?? state.requestId ?? null,
+      });
 
-      if (!shouldContinue) {
+      if (payload.has_more !== true) {
         completeBackfill(context, state);
-        if (provenAckSequence < (payload.latest_sequence ?? 0)) {
-          logBackfill("history sync stopped after no forward progress", {
-            deviceId,
-            bootId: state.bootId,
-            requestedAfterSequence: state.requestedAfterSequence,
-            provenAckSequence,
-            latestSequence: payload.latest_sequence ?? 0,
-          });
-        }
         return;
       }
 
-      setBackfillStatus(context, state, "requesting_page", {
+      setBackfillStatus(context, state, "buffering_page", {
         requestedAfterSequence: provenAckSequence,
-        requestId: null,
-        nextEligibleAt: nowFn() + historySyncInterPageDelayMs,
+        requestId: payload.request_id ?? state.requestId ?? null,
+        records: [],
+        recordSequences: new Set(),
         pausedReason: null,
       });
 
-      logBackfill("scheduling next history sync page", {
+      logBackfill("awaiting next history page", {
         deviceId,
         bootId: state.bootId,
         afterSequence: provenAckSequence,
         highWaterSequence: payload.high_water_sequence ?? 0,
         hasMore: payload.has_more ?? false,
-        maxRecords: historySyncPageSize,
-        waitMs: historySyncInterPageDelayMs,
       });
-
-      scheduleBackfillPump(deviceId, historySyncInterPageDelayMs);
     } catch (error) {
       pauseBackfill(context, state, "history sync persistence failed", {
         deviceId,
@@ -663,8 +619,7 @@ export function createRuntimeBridge({
       telemetryResult?.after?.gatewayConnectionState ??
       telemetryResult?.before?.gatewayConnectionState ??
       "connected";
-    const previousConnectionState = context.lastTelemetryConnectionState;
-    context.lastTelemetryConnectionState = nextConnectionState;
+    context.lastGatewayConnectionState = nextConnectionState;
 
     if (previousBootId && payload.bootId && previousBootId !== payload.bootId) {
       removeBackfillState(payload.deviceId);
@@ -701,14 +656,7 @@ export function createRuntimeBridge({
     }
 
     if (nextConnectionState === "connected") {
-      const state = ensureBackfillState(context, payload);
-      if (
-        state &&
-        previousConnectionState !== "connected" &&
-        state.status === "waiting_for_stable_live"
-      ) {
-        scheduleBackfillPump(payload.deviceId, Math.max(0, (state.nextEligibleAt ?? nowFn()) - nowFn()));
-      }
+      ensureBackfillState(context, payload);
     }
   }
 
@@ -728,6 +676,14 @@ export function createRuntimeBridge({
         kind: event.record?.kind ?? null,
       });
       return;
+    }
+
+    if (!state.requestId && event.request_id) {
+      state.requestId = event.request_id;
+      logBackfill("bound history request", {
+        deviceId: deviceId ?? null,
+        requestId: state.requestId,
+      });
     }
 
     if (event.request_id !== state.requestId) {
@@ -840,6 +796,20 @@ export function createRuntimeBridge({
       event.gatewayConnectionState ?? event.gateway_connection_state ?? "disconnected";
 
     if (connectionState === "connecting" || connectionState === "reconnecting") {
+      const knownDeviceId =
+        node.knownDeviceId ??
+        node.known_device_id ??
+        runtimeServer.resolveKnownDeviceId(peripheralInfo) ??
+        null;
+      if (knownDeviceId) {
+        const context = deviceContexts.get(knownDeviceId) ?? createDeviceContext(knownDeviceId);
+        context.lastGatewayConnectionState = connectionState;
+        context.peripheralId = peripheralInfo.peripheralId ?? context.peripheralId ?? null;
+        context.address = peripheralInfo.address ?? context.address ?? null;
+        context.advertisedName = peripheralInfo.localName ?? context.advertisedName ?? null;
+        context.rssi = peripheralInfo.rssi ?? context.rssi ?? null;
+        deviceContexts.set(knownDeviceId, context);
+      }
       runtimeServer.noteConnecting({
         ...peripheralInfo,
         reconnectAttempt: event.reconnect?.attempt ?? null,
@@ -851,6 +821,40 @@ export function createRuntimeBridge({
     }
 
     if (connectionState === "connected") {
+      const knownDeviceId =
+        node.knownDeviceId ??
+        node.known_device_id ??
+        runtimeServer.resolveKnownDeviceId(peripheralInfo) ??
+        null;
+      const eventBootId = event.bootId ?? event.boot_id ?? null;
+
+      if (knownDeviceId) {
+        const context = deviceContexts.get(knownDeviceId) ?? createDeviceContext(knownDeviceId);
+        context.lastGatewayConnectionState = "connected";
+        context.bootId = eventBootId ?? context.bootId ?? null;
+        context.peripheralId = peripheralInfo.peripheralId ?? context.peripheralId ?? null;
+        context.address = peripheralInfo.address ?? context.address ?? null;
+        context.advertisedName = peripheralInfo.localName ?? context.advertisedName ?? null;
+        context.rssi = peripheralInfo.rssi ?? context.rssi ?? null;
+        deviceContexts.set(knownDeviceId, context);
+
+        if (context.bootId) {
+          ensureBackfillState(context, {
+            deviceId: knownDeviceId,
+            bootId: context.bootId,
+            firmwareVersion: context.firmwareVersion,
+            hardwareId: context.hardwareId,
+          });
+        } else {
+          logBackfill("connected event missing boot metadata; history sync deferred", {
+            deviceId: knownDeviceId,
+            peripheralId: peripheralInfo.peripheralId ?? null,
+            knownDeviceId,
+            eventBootId,
+          });
+        }
+      }
+
       const transition = runtimeServer.noteConnected({
         ...peripheralInfo,
         reconnectAttempt: event.reconnect?.attempt ?? null,
@@ -919,7 +923,7 @@ export function createRuntimeBridge({
       removeBackfillState(knownDeviceId);
     }
     if (context) {
-      context.lastTelemetryConnectionState = "disconnected";
+      context.lastGatewayConnectionState = "disconnected";
       syncBackfillContext(context, null);
     }
   }

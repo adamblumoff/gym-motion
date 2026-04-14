@@ -22,7 +22,7 @@ export function createDeviceContext(deviceId) {
     address: null,
     advertisedName: null,
     rssi: null,
-    lastTelemetryConnectionState: null,
+    lastGatewayConnectionState: null,
     backfillStatus: "idle",
     backfillBootId: null,
     backfillNextEligibleAt: null,

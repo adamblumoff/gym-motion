@@ -11,6 +11,21 @@ pub(super) struct SessionHandle {
     pub(super) task: JoinHandle<()>,
 }
 
+#[derive(Clone)]
+pub(super) enum ActiveSessionCommand {
+    BeginHistorySync {
+        device_id: String,
+        after_sequence: u64,
+        max_records: usize,
+        request_id: String,
+    },
+    AcknowledgeHistorySync {
+        device_id: String,
+        sequence: u64,
+        request_id: String,
+    },
+}
+
 pub(super) enum SessionCommand {
     StartManualScan,
     RefreshScanPolicy,

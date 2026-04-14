@@ -448,6 +448,86 @@ describe("windows winrt gateway runtime bridge", () => {
     ]);
   });
 
+  it("starts history sync after reconnect completion when boot metadata arrives before telemetry", async () => {
+    vi.useFakeTimers();
+
+    const sidecarCommands = [];
+    const fetchCalls = [];
+
+    const bridge = createRuntimeBridge({
+      config: {
+        heartbeatMinIntervalMs: 10_000,
+        desktopApiBaseUrl: "http://127.0.0.1:4111",
+        historySyncStabilityWindowMs: 5_000,
+      },
+      runtimeServer: createRuntimeServer({
+        resolveKnownDeviceId(input) {
+          if (input?.peripheralId === "AA:BB") {
+            return "stack-001";
+          }
+
+          return input?.knownDeviceId ?? null;
+        },
+      }),
+      debug() {},
+      sendToDesktop() {
+        return true;
+      },
+      sendSidecarCommand(command) {
+        sidecarCommands.push(command);
+        return Promise.resolve();
+      },
+      fetchImpl(url) {
+        fetchCalls.push(String(url));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            syncState: {
+              deviceId: "stack-001",
+              lastAckedSequence: 12,
+              lastAckedBootId: "boot-1",
+            },
+            historySyncState: {
+              deviceId: "stack-001",
+              lastAckedHistorySequence: 12,
+              lastHistorySyncCompletedAt: null,
+              lastHistoryOverflowDetectedAt: null,
+            },
+          }),
+        });
+      },
+    });
+
+    await bridge.handleNodeConnectionState({
+      gatewayConnectionState: "connected",
+      boot_id: "boot-1",
+      node: {
+        peripheralId: "AA:BB",
+        known_device_id: "stack-001",
+        localName: "GymMotion-aabb",
+      },
+    });
+
+    await flushBackgroundWork();
+    expect(fetchCalls).toEqual([]);
+    expect(sidecarCommands).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushBackgroundWork();
+
+    expect(fetchCalls).toEqual(["http://127.0.0.1:4111/api/device-sync/stack-001?bootId=boot-1"]);
+    expect(sidecarCommands).toEqual([
+      expect.objectContaining({
+        type: "begin_history_sync",
+        device_id: "stack-001",
+        after_sequence: 12,
+        max_records: 256,
+        request_id: expect.stringMatching(/^h[0-9a-z]+-[0-9a-z]+$/),
+      }),
+    ]);
+  });
+
   it("persists one history page and acks the repository-proven sequence", async () => {
     const sidecarCommands = [];
     const persistedBodies = [];

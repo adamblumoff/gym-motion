@@ -13,6 +13,7 @@ pub(super) async fn report_reconnect_completed(
     command_sender: &mpsc::UnboundedSender<SessionCommand>,
     node: &DiscoveredNode,
     reconnect: &Option<ReconnectStatus>,
+    boot_id: Option<String>,
     transport_ready_at: Option<Instant>,
     gatt_ready_at: Option<Instant>,
     reconnect_started_at: Instant,
@@ -23,6 +24,7 @@ pub(super) async fn report_reconnect_completed(
         .send(&Event::NodeConnectionState {
             node: node.clone(),
             gateway_connection_state: "connected".to_string(),
+            boot_id: boot_id.clone(),
             reason: None,
             reconnect: reconnect.clone(),
         })
@@ -35,6 +37,7 @@ pub(super) async fn report_reconnect_completed(
                 "peripheralId": node.peripheral_id,
                 "knownDeviceId": node.known_device_id,
                 "address": node.address,
+                "bootId": boot_id,
                 "reconnect": reconnect,
                 "transportMs": transport_ready_at
                     .map(|instant| instant.duration_since(reconnect_started_at).as_millis() as u64),

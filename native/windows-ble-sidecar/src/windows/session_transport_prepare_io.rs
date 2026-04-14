@@ -111,6 +111,7 @@ pub(super) async fn prepare_runtime_session_io(
     Characteristic,
     Characteristic,
     Characteristic,
+    Characteristic,
 )> {
     emit_handshake_step(
         writer,
@@ -165,19 +166,6 @@ pub(super) async fn prepare_runtime_session_io(
         config.verbose_logging,
         node,
         reconnect,
-        "resolving history control characteristic",
-    )
-    .await?;
-    let history_control_characteristic = required_characteristic(
-        peripheral,
-        config.history_control_uuid,
-        "history control characteristic not found",
-    )?;
-    emit_handshake_step(
-        writer,
-        config.verbose_logging,
-        node,
-        reconnect,
         "resolving runtime status characteristic",
     )
     .await?;
@@ -185,6 +173,19 @@ pub(super) async fn prepare_runtime_session_io(
         peripheral,
         config.status_uuid,
         "runtime status characteristic not found",
+    )?;
+    emit_handshake_step(
+        writer,
+        config.verbose_logging,
+        node,
+        reconnect,
+        "resolving history control characteristic",
+    )
+    .await?;
+    let history_control_characteristic = required_characteristic(
+        peripheral,
+        config.history_control_uuid,
+        "history control characteristic not found",
     )?;
     emit_handshake_step(
         writer,
@@ -260,7 +261,8 @@ pub(super) async fn prepare_runtime_session_io(
     Ok((
         notifications,
         control_characteristic,
-        history_control_characteristic,
         status_characteristic,
+        history_control_characteristic,
+        history_status_characteristic,
     ))
 }

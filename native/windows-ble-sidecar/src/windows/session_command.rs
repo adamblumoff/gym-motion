@@ -12,24 +12,23 @@ use super::{
         approved_rule_id_for_node, disconnected_nodes_removed_from_allowed, mark_node_connected,
         node_key, prune_reconnect_states, RECONNECT_ATTEMPT_LIMIT,
     },
-    handshake::write_chunked_json_command,
     session::{sync_current_scan_state, SessionContext, SessionState, SCAN_WINDOW_SECS},
     session_connection::{
         emit_visible_manual_candidates, peripheral_for_node, recover_visible_approved_node,
         spawn_manual_pair_for_candidate,
     },
     session_scan::emit_manual_scan_state,
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
 };
 
-async fn send_history_control_command(
+async fn send_active_session_command(
     context: &SessionContext,
     device_id: &str,
-    payload: serde_json::Value,
+    command: ActiveSessionCommand,
     missing_message: &str,
 ) -> Result<bool> {
     let active_session_controls = context.active_session_controls.lock().await;
-    let Some(control) = active_session_controls.get(device_id).cloned() else {
+    let Some(session) = active_session_controls.get(device_id).cloned() else {
         drop(active_session_controls);
         context
             .writer
@@ -45,25 +44,14 @@ async fn send_history_control_command(
     };
     drop(active_session_controls);
 
-    let write_guard = control.history.write_lock.lock().await;
-    let result = write_chunked_json_command(
-        &control.history.peripheral,
-        &control.history.characteristic,
-        &payload.to_string(),
-    )
-    .await;
-    drop(write_guard);
-    result?;
+    session.command_sender.send(command).map_err(|error| {
+        anyhow::anyhow!(
+            "active session command channel closed for {}: {}",
+            device_id,
+            error
+        )
+    })?;
     Ok(true)
-}
-
-async fn active_history_session_id(context: &SessionContext, device_id: &str) -> Option<String> {
-    context
-        .active_session_controls
-        .lock()
-        .await
-        .get(device_id)
-        .map(|channels| channels.history.app_session_id.clone())
 }
 
 pub(super) async fn handle_session_command(
@@ -93,30 +81,15 @@ pub(super) async fn handle_session_command(
             max_records,
             request_id,
         } => {
-            let Some(session_id) = active_history_session_id(context, &device_id).await else {
-                context
-                    .writer
-                    .send(&Event::Log {
-                        level: "warn".to_string(),
-                        message: format!(
-                            "Skipping history sync for {} because it is not currently connected.",
-                            device_id
-                        ),
-                        details: Some(json!({ "deviceId": device_id })),
-                    })
-                    .await?;
-                return Ok(());
-            };
-            send_history_control_command(
+            send_active_session_command(
                 context,
                 &device_id,
-                json!({
-                    "type": "history-page-request",
-                    "sessionId": session_id,
-                    "requestId": request_id,
-                    "afterSequence": after_sequence,
-                    "maxRecords": max_records,
-                }),
+                ActiveSessionCommand::BeginHistorySync {
+                    device_id: device_id.clone(),
+                    after_sequence,
+                    max_records,
+                    request_id,
+                },
                 &format!(
                     "Skipping history sync for {} because it is not currently connected.",
                     device_id
@@ -130,29 +103,14 @@ pub(super) async fn handle_session_command(
             sequence,
             request_id,
         } => {
-            let Some(session_id) = active_history_session_id(context, &device_id).await else {
-                context
-                    .writer
-                    .send(&Event::Log {
-                        level: "warn".to_string(),
-                        message: format!(
-                            "Skipping history ack for {} because it is not currently connected.",
-                            device_id
-                        ),
-                        details: Some(json!({ "deviceId": device_id })),
-                    })
-                    .await?;
-                return Ok(());
-            };
-            send_history_control_command(
+            send_active_session_command(
                 context,
                 &device_id,
-                json!({
-                    "type": "history-page-ack",
-                    "sessionId": session_id,
-                    "requestId": request_id,
-                    "sequence": sequence,
-                }),
+                ActiveSessionCommand::AcknowledgeHistorySync {
+                    device_id: device_id.clone(),
+                    sequence,
+                    request_id,
+                },
                 &format!(
                     "Skipping history ack for {} because it is not currently connected.",
                     device_id
@@ -401,6 +359,7 @@ pub(super) async fn handle_session_command(
                 .send(&Event::NodeConnectionState {
                     node,
                     gateway_connection_state: "disconnected".to_string(),
+                    boot_id: None,
                     reason: Some(reason),
                     reconnect,
                 })

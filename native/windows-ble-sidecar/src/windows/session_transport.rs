@@ -26,7 +26,7 @@ const PRE_SESSION_SETUP_RETRY_DELAY_MS: u64 = 750;
 const PRE_SESSION_SETUP_ATTEMPTS: u32 = 3;
 const SESSION_BEGIN_RETRY_LIMIT: u32 = 1;
 const POST_GATT_READY_SETTLE_MS: u64 = 250;
-const POST_SUBSCRIBE_READY_SETTLE_MS: u64 = 150;
+const POST_SUBSCRIBE_READY_SETTLE_MS: u64 = 1000;
 const COLD_BOOT_READY_UPTIME_MS: u64 = 8_000;
 const COLD_BOOT_READY_MAX_WAIT_MS: u64 = 5_000;
 
@@ -62,6 +62,7 @@ pub(super) async fn connect_and_stream(
         .send(&Event::NodeConnectionState {
             node: node.clone(),
             gateway_connection_state: "connecting".to_string(),
+            boot_id: None,
             reason: None,
             reconnect: reconnect.clone(),
         })

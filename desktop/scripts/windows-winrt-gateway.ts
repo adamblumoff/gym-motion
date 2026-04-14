@@ -465,6 +465,15 @@ function handleSidecarEvent(event) {
       emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
       break;
     case "node_connection_state":
+      log("received node connection state", {
+        state:
+          event.gateway_connection_state ??
+          event.gatewayConnectionState ??
+          "disconnected",
+        peripheralId: event.node?.peripheral_id ?? event.node?.peripheralId ?? null,
+        knownDeviceId: event.node?.known_device_id ?? event.node?.knownDeviceId ?? null,
+        bootId: event.boot_id ?? event.bootId ?? null,
+      });
       void enqueueNodeConnectionStateEvent(event);
       break;
     case "telemetry": {

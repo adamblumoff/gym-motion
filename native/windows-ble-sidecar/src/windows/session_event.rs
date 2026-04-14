@@ -279,6 +279,7 @@ pub(super) async fn handle_central_event(
                     .send(&Event::NodeConnectionState {
                         node,
                         gateway_connection_state: "disconnected".to_string(),
+                        boot_id: None,
                         reason: Some("Device disconnected.".to_string()),
                         reconnect,
                     })

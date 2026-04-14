@@ -32,7 +32,7 @@ use super::{
         pause_approved_reconnect_for_operator_decision, restart_approved_reconnect_scan,
         sync_scan_state, APPROVED_RECONNECT_DIAGNOSTIC_MS,
     },
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
     session_util::{emit_verbose_log, normalize_adapter_state},
     writer::EventWriter,
 };
@@ -43,20 +43,15 @@ pub(super) const SCAN_WINDOW_SECS: u64 = 15;
 pub(super) struct ActiveLiveControl {
     pub(super) peripheral: Peripheral,
     pub(super) characteristic: Characteristic,
+    pub(super) history_control_characteristic: Characteristic,
+    pub(super) status_characteristic: Characteristic,
+    pub(super) history_status_characteristic: Characteristic,
     pub(super) write_lock: Arc<Mutex<()>>,
-}
-
-#[derive(Clone)]
-pub(super) struct ActiveHistoryControl {
-    pub(super) peripheral: Peripheral,
-    pub(super) characteristic: Characteristic,
-    pub(super) write_lock: Arc<Mutex<()>>,
-    pub(super) app_session_id: String,
 }
 
 #[derive(Clone)]
 pub(super) struct ActiveSessionChannels {
-    pub(super) history: ActiveHistoryControl,
+    pub(super) command_sender: mpsc::UnboundedSender<ActiveSessionCommand>,
 }
 
 pub(super) struct SessionContext {
@@ -199,6 +194,7 @@ async fn handle_reconnect_scan_restart_tick(
                 .send(&Event::NodeConnectionState {
                     node: disconnected_node_from_rule(&paused_rule),
                     gateway_connection_state: "disconnected".to_string(),
+                    boot_id: None,
                     reason: Some(format!(
                         "Auto-reconnect paused after {} scan bursts.",
                         APPROVED_RECONNECT_SCAN_BURST_LIMIT

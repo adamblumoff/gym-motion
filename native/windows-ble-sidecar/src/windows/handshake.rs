@@ -7,9 +7,19 @@ use serde_json::json;
 use tokio::time::{sleep, Duration};
 
 const APP_SESSION_LEASE_TIMEOUT_MS: u64 = 15_000;
-const CONTROL_CHUNK_SIZE: usize = 120;
+// Keep control writes comfortably below common negotiated ATT MTUs so the
+// firmware always receives each framed body chunk as a normal write callback.
+const CONTROL_CHUNK_SIZE: usize = 96;
 const COMMAND_WRITE_ATTEMPTS: u32 = 3;
 const COMMAND_WRITE_RETRY_DELAY_MS: u64 = 200;
+const CONTROL_FRAME_WRITE_INTERVAL_MS: u64 = 20;
+
+const CONTROL_WRITE_TYPE: WriteType = WriteType::WithResponse;
+
+pub(crate) fn control_write_mode(payload: &str) -> &'static str {
+    let _ = payload;
+    "framed"
+}
 
 pub(crate) async fn send_app_session_lease(
     peripheral: &Peripheral,
@@ -46,17 +56,27 @@ pub(crate) async fn write_chunked_json_command(
     characteristic: &Characteristic,
     payload: &str,
 ) -> Result<()> {
+    write_chunked_json_command_with_type(peripheral, characteristic, payload, CONTROL_WRITE_TYPE).await
+}
+
+pub(crate) async fn write_chunked_json_command_with_type(
+    peripheral: &Peripheral,
+    characteristic: &Characteristic,
+    payload: &str,
+    write_type: WriteType,
+) -> Result<()> {
     let frames = control_command_frames(payload);
     for attempt in 1..=COMMAND_WRITE_ATTEMPTS {
         let mut last_error = None;
         for chunk in &frames {
             if let Err(error) = peripheral
-                .write(characteristic, chunk, WriteType::WithResponse)
+                .write(characteristic, chunk, write_type)
                 .await
             {
                 last_error = Some(error);
                 break;
             }
+            sleep(Duration::from_millis(CONTROL_FRAME_WRITE_INTERVAL_MS)).await;
         }
 
         if let Some(error) = last_error {

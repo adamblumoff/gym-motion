@@ -24,13 +24,17 @@ use crate::{
 use super::{
     approval::is_approved,
     config::Config,
-    handshake::{send_app_session_begin, write_chunked_json_command},
-    session::{ActiveHistoryControl, ActiveLiveControl, ActiveSessionChannels},
-    session_lease::{is_closed_handle_error_message, spawn_lease_task},
+    handshake::{
+        control_write_mode, send_app_session_begin, send_app_session_lease,
+        write_chunked_json_command,
+    },
+    session::{ActiveLiveControl, ActiveSessionChannels},
+    session_lease::is_closed_handle_error_message,
+    session_transport::APP_SESSION_HEARTBEAT_MS,
     session_transport_monitor_reporting::report_reconnect_completed,
     session_transport_recovery::{emit_handshake_step, recover_active_session_control_path},
     session_transport_setup::PreparedSession,
-    session_types::SessionCommand,
+    session_types::{ActiveSessionCommand, SessionCommand},
     writer::EventWriter,
 };
 
@@ -42,11 +46,125 @@ pub(super) struct MonitorSessionConfig {
     pub(super) post_subscribe_ready_settle_ms: u64,
 }
 
+async fn handle_history_status_payload(
+    writer: &EventWriter,
+    node: &DiscoveredNode,
+    payload: Value,
+    known_device_ids: &Arc<RwLock<HashMap<String, String>>>,
+    active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
+    current_session_device_id: &mut Option<String>,
+    active_session_command_sender: &mpsc::UnboundedSender<ActiveSessionCommand>,
+) -> Result<bool> {
+    let status_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    match status_type.as_str() {
+        "history-record" => match serde_json::from_value::<HistoryRecordPayload>(payload) {
+            Ok(status) => {
+                if let Some(peripheral_id) = node.peripheral_id.clone() {
+                    known_device_ids
+                        .write()
+                        .await
+                        .insert(peripheral_id, status.device_id.clone());
+                }
+                *current_session_device_id = Some(status.device_id.clone());
+                active_session_controls.lock().await.insert(
+                    status.device_id.clone(),
+                    ActiveSessionChannels {
+                        command_sender: active_session_command_sender.clone(),
+                    },
+                );
+                let mut enriched = node.clone();
+                enriched.known_device_id = Some(status.device_id.clone());
+                writer
+                    .send(&Event::HistoryRecord {
+                        node: enriched,
+                        device_id: status.device_id,
+                        request_id: status.request_id,
+                        record: status.record,
+                    })
+                    .await?;
+                Ok(true)
+            }
+            Err(error) => {
+                writer
+                    .error(
+                        format!("Failed to parse history record payload: {error}"),
+                        Some(json!({ "node": node.id })),
+                    )
+                    .await;
+                Ok(true)
+            }
+        },
+        "history-page-complete" => {
+            match serde_json::from_value::<HistorySyncCompletePayload>(payload) {
+                Ok(status) => {
+                    if let Some(peripheral_id) = node.peripheral_id.clone() {
+                        known_device_ids
+                            .write()
+                            .await
+                            .insert(peripheral_id, status.device_id.clone());
+                    }
+                    *current_session_device_id = Some(status.device_id.clone());
+                    active_session_controls.lock().await.insert(
+                        status.device_id.clone(),
+                        ActiveSessionChannels {
+                            command_sender: active_session_command_sender.clone(),
+                        },
+                    );
+                    let mut enriched = node.clone();
+                    enriched.known_device_id = Some(status.device_id.clone());
+                    writer
+                        .send(&Event::HistorySyncComplete {
+                            node: enriched,
+                            payload: status,
+                        })
+                        .await?;
+                    Ok(true)
+                }
+                Err(error) => {
+                    writer
+                        .error(
+                            format!("Failed to parse history sync completion payload: {error}"),
+                            Some(json!({ "node": node.id })),
+                        )
+                        .await;
+                    Ok(true)
+                }
+            }
+        }
+        "history-error" => match serde_json::from_value::<HistoryErrorPayload>(payload) {
+            Ok(status) => {
+                writer
+                    .send(&Event::HistoryError {
+                        node: node.clone(),
+                        payload: status,
+                    })
+                    .await?;
+                Ok(true)
+            }
+            Err(error) => {
+                writer
+                    .error(
+                        format!("Failed to parse history error payload: {error}"),
+                        Some(json!({ "node": node.id })),
+                    )
+                    .await;
+                Ok(true)
+            }
+        },
+        _ => Ok(false),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RuntimeSessionStatusDisposition {
     Ignore,
     MatchRequested,
-    ReclaimExisting {
+    ReuseObserved {
         session_id: String,
         session_nonce: String,
     },
@@ -72,7 +190,7 @@ fn classify_runtime_session_status(
         return RuntimeSessionStatusDisposition::MatchRequested;
     }
 
-    RuntimeSessionStatusDisposition::ReclaimExisting {
+    RuntimeSessionStatusDisposition::ReuseObserved {
         session_id,
         session_nonce,
     }
@@ -94,33 +212,15 @@ pub(super) async fn monitor_active_session(
     reconnect_started_at: Instant,
     monitor_config: MonitorSessionConfig,
 ) -> Result<Option<String>> {
-    fn spawn_placeholder_lease_task() -> (
-        watch::Sender<bool>,
-        mpsc::UnboundedReceiver<String>,
-        tokio::task::JoinHandle<()>,
-    ) {
-        let (lease_shutdown_tx, mut lease_shutdown_rx) = watch::channel(false);
-        let (_lease_failure_tx, lease_failure_rx) = mpsc::unbounded_channel::<String>();
-        let lease_task = tokio::spawn(async move {
-            loop {
-                if lease_shutdown_rx.changed().await.is_err() || *lease_shutdown_rx.borrow() {
-                    break;
-                }
-            }
-        });
-
-        (lease_shutdown_tx, lease_failure_rx, lease_task)
-    }
-
     async fn remember_active_session_control(
         active_session_controls: &Arc<Mutex<HashMap<String, ActiveSessionChannels>>>,
         device_id: &str,
-        history: &ActiveHistoryControl,
+        active_session_command_sender: &mpsc::UnboundedSender<ActiveSessionCommand>,
     ) {
         active_session_controls.lock().await.insert(
             device_id.to_string(),
             ActiveSessionChannels {
-                history: history.clone(),
+                command_sender: active_session_command_sender.clone(),
             },
         );
     }
@@ -132,6 +232,132 @@ pub(super) async fn monitor_active_session(
         if let Some(device_id) = device_id {
             active_session_controls.lock().await.remove(device_id);
         }
+    }
+
+    async fn send_history_runtime_control_command(
+        writer: &EventWriter,
+        node: &DiscoveredNode,
+        live_control: &mut ActiveLiveControl,
+        session_id: &str,
+        command: &ActiveSessionCommand,
+    ) -> Result<()> {
+        *live_control = refresh_active_live_control_handles(&live_control.peripheral, live_control).await?;
+        let (payload, request_id) = match command {
+            ActiveSessionCommand::BeginHistorySync {
+                device_id: _,
+                after_sequence,
+                max_records,
+                request_id,
+            } => (
+                json!({
+                    "type": "history-page-request",
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "afterSequence": after_sequence,
+                    "maxRecords": max_records,
+                }),
+                request_id.as_str(),
+            ),
+            ActiveSessionCommand::AcknowledgeHistorySync {
+                device_id: _,
+                sequence,
+                request_id,
+            } => (
+                json!({
+                    "type": "history-page-ack",
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "sequence": sequence,
+                }),
+                request_id.as_str(),
+            ),
+        };
+
+        let payload_text = payload.to_string();
+        let write_guard = live_control.write_lock.lock().await;
+        let write_mode = control_write_mode(&payload_text);
+        write_chunked_json_command(
+            &live_control.peripheral,
+            &live_control.history_control_characteristic,
+            &payload_text,
+        )
+        .await?;
+        drop(write_guard);
+
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message: "Sent history control command to firmware.".to_string(),
+                details: Some(json!({
+                    "deviceId": match command {
+                        ActiveSessionCommand::BeginHistorySync { device_id, .. } => device_id,
+                        ActiveSessionCommand::AcknowledgeHistorySync { device_id, .. } => device_id,
+                    },
+                    "commandType": payload.get("type").and_then(|value| value.as_str()),
+                    "requestId": request_id,
+                    "sessionId": session_id,
+                    "writeMode": write_mode,
+                    "controlUuid": live_control.history_control_characteristic.uuid.to_string(),
+                })),
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn refresh_active_live_control_handles(
+        peripheral: &btleplug::platform::Peripheral,
+        live_control: &ActiveLiveControl,
+    ) -> Result<ActiveLiveControl> {
+        peripheral
+            .discover_services()
+            .await
+            .context("refresh active live control services failed")?;
+
+        let characteristics = peripheral.characteristics();
+        let control_uuid = live_control.characteristic.uuid;
+        let status_uuid = live_control.status_characteristic.uuid;
+        let history_control_uuid = live_control.history_control_characteristic.uuid;
+        let history_status_uuid = live_control.history_status_characteristic.uuid;
+
+        let characteristic = characteristics
+            .iter()
+            .find(|candidate| candidate.uuid == control_uuid)
+            .cloned()
+            .ok_or_else(|| anyhow!("runtime control characteristic not found during refresh"))?;
+        let status_characteristic = characteristics
+            .iter()
+            .find(|candidate| candidate.uuid == status_uuid)
+            .cloned()
+            .ok_or_else(|| anyhow!("runtime status characteristic not found during refresh"))?;
+        let history_control_characteristic = characteristics
+            .iter()
+            .find(|candidate| candidate.uuid == history_control_uuid)
+            .cloned()
+            .ok_or_else(|| anyhow!("history control characteristic not found during refresh"))?;
+        let history_status_characteristic = characteristics
+            .iter()
+            .find(|candidate| candidate.uuid == history_status_uuid)
+            .cloned()
+            .ok_or_else(|| anyhow!("history status characteristic not found during refresh"))?;
+
+        peripheral
+            .subscribe(&status_characteristic)
+            .await
+            .context("runtime status resubscribe failed during live control refresh")?;
+        peripheral
+            .subscribe(&history_status_characteristic)
+            .await
+            .context("history status resubscribe failed during live control refresh")?;
+
+        Ok(ActiveLiveControl {
+            peripheral: peripheral.clone(),
+            characteristic,
+            history_control_characteristic,
+            status_characteristic,
+            history_status_characteristic,
+            write_lock: live_control.write_lock.clone(),
+        })
     }
 
     emit_handshake_step(
@@ -153,23 +379,26 @@ pub(super) async fn monitor_active_session(
     let mut ack_received = false;
     let mut session_begin_retry_count = 0_u32;
     let mut ack_confirmed_node: Option<DiscoveredNode> = None;
+    let mut ack_confirmed_boot_id: Option<String> = None;
     let mut current_session_device_id: Option<String> = None;
     let mut current_app_session_id = app_session_id;
     let mut current_app_session_nonce = app_session_nonce;
+    let (active_session_command_sender, mut active_session_commands) =
+        mpsc::unbounded_channel::<ActiveSessionCommand>();
     let mut current_live_control = ActiveLiveControl {
         peripheral: prepared.peripheral.clone(),
         characteristic: prepared.live_control_characteristic,
+        history_control_characteristic: prepared.history_control_characteristic,
+        status_characteristic: prepared.status_characteristic.clone(),
+        history_status_characteristic: prepared.history_status_characteristic.clone(),
         write_lock: std::sync::Arc::new(Mutex::new(())),
     };
-    let mut current_history_control = ActiveHistoryControl {
-        peripheral: prepared.peripheral.clone(),
-        characteristic: prepared.history_control_characteristic,
-        write_lock: std::sync::Arc::new(Mutex::new(())),
-        app_session_id: current_app_session_id.clone(),
-    };
-    let (mut lease_shutdown_tx, mut lease_failure_rx, mut lease_task) =
-        spawn_placeholder_lease_task();
-    let mut lease_task_started = false;
+    let mut lease_heartbeat =
+        tokio::time::interval(Duration::from_millis(APP_SESSION_HEARTBEAT_MS));
+    lease_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    lease_heartbeat.tick().await;
+    let mut lease_heartbeat_enabled = false;
+    let mut first_lease_logged = false;
 
     if monitor_config.post_subscribe_ready_settle_ms > 0 {
         sleep(Duration::from_millis(
@@ -201,8 +430,6 @@ pub(super) async fn monitor_active_session(
         tokio::select! {
             changed = session_shutdown.changed() => {
                 if changed.is_ok() && *session_shutdown.borrow() {
-                    let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
                     if prepared.peripheral.is_connected().await.unwrap_or(false) {
                         let _ = writer
                             .send(&Event::Log {
@@ -217,12 +444,22 @@ pub(super) async fn monitor_active_session(
                                     "address": node.address,
                                 })),
                             })
-                            .await;
+                                .await;
                         let _ = prepared.peripheral.disconnect().await;
                         sleep(Duration::from_millis(100)).await;
                     }
                     return Ok(None);
                 }
+            }
+            Some(active_command) = active_session_commands.recv() => {
+                send_history_runtime_control_command(
+                    &writer,
+                    &node,
+                    &mut current_live_control,
+                    &current_app_session_id,
+                    &active_command,
+                )
+                .await?;
             }
             notification = prepared.notifications.next() => {
                 let Some(notification) = notification else {
@@ -270,25 +507,48 @@ pub(super) async fn monitor_active_session(
                                         .await?;
                                     continue;
                                 };
-                                if session_id != current_app_session_id
-                                    || session_nonce != current_app_session_nonce
-                                {
-                                    continue;
+                                match classify_runtime_session_status(
+                                    &status,
+                                    &current_app_session_id,
+                                    &current_app_session_nonce,
+                                ) {
+                                    RuntimeSessionStatusDisposition::Ignore => continue,
+                                    RuntimeSessionStatusDisposition::MatchRequested => {
+                                        emit_handshake_step(
+                                            &writer,
+                                            config.verbose_logging,
+                                            &node,
+                                            &reconnect,
+                                            "session health confirmed",
+                                        )
+                                        .await?;
+                                    }
+                                    RuntimeSessionStatusDisposition::ReuseObserved {
+                                        session_id,
+                                        session_nonce,
+                                    } => {
+                                        writer
+                                            .send(&Event::Log {
+                                                level: "info".to_string(),
+                                                message: "Observed an existing live runtime app session; reusing it for reconnect.".to_string(),
+                                                details: Some(json!({
+                                                    "peripheralId": node.peripheral_id,
+                                                    "knownDeviceId": node.known_device_id,
+                                                    "address": node.address,
+                                                    "expectedSessionId": current_app_session_id,
+                                                    "expectedSessionNonce": current_app_session_nonce,
+                                                    "observedSessionId": session_id,
+                                                    "observedSessionNonce": session_nonce,
+                                                    "bootId": status.boot_id,
+                                                })),
+                                            })
+                                            .await?;
+                                        current_app_session_id = session_id;
+                                        current_app_session_nonce = session_nonce;
+                                    }
                                 }
                                 ack_received = true;
-                                if !lease_task_started {
-                                    let _ = lease_shutdown_tx.send(true);
-                                    let _ = lease_task.await;
-                                    let (new_shutdown_tx, new_failure_rx, new_lease_task) =
-                                        spawn_lease_task(
-                                            current_live_control.clone(),
-                                            current_app_session_id.clone(),
-                                        );
-                                    lease_shutdown_tx = new_shutdown_tx;
-                                    lease_failure_rx = new_failure_rx;
-                                    lease_task = new_lease_task;
-                                    lease_task_started = true;
-                                }
+                                lease_heartbeat_enabled = true;
                                 let mut enriched = node.clone();
                                 if let Some(device_id) = status.device_id.clone() {
                                     if let Some(peripheral_id) = node.peripheral_id.clone() {
@@ -299,43 +559,14 @@ pub(super) async fn monitor_active_session(
                                     }
                                     enriched.known_device_id = Some(device_id);
                                 }
+                                ack_confirmed_boot_id = status.boot_id.clone();
                                 ack_confirmed_node = Some(enriched.clone());
-                                emit_handshake_step(
-                                    &writer,
-                                    config.verbose_logging,
-                                    &node,
-                                    &reconnect,
-                                    "sending sync-now",
-                                )
-                                .await?;
-                                let write_guard = current_live_control.write_lock.lock().await;
-                                let sync_now_result = write_chunked_json_command(
-                                    &current_live_control.peripheral,
-                                    &current_live_control.characteristic,
-                                    r#"{"type":"sync-now"}"#,
-                                )
-                                .await;
-                                drop(write_guard);
-                                if let Err(error) = sync_now_result {
-                                    writer
-                                        .send(&Event::Log {
-                                            level: "warn".to_string(),
-                                            message: format!("sync-now step failed for {}", node.label),
-                                            details: Some(json!({
-                                                "peripheralId": enriched.peripheral_id,
-                                                "knownDeviceId": enriched.known_device_id,
-                                                "address": enriched.address,
-                                                "error": format!("{:#}", error),
-                                            })),
-                                        })
-                                        .await?;
-                                }
                                 if let Some(device_id) = status.device_id.as_deref() {
                                     current_session_device_id = Some(device_id.to_string());
                                     remember_active_session_control(
                                         &active_session_controls,
                                         device_id,
-                                        &current_history_control,
+                                        &active_session_command_sender,
                                     )
                                     .await;
                                 }
@@ -346,12 +577,38 @@ pub(super) async fn monitor_active_session(
                                         &command_sender,
                                         &enriched,
                                         &reconnect,
+                                        ack_confirmed_boot_id.clone(),
                                         prepared.transport_ready_at,
                                         prepared.gatt_ready_at,
                                         reconnect_started_at,
                                         false,
                                     )
                                     .await?;
+                                    let runtime_status_readback = current_live_control
+                                        .peripheral
+                                        .read(&current_live_control.status_characteristic)
+                                        .await
+                                        .ok()
+                                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                                    let history_status_readback = current_live_control
+                                        .peripheral
+                                        .read(&current_live_control.history_status_characteristic)
+                                        .await
+                                        .ok()
+                                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "info".to_string(),
+                                            message: "Read back status characteristics immediately after reconnect.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": node.known_device_id,
+                                                "address": node.address,
+                                                "runtimeStatusValue": runtime_status_readback,
+                                                "historyStatusValue": history_status_readback,
+                                            })),
+                                        })
+                                        .await?;
                                     continue;
                                 }
                                 session_health_sleep.as_mut().reset(
@@ -369,7 +626,48 @@ pub(super) async fn monitor_active_session(
                                     .await;
                             }
                             },
-                            _ => {}
+                            "history-debug" => {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: "Received firmware history debug status.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "payload": payload,
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                            other_status => {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "info".to_string(),
+                                        message: "Received runtime status during handshake.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "statusType": other_status,
+                                            "payload": payload,
+                                        })),
+                                    })
+                                    .await?;
+                                if handle_history_status_payload(
+                                    &writer,
+                                    &node,
+                                    payload,
+                                    &known_device_ids,
+                                    &active_session_controls,
+                                    &mut current_session_device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await?
+                                {
+                                    continue;
+                                }
+                            }
                         }
                     }
                     continue;
@@ -382,95 +680,33 @@ pub(super) async fn monitor_active_session(
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
-
-                        match status_type.as_str() {
-                            "history-record" => match serde_json::from_value::<HistoryRecordPayload>(payload) {
-                                Ok(status) => {
-                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
-                                        known_device_ids
-                                            .write()
-                                            .await
-                                            .insert(peripheral_id, status.device_id.clone());
-                                    }
-                                    current_session_device_id = Some(status.device_id.clone());
-                                    remember_active_session_control(
-                                        &active_session_controls,
-                                        &status.device_id,
-                                        &current_history_control,
-                                    )
-                                    .await;
-                                    let mut enriched = node.clone();
-                                    enriched.known_device_id = Some(status.device_id.clone());
-                                    writer
-                                        .send(&Event::HistoryRecord {
-                                            node: enriched,
-                                            device_id: status.device_id,
-                                            request_id: status.request_id,
-                                            record: status.record,
-                                        })
-                                        .await?;
-                                }
-                                Err(error) => {
-                                    writer
-                                        .error(
-                                            format!("Failed to parse history record payload: {error}"),
-                                            Some(json!({ "node": node.id })),
-                                        )
-                                        .await;
-                                }
-                            },
-                            "history-page-complete" => match serde_json::from_value::<HistorySyncCompletePayload>(payload) {
-                                Ok(status) => {
-                                    if let Some(peripheral_id) = node.peripheral_id.clone() {
-                                        known_device_ids
-                                            .write()
-                                            .await
-                                            .insert(peripheral_id, status.device_id.clone());
-                                    }
-                                    current_session_device_id = Some(status.device_id.clone());
-                                    remember_active_session_control(
-                                        &active_session_controls,
-                                        &status.device_id,
-                                        &current_history_control,
-                                    )
-                                    .await;
-                                    let mut enriched = node.clone();
-                                    enriched.known_device_id = Some(status.device_id.clone());
-                                    writer
-                                        .send(&Event::HistorySyncComplete {
-                                            node: enriched,
-                                            payload: status,
-                                        })
-                                        .await?;
-                                }
-                                Err(error) => {
-                                    writer
-                                        .error(
-                                            format!("Failed to parse history sync completion payload: {error}"),
-                                            Some(json!({ "node": node.id })),
-                                        )
-                                        .await;
-                                }
-                            },
-                            "history-error" => match serde_json::from_value::<HistoryErrorPayload>(payload) {
-                                Ok(status) => {
-                                    writer
-                                        .send(&Event::HistoryError {
-                                            node: node.clone(),
-                                            payload: status,
-                                        })
-                                        .await?;
-                                }
-                                Err(error) => {
-                                    writer
-                                        .error(
-                                            format!("Failed to parse history error payload: {error}"),
-                                            Some(json!({ "node": node.id })),
-                                        )
-                                        .await;
-                                }
-                            },
-                            _ => {}
+                        if status_type == "history-debug" {
+                            writer
+                                .send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: "Received firmware history debug status.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "payload": payload,
+                                    })),
+                                })
+                                .await?;
+                            continue;
+                        }
+                        if handle_history_status_payload(
+                            &writer,
+                            &node,
+                            payload,
+                            &known_device_ids,
+                            &active_session_controls,
+                            &mut current_session_device_id,
+                            &active_session_command_sender,
+                        )
+                        .await?
+                        {
+                            continue;
                         }
                     }
                     continue;
@@ -493,7 +729,7 @@ pub(super) async fn monitor_active_session(
                             remember_active_session_control(
                                 &active_session_controls,
                                 &payload.device_id,
-                                &current_history_control,
+                                &active_session_command_sender,
                             )
                             .await;
                             let mut enriched = node.clone();
@@ -525,12 +761,31 @@ pub(super) async fn monitor_active_session(
                         &command_sender,
                         &completed_node,
                         &reconnect,
+                        ack_confirmed_boot_id.clone(),
                         prepared.transport_ready_at,
                         prepared.gatt_ready_at,
                         reconnect_started_at,
                         false,
                     )
                     .await?;
+                    let runtime_status_readback = current_live_control
+                        .peripheral
+                        .read(&current_live_control.status_characteristic)
+                        .await
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                    writer
+                        .send(&Event::Log {
+                            level: "info".to_string(),
+                            message: "Read back runtime status characteristic immediately after reconnect.".to_string(),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": completed_node.known_device_id,
+                                "address": node.address,
+                                "runtimeStatusValue": runtime_status_readback,
+                            })),
+                        })
+                        .await?;
                     continue;
                 }
 
@@ -575,7 +830,7 @@ pub(super) async fn monitor_active_session(
 
                 let raw_status_value = prepared
                     .peripheral
-                    .read(&prepared.status_characteristic)
+                    .read(&current_live_control.status_characteristic)
                     .await
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok());
@@ -589,126 +844,105 @@ pub(super) async fn monitor_active_session(
                         &current_app_session_id,
                         &current_app_session_nonce,
                     ) {
-                    RuntimeSessionStatusDisposition::MatchRequested => {
-                        writer
-                            .send(&Event::Log {
-                                level: "info".to_string(),
-                                message: "Session health ack notification was missed, but the runtime status characteristic already reflects the requested app session.".to_string(),
-                                details: Some(json!({
-                                    "peripheralId": node.peripheral_id,
-                                    "knownDeviceId": node.known_device_id,
-                                    "address": node.address,
-                                    "sessionId": current_app_session_id,
-                                })),
-                            })
-                            .await?;
-                        ack_received = true;
-                        if !lease_task_started {
-                            let _ = lease_shutdown_tx.send(true);
-                            let _ = lease_task.await;
-                            let (new_shutdown_tx, new_failure_rx, new_lease_task) =
-                                spawn_lease_task(
-                                    current_live_control.clone(),
-                                    current_app_session_id.clone(),
-                                );
-                            lease_shutdown_tx = new_shutdown_tx;
-                            lease_failure_rx = new_failure_rx;
-                            lease_task = new_lease_task;
-                            lease_task_started = true;
-                        }
-                        if let Some(device_id) = status.device_id.as_deref() {
-                            current_session_device_id = Some(device_id.to_string());
-                            remember_active_session_control(
-                                &active_session_controls,
-                                device_id,
-                                &current_history_control,
-                            )
-                            .await;
-                        }
-                        let mut enriched = node.clone();
-                        if let Some(device_id) = status.device_id.clone() {
-                            if let Some(peripheral_id) = node.peripheral_id.clone() {
-                                known_device_ids
-                                    .write()
-                                    .await
-                                    .insert(peripheral_id, device_id.clone());
+                        RuntimeSessionStatusDisposition::MatchRequested => {
+                            writer
+                                .send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: "Session health ack notification was missed, but the runtime status characteristic already reflects the requested app session.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "sessionId": current_app_session_id,
+                                        "bootId": status.boot_id,
+                                    })),
+                                })
+                                .await?;
+                            ack_received = true;
+                            ack_confirmed_boot_id = status.boot_id.clone();
+                            lease_heartbeat_enabled = true;
+                            if let Some(device_id) = status.device_id.as_deref() {
+                                current_session_device_id = Some(device_id.to_string());
+                                remember_active_session_control(
+                                    &active_session_controls,
+                                    device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await;
                             }
-                            enriched.known_device_id = Some(device_id);
-                        }
-                        ack_confirmed_node = Some(enriched);
-                        session_health_sleep.as_mut().reset(
-                            (Instant::now()
-                                + Duration::from_millis(
-                                    monitor_config.session_health_ack_timeout_ms,
-                                ))
-                            .into(),
-                        );
-                        continue;
-                    }
-                    RuntimeSessionStatusDisposition::ReclaimExisting {
-                        session_id: observed_session_id,
-                        session_nonce: observed_session_nonce,
-                    } => {
-                        writer
-                            .send(&Event::Log {
-                                level: "info".to_string(),
-                                message: "Reclaiming the node's existing runtime app session during reconnect bootstrap.".to_string(),
-                                details: Some(json!({
-                                    "peripheralId": node.peripheral_id,
-                                    "knownDeviceId": node.known_device_id,
-                                    "address": node.address,
-                                    "expectedSessionId": current_app_session_id,
-                                    "observedSessionId": observed_session_id,
-                                })),
-                            })
-                            .await?;
-                        current_app_session_id = observed_session_id;
-                        current_app_session_nonce = observed_session_nonce;
-                        current_history_control.app_session_id = current_app_session_id.clone();
-                        ack_received = true;
-                        if !lease_task_started {
-                            let _ = lease_shutdown_tx.send(true);
-                            let _ = lease_task.await;
-                            let (new_shutdown_tx, new_failure_rx, new_lease_task) =
-                                spawn_lease_task(
-                                    current_live_control.clone(),
-                                    current_app_session_id.clone(),
-                                );
-                            lease_shutdown_tx = new_shutdown_tx;
-                            lease_failure_rx = new_failure_rx;
-                            lease_task = new_lease_task;
-                            lease_task_started = true;
-                        }
-                        if let Some(device_id) = status.device_id.as_deref() {
-                            current_session_device_id = Some(device_id.to_string());
-                            remember_active_session_control(
-                                &active_session_controls,
-                                device_id,
-                                &current_history_control,
-                            )
-                            .await;
-                        }
-                        let mut enriched = node.clone();
-                        if let Some(device_id) = status.device_id.clone() {
-                            if let Some(peripheral_id) = node.peripheral_id.clone() {
-                                known_device_ids
-                                    .write()
-                                    .await
-                                    .insert(peripheral_id, device_id.clone());
+                            let mut enriched = node.clone();
+                            if let Some(device_id) = status.device_id.clone() {
+                                if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                    known_device_ids
+                                        .write()
+                                        .await
+                                        .insert(peripheral_id, device_id.clone());
+                                }
+                                enriched.known_device_id = Some(device_id);
                             }
-                            enriched.known_device_id = Some(device_id);
+                            ack_confirmed_node = Some(enriched);
+                            session_health_sleep.as_mut().reset(
+                                (Instant::now()
+                                    + Duration::from_millis(
+                                        monitor_config.session_health_ack_timeout_ms,
+                                    ))
+                                .into(),
+                            );
+                            continue;
                         }
-                        ack_confirmed_node = Some(enriched);
-                        session_health_sleep.as_mut().reset(
-                            (Instant::now()
-                                + Duration::from_millis(
-                                    monitor_config.session_health_ack_timeout_ms,
-                                ))
-                            .into(),
-                        );
-                        continue;
-                    }
-                    RuntimeSessionStatusDisposition::Ignore => {}
+                        RuntimeSessionStatusDisposition::ReuseObserved {
+                            session_id,
+                            session_nonce,
+                        } => {
+                            writer
+                                .send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: "Observed an existing live runtime app session during reconnect bootstrap; reusing it.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "expectedSessionId": current_app_session_id,
+                                        "expectedSessionNonce": current_app_session_nonce,
+                                        "observedSessionId": session_id,
+                                        "observedSessionNonce": session_nonce,
+                                        "bootId": status.boot_id,
+                                    })),
+                                })
+                                .await?;
+                            current_app_session_id = session_id;
+                            current_app_session_nonce = session_nonce;
+                            if let Some(device_id) = status.device_id.as_deref() {
+                                current_session_device_id = Some(device_id.to_string());
+                                remember_active_session_control(
+                                    &active_session_controls,
+                                    device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await;
+                            }
+                            let mut enriched = node.clone();
+                            if let Some(device_id) = status.device_id.clone() {
+                                if let Some(peripheral_id) = node.peripheral_id.clone() {
+                                    known_device_ids
+                                        .write()
+                                        .await
+                                        .insert(peripheral_id, device_id.clone());
+                                }
+                                enriched.known_device_id = Some(device_id);
+                            }
+                            ack_confirmed_boot_id = status.boot_id.clone();
+                            ack_confirmed_node = Some(enriched);
+                            session_health_sleep.as_mut().reset(
+                                (Instant::now()
+                                    + Duration::from_millis(
+                                        monitor_config.session_health_ack_timeout_ms,
+                                    ))
+                                .into(),
+                            );
+                            continue;
+                        }
+                        RuntimeSessionStatusDisposition::Ignore => {}
                     }
                 }
 
@@ -731,89 +965,170 @@ pub(super) async fn monitor_active_session(
                     session_begin_retry_count
                 ));
             }
+            _ = lease_heartbeat.tick(), if lease_heartbeat_enabled => {
+                current_live_control = refresh_active_live_control_handles(
+                    &current_live_control.peripheral,
+                    &current_live_control,
+                )
+                .await?;
+                let write_guard = current_live_control.write_lock.lock().await;
+                let lease_result = super::handshake::send_app_session_lease(
+                    &current_live_control.peripheral,
+                    &current_live_control.characteristic,
+                    &current_app_session_id,
+                )
+                .await;
+                drop(write_guard);
+
+                if let Err(error) = lease_result {
+                    let reason = format!("{:#}", error);
+                    if is_closed_handle_error_message(&reason)
+                        && prepared.peripheral.is_connected().await.unwrap_or(false)
+                    {
+                        match recover_active_session_control_path(
+                            &prepared.peripheral,
+                            &writer,
+                            &node,
+                            &reconnect,
+                            config.telemetry_uuid,
+                            config.control_uuid,
+                            config.status_uuid,
+                            config.history_control_uuid,
+                            config.history_status_uuid,
+                            &current_app_session_id,
+                            &current_app_session_nonce,
+                        )
+                        .await
+                        {
+                            Ok((
+                                recovered_control_characteristic,
+                                recovered_status_characteristic,
+                                recovered_history_control_characteristic,
+                                recovered_history_status_characteristic,
+                            )) => {
+                                current_live_control = ActiveLiveControl {
+                                    peripheral: prepared.peripheral.clone(),
+                                    characteristic: recovered_control_characteristic,
+                                    history_control_characteristic: recovered_history_control_characteristic,
+                                    status_characteristic: recovered_status_characteristic,
+                                    history_status_characteristic: recovered_history_status_characteristic,
+                                    write_lock: current_live_control.write_lock.clone(),
+                                };
+                                if let Some(device_id) = current_session_device_id.as_deref() {
+                                    remember_active_session_control(
+                                        &active_session_controls,
+                                        device_id,
+                                        &active_session_command_sender,
+                                    )
+                                    .await;
+                                }
+                                continue;
+                            }
+                            Err(recovery_error) => {
+                                writer
+                                    .send(&Event::Log {
+                                        level: "warn".to_string(),
+                                        message: "Active session control-path recovery failed during lease heartbeat; falling back to reconnect scan.".to_string(),
+                                        details: Some(json!({
+                                            "peripheralId": node.peripheral_id,
+                                            "knownDeviceId": node.known_device_id,
+                                            "address": node.address,
+                                            "reconnect": reconnect,
+                                            "error": format!("{:#}", recovery_error),
+                                        })),
+                                    })
+                                    .await?;
+                            }
+                        }
+                    }
+                    return Ok(Some(format!(
+                        "App-session lease heartbeat failed for {}: {}",
+                        node.label,
+                        reason,
+                    )));
+                }
+
+                if !first_lease_logged {
+                    first_lease_logged = true;
+                    sleep(Duration::from_millis(1200)).await;
+                    let runtime_status_readback = current_live_control
+                        .peripheral
+                        .read(&current_live_control.status_characteristic)
+                        .await
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                    let history_status_readback = current_live_control
+                        .peripheral
+                        .read(&current_live_control.history_status_characteristic)
+                        .await
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                    writer
+                        .send(&Event::Log {
+                            level: "info".to_string(),
+                            message: "Sent first app-session lease after reconnect.".to_string(),
+                            details: Some(json!({
+                                "peripheralId": node.peripheral_id,
+                                "knownDeviceId": current_session_device_id,
+                                "address": node.address,
+                                "sessionId": current_app_session_id,
+                                "runtimeStatusValue": runtime_status_readback,
+                                "historyStatusValue": history_status_readback,
+                            })),
+                        })
+                        .await?;
+                    let delayed_writer = writer.clone();
+                    let delayed_peripheral = current_live_control.peripheral.clone();
+                    let delayed_status_characteristic =
+                        current_live_control.status_characteristic.clone();
+                    let delayed_history_status_characteristic =
+                        current_live_control.history_status_characteristic.clone();
+                    let delayed_node = node.clone();
+                    let delayed_known_device_id = current_session_device_id.clone();
+                    tokio::spawn(async move {
+                        sleep(Duration::from_millis(4000)).await;
+                        let runtime_status_readback = delayed_peripheral
+                            .read(&delayed_status_characteristic)
+                            .await
+                            .ok()
+                            .and_then(|bytes| String::from_utf8(bytes).ok());
+                        let history_status_readback = delayed_peripheral
+                            .read(&delayed_history_status_characteristic)
+                            .await
+                            .ok()
+                            .and_then(|bytes| String::from_utf8(bytes).ok());
+                        let _ = delayed_writer
+                            .send(&Event::Log {
+                                level: "info".to_string(),
+                                message:
+                                    "Read back status characteristics four seconds after first reconnect lease."
+                                        .to_string(),
+                                details: Some(json!({
+                                    "peripheralId": delayed_node.peripheral_id,
+                                    "knownDeviceId": delayed_known_device_id,
+                                    "address": delayed_node.address,
+                                    "runtimeStatusValue": runtime_status_readback,
+                                    "historyStatusValue": history_status_readback,
+                                })),
+                            })
+                            .await;
+                    });
+                }
+            }
             _ = sleep(Duration::from_millis(monitor_config.connection_health_poll_ms)) => {
                 if !is_approved(&node, &allowed_nodes.read().await) {
-                    let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
                     if prepared.peripheral.is_connected().await.unwrap_or(false) {
                         let _ = prepared.peripheral.disconnect().await;
                     }
                     return Ok(Some(format!("{} was removed from allowed nodes.", node.label)));
                 }
                 if !prepared.peripheral.is_connected().await.unwrap_or(false) {
-                    let _ = lease_shutdown_tx.send(true);
-                    let _ = lease_task.await;
                     return Ok(Some(format!("BLE transport ended for {}.", node.label)));
                 }
-            }
-            Some(reason) = lease_failure_rx.recv() => {
-                let _ = lease_shutdown_tx.send(true);
-                let _ = lease_task.await;
-                if is_closed_handle_error_message(&reason)
-                    && prepared.peripheral.is_connected().await.unwrap_or(false)
-                {
-                    match recover_active_session_control_path(
-                        &prepared.peripheral,
-                        &writer,
-                        &node,
-                        &reconnect,
-                        config.control_uuid,
-                        &current_app_session_id,
-                        &current_app_session_nonce,
-                    )
-                    .await
-                {
-                        Ok(recovered_control_characteristic) => {
-                            current_live_control = ActiveLiveControl {
-                                peripheral: prepared.peripheral.clone(),
-                                characteristic: recovered_control_characteristic,
-                                write_lock: current_live_control.write_lock.clone(),
-                            };
-                            if let Some(device_id) = current_session_device_id.as_deref() {
-                                remember_active_session_control(
-                                    &active_session_controls,
-                                    device_id,
-                                    &current_history_control,
-                                )
-                                .await;
-                            }
-                            let (new_shutdown_tx, new_failure_rx, new_lease_task) = spawn_lease_task(
-                                current_live_control.clone(),
-                                current_app_session_id.clone(),
-                            );
-                            lease_shutdown_tx = new_shutdown_tx;
-                            lease_failure_rx = new_failure_rx;
-                            lease_task = new_lease_task;
-                            continue;
-                        }
-                        Err(error) => {
-                            writer
-                                .send(&Event::Log {
-                                    level: "warn".to_string(),
-                                    message: "Active session control-path recovery failed; falling back to reconnect scan.".to_string(),
-                                    details: Some(json!({
-                                        "peripheralId": node.peripheral_id,
-                                        "knownDeviceId": node.known_device_id,
-                                        "address": node.address,
-                                        "reconnect": reconnect,
-                                        "error": format!("{:#}", error),
-                                    })),
-                                })
-                                .await?;
-                        }
-                    }
-                }
-                return Ok(Some(format!(
-                    "App-session lease heartbeat failed for {}: {}",
-                    node.label,
-                    reason,
-                )));
             }
         }
     }
 
-    let _ = lease_shutdown_tx.send(true);
-    let _ = lease_task.await;
     remove_active_session_control(
         &active_session_controls,
         current_session_device_id.as_deref(),
@@ -836,11 +1151,12 @@ mod tests {
     fn app_session_online_status(
         session_id: Option<&str>,
         session_nonce: Option<&str>,
+        boot_id: Option<&str>,
     ) -> RuntimeStatusPayload {
         RuntimeStatusPayload {
             status_type: "app-session-online".to_string(),
             device_id: Some("node-1".to_string()),
-            boot_id: None,
+            boot_id: boot_id.map(str::to_string),
             boot_uptime_ms: None,
             session_id: session_id.map(str::to_string),
             session_nonce: session_nonce.map(str::to_string),
@@ -854,7 +1170,7 @@ mod tests {
 
     #[test]
     fn matches_requested_runtime_session_status() {
-        let status = app_session_online_status(Some("session-a"), Some("nonce-a"));
+        let status = app_session_online_status(Some("session-a"), Some("nonce-a"), Some("boot-a"));
 
         assert_eq!(
             classify_runtime_session_status(&status, "session-a", "nonce-a"),
@@ -863,42 +1179,16 @@ mod tests {
     }
 
     #[test]
-    fn reclaims_existing_runtime_session_status_when_node_reports_a_different_live_session() {
-        let status = app_session_online_status(Some("session-live"), Some("nonce-live"));
+    fn ignores_mismatched_runtime_session_status_when_node_reports_a_different_live_session() {
+        let status =
+            app_session_online_status(Some("session-live"), Some("nonce-live"), Some("boot-live"));
 
         assert_eq!(
             classify_runtime_session_status(&status, "session-new", "nonce-new"),
-            RuntimeSessionStatusDisposition::ReclaimExisting {
+            RuntimeSessionStatusDisposition::ReuseObserved {
                 session_id: "session-live".to_string(),
                 session_nonce: "nonce-live".to_string(),
             }
-        );
-    }
-
-    #[test]
-    fn ignores_incomplete_runtime_session_status_payloads() {
-        let missing_nonce = app_session_online_status(Some("session-live"), None);
-        let ready_status = RuntimeStatusPayload {
-            status_type: "ready".to_string(),
-            device_id: Some("node-1".to_string()),
-            boot_id: None,
-            boot_uptime_ms: Some(123),
-            session_id: None,
-            session_nonce: None,
-            firmware_version: None,
-            hardware_id: None,
-            phase: None,
-            message: None,
-            version: None,
-        };
-
-        assert_eq!(
-            classify_runtime_session_status(&missing_nonce, "session-new", "nonce-new"),
-            RuntimeSessionStatusDisposition::Ignore
-        );
-        assert_eq!(
-            classify_runtime_session_status(&ready_status, "session-new", "nonce-new"),
-            RuntimeSessionStatusDisposition::Ignore
         );
     }
 }

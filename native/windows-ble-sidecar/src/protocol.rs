@@ -199,6 +199,7 @@ pub enum Event {
     NodeConnectionState {
         node: DiscoveredNode,
         gateway_connection_state: String,
+        boot_id: Option<String>,
         reason: Option<String>,
         reconnect: Option<ReconnectStatus>,
     },
