@@ -1,5 +1,9 @@
 import path from "node:path";
 
+function selectedWindowsSidecarImplementation() {
+  return process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust" ? "rust" : "dotnet";
+}
+
 export function usesWindowsNativeGateway(platform: NodeJS.Platform) {
   return platform === "win32";
 }
@@ -45,12 +49,25 @@ export function resolveWindowsSidecarPath(options: {
     return path.join(options.resourcesPath, "bin", "gym-motion-ble-winrt.exe");
   }
 
+  if (selectedWindowsSidecarImplementation() === "rust") {
+    return path.join(
+      options.cwd,
+      "native",
+      "windows-ble-sidecar",
+      "target",
+      "release",
+      "gym-motion-ble-winrt.exe",
+    );
+  }
+
   return path.join(
     options.cwd,
     "native",
-    "windows-ble-sidecar",
-    "target",
-    "release",
+    "windows-dotnet-ble-sidecar",
+    "bin",
+    "Release",
+    "net9.0-windows10.0.19041.0",
+    "publish",
     "gym-motion-ble-winrt.exe",
   );
 }

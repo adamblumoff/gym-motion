@@ -47,4 +47,27 @@ describe("gateway runtime target", () => {
       }),
     ).toBe(path.join("/resources", "bin", "gym-motion-ble-winrt.exe"));
   });
+
+  it("resolves the .NET sidecar path in dev by default", () => {
+    delete process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL;
+
+    expect(
+      resolveWindowsSidecarPath({
+        isPackaged: false,
+        cwd: "/repo",
+        resourcesPath: "/resources",
+      }),
+    ).toBe(
+      path.join(
+        "/repo",
+        "native",
+        "windows-dotnet-ble-sidecar",
+        "bin",
+        "Release",
+        "net9.0-windows10.0.19041.0",
+        "publish",
+        "gym-motion-ble-winrt.exe",
+      ),
+    );
+  });
 });

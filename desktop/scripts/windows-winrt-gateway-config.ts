@@ -2,6 +2,30 @@
 import path from "node:path";
 import process from "node:process";
 
+function defaultSidecarPath() {
+  if (process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust") {
+    return path.join(
+      process.cwd(),
+      "native",
+      "windows-ble-sidecar",
+      "target",
+      "release",
+      "gym-motion-ble-winrt.exe",
+    );
+  }
+
+  return path.join(
+    process.cwd(),
+    "native",
+    "windows-dotnet-ble-sidecar",
+    "bin",
+    "Release",
+    "net9.0-windows10.0.19041.0",
+    "publish",
+    "gym-motion-ble-winrt.exe",
+  );
+}
+
 export function createGatewayConfig() {
   return {
     apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -20,16 +44,7 @@ export function createGatewayConfig() {
       process.env.GATEWAY_HISTORY_SYNC_INTER_PAGE_DELAY_MS ?? 0,
     ),
     startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
-    sidecarPath:
-      process.env.GATEWAY_SIDECAR_PATH ??
-      path.join(
-        process.cwd(),
-        "native",
-        "windows-ble-sidecar",
-        "target",
-        "release",
-        "gym-motion-ble-winrt.exe",
-      ),
+    sidecarPath: process.env.GATEWAY_SIDECAR_PATH ?? defaultSidecarPath(),
     verbose: process.env.GATEWAY_VERBOSE === "1",
   };
 }
