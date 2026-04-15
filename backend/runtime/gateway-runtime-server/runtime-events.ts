@@ -232,21 +232,25 @@ export function createRuntimeDeviceEventController({
     async noteTelemetry(payload, peripheralInfo = {}) {
       const previous = inspectNodeConnection({ deviceId: payload.deviceId });
       const telemetryAt = nowIso();
+      const previousRuntime = runtimeByDeviceId.get(payload.deviceId) ?? null;
 
       updateRuntimeNode(payload.deviceId, {
         peripheralId:
           peripheralInfo.peripheralId ??
-          runtimeByDeviceId.get(payload.deviceId)?.peripheralId ??
+          previousRuntime?.peripheralId ??
           knownNodesByDeviceId.get(payload.deviceId)?.peripheralId ??
           null,
         address:
           peripheralInfo.address ??
-          runtimeByDeviceId.get(payload.deviceId)?.address ??
+          previousRuntime?.address ??
           knownNodesByDeviceId.get(payload.deviceId)?.lastKnownAddress ??
           null,
+        gatewayConnectionState: "connected",
+        gatewayLastConnectedAt: previousRuntime?.gatewayLastConnectedAt ?? telemetryAt,
+        gatewayDisconnectReason: null,
         gatewayLastTelemetryAt: telemetryAt,
         gatewayLastAdvertisementAt:
-          runtimeByDeviceId.get(payload.deviceId)?.gatewayLastAdvertisementAt ?? telemetryAt,
+          previousRuntime?.gatewayLastAdvertisementAt ?? telemetryAt,
         advertisedName: peripheralInfo.localName ?? null,
         lastRssi: peripheralInfo.rssi ?? null,
         lastState: payload.state,
@@ -265,7 +269,7 @@ export function createRuntimeDeviceEventController({
         lastKnownAddress: peripheralInfo.address ?? null,
         lastAdvertisedName: peripheralInfo.localName ?? null,
         lastConnectedAt:
-          runtimeByDeviceId.get(payload.deviceId)?.gatewayLastConnectedAt ?? telemetryAt,
+          previousRuntime?.gatewayLastConnectedAt ?? telemetryAt,
         lastSeenAt: telemetryAt,
         machineLabel: metadataByDeviceId.get(payload.deviceId)?.machineLabel ?? null,
         siteId: metadataByDeviceId.get(payload.deviceId)?.siteId ?? null,

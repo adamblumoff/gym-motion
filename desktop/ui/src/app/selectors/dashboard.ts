@@ -8,6 +8,7 @@ import {
   rssiToPercent,
   shouldDisplayDashboardDevice,
 } from "./shared";
+import { canonicalNodeStatus } from "./node-status";
 import type { BluetoothNodeData } from "./types";
 
 export function buildBluetoothNodes(
@@ -18,29 +19,35 @@ export function buildBluetoothNodes(
 
   return snapshot.devices
     .filter((device) => shouldDisplayDashboardDevice(device, approvedNodes))
-    .map((device) => ({
-      id: device.id,
-      name: displayNodeName(device),
-      macAddress: displayNodeAddress(device),
-      isConnected: device.gatewayConnectionState === "connected",
-      connectionState: device.gatewayConnectionState,
-      isMoving:
-        device.gatewayConnectionState === "connected" &&
-        device.lastState === "moving" &&
-        !device.sensorIssue,
-      lastState: device.lastState,
-      sensorIssue: device.sensorIssue ?? null,
-      lastDelta: device.lastDelta,
-      lastTelemetryAt: device.gatewayLastTelemetryAt,
-      signalStrength: rssiToPercent(device.lastRssi),
-      reconnectAttempt: device.reconnectAttempt,
-      reconnectAttemptLimit: device.reconnectAttemptLimit,
-      reconnectRetryExhausted: device.reconnectRetryExhausted,
-      reconnectAwaitingDecision: device.reconnectAwaitingDecision ?? false,
-      logs: nodeLogsByDeviceId.get(device.id) ?? buildNodeLogs(device, snapshot.activities),
-    }));
-}
+    .map((device) => {
+      const sensorIssue = device.sensorIssue ?? null;
+      const status = canonicalNodeStatus({
+        connectionState: device.gatewayConnectionState,
+        lastState: device.lastState,
+        sensorIssue,
+      });
 
-export function buildDashboardRuntimeStatus(totalApprovedNodes: number) {
-  return totalApprovedNodes >= 1 ? "Gateway live" : "Waiting for BLE nodes";
+      return {
+        id: device.id,
+        name: displayNodeName(device),
+        macAddress: displayNodeAddress(device),
+        connectionState: device.gatewayConnectionState,
+        canonicalStatus: status,
+        isMoving: status === "moving",
+        lastState: device.lastState,
+        sensorIssue,
+        lastDelta: device.lastDelta,
+        lastTelemetryAt: device.gatewayLastTelemetryAt,
+        signalStrength: rssiToPercent(device.lastRssi),
+        lastDisconnectReason:
+          device.gatewayConnectionState === "disconnected"
+            ? device.gatewayDisconnectReason ?? null
+            : null,
+        reconnectAttempt: device.reconnectAttempt,
+        reconnectAttemptLimit: device.reconnectAttemptLimit,
+        reconnectRetryExhausted: device.reconnectRetryExhausted,
+        reconnectAwaitingDecision: device.reconnectAwaitingDecision ?? false,
+        logs: nodeLogsByDeviceId.get(device.id) ?? buildNodeLogs(device, snapshot.activities),
+      };
+    });
 }

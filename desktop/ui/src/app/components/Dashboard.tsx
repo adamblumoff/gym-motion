@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast, Toaster } from 'sonner';
 
-import { buildBluetoothNodes, buildDashboardRuntimeStatus } from '../selectors/dashboard';
+import { buildBluetoothNodes } from '../selectors/dashboard';
 import { useDesktopRuntime } from '../runtime-context';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmationDialog } from './ConfirmationDialog';
@@ -133,11 +133,9 @@ export function Dashboard() {
     }
   }
 
-  const activeNodes = nodes.filter((node) => node.isConnected).length;
-  const movingNodes = nodes.filter((node) => node.isMoving && node.isConnected).length;
   const forgetPending = forgetTarget ? pendingForgetNodeIds.has(forgetTarget.id) : false;
-
-  const runtimeStatus = buildDashboardRuntimeStatus(setup?.approvedNodes.length ?? 0);
+  const runtimeStatus = snapshot?.liveStatus ?? 'Starting gateway runtime…';
+  const gatewayIssue = snapshot?.gatewayIssue ?? null;
 
   return (
     <>
@@ -173,31 +171,18 @@ export function Dashboard() {
       />
 
       <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-[1800px] mx-auto mb-6 grid grid-cols-4 gap-4">
-          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
-            <div className="text-2xl font-semibold text-zinc-100">{nodes.length}</div>
-            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Total Nodes</div>
+        <div className="max-w-[1800px] mx-auto mb-4 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-sm text-zinc-100 text-balance">{runtimeStatus}</div>
+            {gatewayIssue ? (
+              <div className="mt-1 text-xs text-amber-300 text-pretty">{gatewayIssue}</div>
+            ) : null}
           </div>
-          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
-            <div className="text-2xl font-semibold text-blue-400">{activeNodes}</div>
-            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Connected</div>
-          </div>
-          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
-            <div className="text-2xl font-semibold text-cyan-400">{movingNodes}</div>
-            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Active Motion</div>
-          </div>
-          <div className="border border-zinc-800 bg-zinc-950/80 rounded-lg p-4">
-            <div className="text-sm font-medium text-zinc-100">{runtimeStatus}</div>
-            <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">Gateway</div>
-          </div>
-        </div>
-
-        <div className="max-w-[1800px] mx-auto mb-4 flex items-center justify-between">
-          <div className="text-xs text-zinc-600 flex items-center gap-2">
+          <div className="shrink-0 text-xs text-zinc-600 flex items-center gap-2">
             <div className="size-2 rounded-full bg-blue-400 animate-pulse" />
             Live runtime state
           </div>
-          <div className="text-xs text-zinc-600 flex items-center gap-1.5">
+          <div className="shrink-0 text-xs text-zinc-600 flex items-center gap-1.5">
             Press
             <kbd className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-400 text-[10px] font-mono">
               Ctrl+K

@@ -115,7 +115,9 @@ export function mergeRuntimeDeviceIntoGatewaySnapshot(
     gatewayDisconnectReason: runtimeDevice.gatewayDisconnectReason,
     advertisedName: runtimeDevice.advertisedName,
     lastRssi: runtimeDevice.lastRssi,
-    sensorIssue: runtimeDevice.sensorIssue ?? existing?.sensorIssue ?? null,
+    // Runtime device updates are the canonical source of live sensor fault state.
+    // If a new runtime update does not carry a fault, clear any previously cached fault.
+    sensorIssue: runtimeDevice.sensorIssue ?? null,
     otaStatus: runtimeDevice.otaStatus,
     otaTargetVersion: runtimeDevice.otaTargetVersion,
     otaProgressBytesSent: runtimeDevice.otaProgressBytesSent,

@@ -109,7 +109,7 @@ describe("gateway runtime server", () => {
     expect(receivedCommands).toEqual([{ type: "start_manual_scan" }]);
   });
 
-  it("keeps transport state separate from telemetry freshness in projected device snapshots", async () => {
+  it("treats fresh live telemetry as connected after a transient disconnect", async () => {
     const runtimePort = 51200 + Math.floor(Math.random() * 1000);
     const runtimeServer = await createRuntimeServer({ runtimePort });
 
@@ -155,9 +155,10 @@ describe("gateway runtime server", () => {
     expect(payload.devices).toEqual([
       expect.objectContaining({
         id: "stack-001",
-        gatewayConnectionState: "disconnected",
+        gatewayConnectionState: "connected",
         lastState: "moving",
         telemetryFreshness: "fresh",
+        gatewayDisconnectReason: null,
       }),
     ]);
   });

@@ -66,7 +66,9 @@ const uint8_t STHS34PF80_ODR_15_HZ = 0x07;
 
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 1000;
-const unsigned long SENSOR_SAMPLE_STALE_MS = 300;
+// Give the IR sensor stream room for an occasional missed DRDY window before
+// we surface "sensor_no_data" back to the desktop as a stale-reading warning.
+const unsigned long SENSOR_SAMPLE_STALE_MS = 1500;
 // Bench logs show the idle band sits roughly around 500-700 delta on this XIAO.
 // Use a higher start threshold so we only enter moving on clear spikes above idle,
 // while keeping a lower stop threshold for stable hysteresis back to still.

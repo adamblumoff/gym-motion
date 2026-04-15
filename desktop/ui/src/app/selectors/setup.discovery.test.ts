@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDashboardRuntimeStatus } from "./dashboard";
 import { buildSetupVisibleDevices } from "./setup";
 
 describe("buildSetupVisibleDevices", () => {
@@ -112,16 +111,5 @@ describe("buildSetupVisibleDevices", () => {
     );
 
     expect(devices[0]?.isPaired).toBe(false);
-  });
-});
-
-describe("buildDashboardRuntimeStatus", () => {
-  it("shows waiting when no approved nodes remain in the filtered dashboard", () => {
-    expect(buildDashboardRuntimeStatus(0)).toBe("Waiting for BLE nodes");
-  });
-
-  it("shows gateway live once at least one approved node remains", () => {
-    expect(buildDashboardRuntimeStatus(1)).toBe("Gateway live");
-    expect(buildDashboardRuntimeStatus(3)).toBe("Gateway live");
   });
 });

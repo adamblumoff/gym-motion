@@ -1,4 +1,5 @@
 import type { GatewayConnectionState } from "@core/contracts";
+import type { CanonicalNodeStatus } from "./node-status";
 
 export type NodeLog = {
   id: string;
@@ -11,14 +12,15 @@ export type BluetoothNodeData = {
   id: string;
   name: string;
   macAddress: string | null;
-  isConnected: boolean;
   connectionState: GatewayConnectionState;
+  canonicalStatus: CanonicalNodeStatus;
   isMoving: boolean;
   lastState: "moving" | "still";
   sensorIssue: string | null;
   lastDelta: number | null;
   lastTelemetryAt: string | null;
   signalStrength: number | null;
+  lastDisconnectReason: string | null;
   reconnectAttempt: number;
   reconnectAttemptLimit: number;
   reconnectRetryExhausted: boolean;

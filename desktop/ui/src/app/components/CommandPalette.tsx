@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Activity, BarChart3, Bluetooth, LayoutDashboard, Settings, Zap } from 'lucide-react';
+import { BarChart3, Bluetooth, LayoutDashboard, Settings, Zap } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../selectors/types';
+import { canonicalNodeStatusLabel } from '../selectors/node-status';
+import { statusIconTextClassName, statusToneClassName } from './node-display';
 import {
   CommandDialog,
   CommandEmpty,
@@ -79,12 +81,12 @@ export function CommandPalette({ nodes, onSelectNode, onScan }: CommandPalettePr
                 setOpen(false);
               }}
             >
-              <Bluetooth
-                className={`mr-2 size-4 ${node.isConnected ? 'text-blue-400' : 'text-zinc-600'}`}
-              />
+              <Bluetooth className={`mr-2 size-4 ${statusIconTextClassName(node.canonicalStatus)}`} />
               <span className="flex-1">{node.name}</span>
+              <span className={`text-[11px] ${statusToneClassName(node.canonicalStatus)}`}>
+                {canonicalNodeStatusLabel(node.canonicalStatus)}
+              </span>
               <span className="text-xs text-zinc-500 font-mono">{node.macAddress ?? '--'}</span>
-              {node.isMoving && <Activity className="ml-2 size-3.5 text-blue-400" />}
             </CommandItem>
           ))}
         </CommandGroup>

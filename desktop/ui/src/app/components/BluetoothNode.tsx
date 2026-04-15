@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
-import { Activity, Bluetooth, Trash2 } from 'lucide-react';
+import { Bluetooth, Trash2 } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../selectors/types';
-import { DeviceConnectionBadge } from './DeviceConnectionBadge';
+import { canonicalNodeStatusLabel, isBlockingSensorIssue } from '../selectors/node-status';
+import {
+  formatSensorIssue,
+  formatTelemetryLabel,
+  statusIconClassName,
+  statusIconTextClassName,
+  statusToneClassName,
+} from './node-display';
 import { SignalStrengthMeter } from './SignalStrengthMeter';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { ScrollArea } from './ui/scroll-area';
+import { cn } from './ui/utils';
 
 interface BluetoothNodeProps {
   node: BluetoothNodeData;
@@ -25,24 +32,15 @@ export function BluetoothNode({
   forgetPending = false,
   keepPending = false,
 }: BluetoothNodeProps) {
-  const [pulseKey, setPulseKey] = useState(0);
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
     node.reconnectAwaitingDecision;
+  const hasBlockingSensorIssue = isBlockingSensorIssue(node.sensorIssue);
   const lastTelemetryLabel = formatTelemetryLabel(node.lastTelemetryAt);
-  const deltaLabel = node.sensorIssue || node.lastDelta === null ? '--' : String(node.lastDelta);
-  const stateLabel = node.sensorIssue ? 'sensor fault' : node.lastState;
-  const stateClassName = node.sensorIssue
-    ? 'text-amber-300'
-    : node.lastState === 'moving'
-      ? 'text-blue-400'
-      : 'text-zinc-300';
-
-  useEffect(() => {
-    if (node.isMoving) {
-      setPulseKey((prev) => prev + 1);
-    }
-  }, [node.isMoving]);
+  const deltaLabel = hasBlockingSensorIssue || node.lastDelta === null ? '--' : String(node.lastDelta);
+  const statusLabel = canonicalNodeStatusLabel(node.canonicalStatus);
+  const statusClassName = statusToneClassName(node.canonicalStatus);
+  const secondaryText = buildSecondaryText(node);
 
   return (
     <Card
@@ -52,29 +50,17 @@ export function BluetoothNode({
       <div className="p-4 border-b border-zinc-800">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3 flex-1 min-w-0">
-            <div className={`relative p-2 rounded-lg ${node.isMoving ? 'bg-blue-500/10' : 'bg-zinc-800'}`}>
-              <Bluetooth className={`size-5 group-hover:rotate-12 transition-transform duration-300 ${node.isMoving ? 'text-blue-400' : 'text-zinc-500'}`} />
-              {node.isMoving && (
-                <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-blue-400 animate-ping" />
-              )}
+            <div
+              className={cn('p-2 rounded-lg bg-zinc-800', statusIconClassName(node.canonicalStatus))}
+            >
+              <Bluetooth className={cn('size-5', statusIconTextClassName(node.canonicalStatus))} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <h3 className="text-sm font-medium text-zinc-100 truncate">{node.name}</h3>
-                {node.isMoving && (
-                  <div key={pulseKey} className="flex items-center gap-1.5 animate-pulse">
-                    <Activity className="size-3.5 text-blue-400" />
-                    <span className="text-xs text-blue-400 font-medium">MOVING</span>
-                  </div>
-                )}
-              </div>
+              <h3 className="text-sm font-medium text-zinc-100 truncate text-balance">{node.name}</h3>
               <div className="text-xs text-zinc-500 font-mono">{node.macAddress ?? 'Unknown address'}</div>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
                 <span>
-                  State:{' '}
-                  <span className={stateClassName}>
-                    {stateLabel}
-                  </span>
+                  Status: <span className={statusClassName}>{statusLabel}</span>
                 </span>
                 <span>
                   Delta: <span className="text-zinc-300">{deltaLabel}</span>
@@ -82,16 +68,18 @@ export function BluetoothNode({
                 <span>
                   Telemetry: <span className="text-zinc-300">{lastTelemetryLabel}</span>
                 </span>
-                {node.sensorIssue ? (
+                {node.sensorIssue && hasBlockingSensorIssue ? (
                   <span>
                     Fault: <span className="text-amber-300">{formatSensorIssue(node.sensorIssue)}</span>
                   </span>
                 ) : null}
               </div>
+              {secondaryText ? (
+                <div className="mt-2 text-xs text-zinc-400 text-pretty">{secondaryText}</div>
+              ) : null}
             </div>
           </div>
           <div className="flex flex-col items-end gap-2">
-            <DeviceConnectionBadge state={node.connectionState} className="text-xs" />
             <div className="flex items-center gap-3">
               <SignalStrengthMeter value={node.signalStrength} />
             </div>
@@ -195,76 +183,26 @@ export function BluetoothNode({
   );
 }
 
-function formatTelemetryLabel(lastTelemetryAt: string | null) {
-  if (!lastTelemetryAt) {
-    return 'none';
+function buildSecondaryText(node: BluetoothNodeData) {
+  if (isBlockingSensorIssue(node.sensorIssue)) {
+    return 'The sensor is connected, but the board is reporting a live sensor fault.';
   }
 
-  const parsed = new Date(lastTelemetryAt);
-  if (Number.isNaN(parsed.getTime())) {
-    return 'invalid';
+  if (node.sensorIssue === 'sensor_no_data') {
+    return 'Waiting for a fresh sample from the sensor.';
   }
 
-  return parsed.toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
-function formatSensorIssue(sensorIssue: string) {
-  if (sensorIssue === 'sensor_no_data') {
-    return 'IR sample missing';
+  if (node.connectionState === 'connecting' || node.connectionState === 'reconnecting') {
+    return 'The gateway is trying to re-establish the Bluetooth connection.';
   }
 
-  if (sensorIssue === 'sensor_unavailable') {
-    return 'IR sensor unavailable';
+  if (node.connectionState !== 'connected') {
+    return node.lastDisconnectReason ?? 'This sensor is not currently reachable.';
   }
 
-  if (sensorIssue === 'sensor_whoami_read') {
-    return 'IR WHO_AM_I read failed';
+  if (node.canonicalStatus === 'moving') {
+    return 'Live motion is being detected right now.';
   }
 
-  if (sensorIssue === 'sensor_whoami_value') {
-    return 'IR WHO_AM_I mismatch';
-  }
-
-  if (sensorIssue === 'sensor_ctrl2_reset') {
-    return 'IR reset write failed';
-  }
-
-  if (sensorIssue === 'sensor_algo_reset') {
-    return 'IR algorithm reset failed';
-  }
-
-  if (sensorIssue === 'sensor_ctrl1_power_down') {
-    return 'IR power-down config failed';
-  }
-
-  if (sensorIssue === 'sensor_avg_trim') {
-    return 'IR average trim config failed';
-  }
-
-  if (sensorIssue === 'sensor_ctrl1_bdu') {
-    return 'IR BDU config failed';
-  }
-
-  if (sensorIssue === 'sensor_ctrl1_odr') {
-    return 'IR ODR config failed';
-  }
-
-  if (sensorIssue === 'sensor_bus_recovery') {
-    return 'IR bus recovery active';
-  }
-
-  if (sensorIssue === 'sensor_bus_sda_low') {
-    return 'IR SDA line stuck low';
-  }
-
-  if (sensorIssue === 'sensor_bus_scl_low') {
-    return 'IR SCL line stuck low';
-  }
-
-  return sensorIssue.replaceAll('_', ' ');
+  return 'The sensor is connected and currently idle.';
 }
