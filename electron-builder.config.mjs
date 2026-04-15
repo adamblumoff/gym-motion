@@ -21,6 +21,16 @@ const sidecarPath = path.join(
     : ["bin", "Release", "net9.0-windows10.0.19041.0", "publish"]),
   "gym-motion-ble-winrt.exe",
 );
+const bridgeRelayPath = path.join(
+  process.cwd(),
+  "native",
+  "windows-serial-bridge-relay",
+  "bin",
+  "Release",
+  "net9.0-windows10.0.19041.0",
+  "publish",
+  "gym-motion-usb-bridge-relay.exe",
+);
 
 export default {
   appId: "com.gymmotion.desktop",
@@ -35,13 +45,20 @@ export default {
     "out/**",
     "package.json",
   ],
-  extraResources: isWindowsTarget && gatewayBackend === "winrt"
-    ? [
-        {
-          from: sidecarPath,
-          to: "bin/gym-motion-ble-winrt.exe",
-        },
-      ]
+  extraResources: isWindowsTarget
+    ? gatewayBackend === "winrt"
+      ? [
+          {
+            from: sidecarPath,
+            to: "bin/gym-motion-ble-winrt.exe",
+          },
+        ]
+      : [
+          {
+            from: bridgeRelayPath,
+            to: "bin/gym-motion-usb-bridge-relay.exe",
+          },
+        ]
     : [],
   directories: {
     output: "release",

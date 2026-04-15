@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveGatewayScriptPath,
+  resolveWindowsBridgeRelayPath,
   resolveWindowsSidecarLaunch,
   usesWindowsNativeGateway,
 } from "./gateway-runtime-target";
@@ -105,5 +106,26 @@ describe("gateway runtime target", () => {
     });
 
     delete process.env.GYM_MOTION_WINDOWS_BLE_BACKEND;
+  });
+
+  it("resolves the bridge relay path in dev", () => {
+    expect(
+      resolveWindowsBridgeRelayPath({
+        isPackaged: false,
+        cwd: "/repo",
+        resourcesPath: "/resources",
+      }),
+    ).toBe(
+      path.join(
+        "/repo",
+        "native",
+        "windows-serial-bridge-relay",
+        "bin",
+        "Release",
+        "net9.0-windows10.0.19041.0",
+        "publish",
+        "gym-motion-usb-bridge-relay.exe",
+      ),
+    );
   });
 });

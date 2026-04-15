@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { spawn } from "node:child_process";
 import process from "node:process";
 
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
@@ -8,6 +9,11 @@ const config = {
   serialPort: typeof process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT === "string"
     ? process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT.trim() || null
     : null,
+  relayPath: typeof process.env.GYM_MOTION_USB_BLE_BRIDGE_RELAY_PATH === "string"
+    ? process.env.GYM_MOTION_USB_BLE_BRIDGE_RELAY_PATH.trim() || null
+    : null,
+  baudRate: Number(process.env.GYM_MOTION_USB_BLE_BRIDGE_BAUD_RATE ?? 115200),
+  dtrEnable: process.env.GYM_MOTION_USB_BLE_BRIDGE_ENABLE_DTR !== "0",
   verbose: process.env.GATEWAY_VERBOSE === "1",
 };
 
@@ -40,6 +46,10 @@ let pendingConnectTimer = null;
 let pendingManualScanTimer = null;
 let motionSequence = 0;
 let lastMotionState = "still";
+let relay = null;
+let relayBuffer = "";
+let relayIssue = null;
+let relayOpen = false;
 
 function emit(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -83,8 +93,12 @@ function currentIssue() {
     return null;
   }
 
+  if (relayIssue) {
+    return relayIssue;
+  }
+
   if (config.serialPort) {
-    return `USB bridge port ${config.serialPort} is configured, but the serial bridge transport is not implemented yet.`;
+    return relayOpen ? null : `USB BLE bridge on ${config.serialPort} is still starting.`;
   }
 
   return "No USB BLE bridge detected. Set GYM_MOTION_USB_BLE_BRIDGE_PORT or GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR=1.";
@@ -110,7 +124,7 @@ function availableAdapters() {
         id: `bridge:${config.serialPort.toLowerCase()}`,
         label: `USB BLE Bridge (${config.serialPort})`,
         transport: "usb-bridge",
-        is_available: false,
+        is_available: relayOpen,
         issue: currentIssue(),
         details: [`port:${config.serialPort}`],
       },
@@ -145,6 +159,107 @@ function emitGatewayState() {
     },
     issue,
   });
+}
+
+function handleRelayLine(event) {
+  emit(event);
+}
+
+function stopRelay() {
+  if (!relay) {
+    return;
+  }
+
+  relay.kill();
+  relay = null;
+  relayBuffer = "";
+  relayOpen = false;
+}
+
+function forwardCommandToRelay(command) {
+  if (!relay?.stdin || relay.killed) {
+    log(
+      "USB BLE bridge relay is unavailable.",
+      { type: command.type ?? "unknown" },
+      "warn",
+    );
+    return false;
+  }
+
+  relay.stdin.write(`${JSON.stringify(command)}\n`);
+  return true;
+}
+
+function startRelay() {
+  if (config.simulator || !config.serialPort || relay) {
+    return;
+  }
+
+  if (!config.relayPath) {
+    relayIssue = "USB bridge relay path is missing.";
+    emitGatewayState();
+    return;
+  }
+
+  relayIssue = null;
+  relayOpen = false;
+  relay = spawn(
+    config.relayPath,
+    [
+      "--port",
+      config.serialPort,
+      "--baud",
+      String(config.baudRate),
+      "--dtr",
+      config.dtrEnable ? "1" : "0",
+    ],
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    },
+  );
+
+  attachJsonLineReader(relay.stdout, handleRelayLine);
+  relay.stderr.on("data", (chunk) => {
+    relayBuffer += chunk.toString("utf8");
+    const lines = relayBuffer.split(/\r?\n/);
+    relayBuffer = lines.pop() ?? "";
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+
+      if (line.startsWith("[relay] opened ")) {
+        relayOpen = true;
+        relayIssue = null;
+        emitAdapterList();
+        emitGatewayState();
+        continue;
+      }
+
+      if (line.startsWith("[relay] error ")) {
+        relayIssue = line.replace(/^\[relay\] error\s*/, "").trim();
+        emitAdapterList();
+        emitGatewayState();
+        continue;
+      }
+
+      log("USB BLE bridge relay", { line }, "debug");
+    }
+  });
+  relay.once("exit", (code, signal) => {
+    const previousIssue = relayIssue;
+    relay = null;
+    relayOpen = false;
+    relayIssue =
+      previousIssue ??
+      `USB BLE bridge relay exited (${signal ?? code ?? "unknown"}).`;
+    emitAdapterList();
+    emitGatewayState();
+  });
+  emitAdapterList();
+  emitGatewayState();
 }
 
 function emitManualScanState() {
@@ -358,7 +473,12 @@ function handleSetAllowedNodes(command) {
     count: approvedNodes.length,
   });
 
-  if (config.simulator && started) {
+  if (!config.simulator) {
+    forwardCommandToRelay(command);
+    return;
+  }
+
+  if (started) {
     disconnectSimulatorNode("approved-nodes-updated");
     startApprovedReconnectFlow();
   }
@@ -369,20 +489,38 @@ function handleSelectAdapter(command) {
   debug("Selected USB bridge adapter.", {
     adapterId: selectedAdapterId,
   });
+  startRelay();
   emitGatewayState();
 }
 
 function handleStart() {
   started = true;
+
+  if (!config.simulator) {
+    forwardCommandToRelay({ type: "start" });
+    emitGatewayState();
+    return;
+  }
+
   startApprovedReconnectFlow();
 }
 
 function handleRescan() {
+  if (!config.simulator) {
+    forwardCommandToRelay({ type: "rescan" });
+    return;
+  }
+
   disconnectSimulatorNode("rescan");
   startApprovedReconnectFlow();
 }
 
 function handlePairManualCandidate(command) {
+  if (!config.simulator) {
+    forwardCommandToRelay(command);
+    return;
+  }
+
   manualScanState = {
     state: "pairing",
     pairingCandidateId: command.candidate_id ?? null,
@@ -409,6 +547,7 @@ function handlePairManualCandidate(command) {
 
 function shutdown() {
   disconnectSimulatorNode("shutdown");
+  stopRelay();
   process.exit(0);
 }
 
@@ -431,6 +570,10 @@ function handleCommand(command) {
       handleRescan();
       return;
     case "start_manual_scan":
+      if (!config.simulator) {
+        forwardCommandToRelay(command);
+        return;
+      }
       startManualScanFlow();
       return;
     case "pair_manual_candidate":
@@ -438,23 +581,37 @@ function handleCommand(command) {
       return;
     case "recover_approved_node":
     case "resume_approved_node_reconnect":
+      if (!config.simulator) {
+        forwardCommandToRelay(command);
+        return;
+      }
       handleRescan();
       return;
     case "shutdown":
       shutdown();
       return;
     default:
-      log("Bridge sidecar ignored unsupported command.", {
-        type: command.type ?? "unknown",
-      }, "warn");
+      if (!config.simulator && forwardCommandToRelay(command)) {
+        return;
+      }
+
+      log(
+        "Bridge sidecar ignored unsupported command.",
+        {
+          type: command.type ?? "unknown",
+        },
+        "warn",
+      );
   }
 }
 
 process.stdin.resume();
 attachJsonLineReader(process.stdin, handleCommand);
 
+startRelay();
 emit({ type: "ready" });
 log("USB BLE bridge sidecar started.", {
   simulator: config.simulator,
   serialPort: config.serialPort,
+  relayPath: config.relayPath,
 });

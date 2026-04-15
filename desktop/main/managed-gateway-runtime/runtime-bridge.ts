@@ -10,7 +10,11 @@ import type {
   GatewayStatusSummary,
 } from "@core/contracts";
 
-import { resolveGatewayScriptPath, resolveWindowsSidecarLaunch } from "../gateway-runtime-target";
+import {
+  resolveGatewayScriptPath,
+  resolveWindowsBridgeRelayPath,
+  resolveWindowsSidecarLaunch,
+} from "../gateway-runtime-target";
 import { buildGatewayChildEnv } from "./gateway-child-env";
 import {
   parseGatewayChildMessage,
@@ -225,6 +229,11 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     });
     env.GATEWAY_SIDECAR_PATH = sidecarLaunch.command;
     env.GATEWAY_SIDECAR_ARGS_JSON = JSON.stringify(sidecarLaunch.args);
+    env.GYM_MOTION_USB_BLE_BRIDGE_RELAY_PATH = resolveWindowsBridgeRelayPath({
+      isPackaged: app.isPackaged,
+      cwd: process.cwd(),
+      resourcesPath: process.resourcesPath,
+    });
 
     const gatewayScriptPath =
       process.env.GYM_MOTION_GATEWAY_CHILD_SCRIPT
