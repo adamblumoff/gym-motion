@@ -329,20 +329,9 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
 }
 
 void enqueueBoardLogStatus(const String& tag, const String& message, const String& level) {
-  if (runtimeStatusCharacteristic == nullptr) {
-    return;
-  }
-
-  String payload =
-    "{\"type\":\"board-log\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"tag\":\"" + escapeJsonString(tag) +
-    "\",\"level\":\"" + escapeJsonString(level) +
-    "\",\"message\":\"" + escapeJsonString(message) +
-    "\",\"uptimeMs\":" + String(millis()) +
-    ",\"notifyMask\":" + String(runtimeNotifyMask) + "}";
-
-  enqueueRuntimeStatusPayload(payload);
+  (void)tag;
+  (void)message;
+  (void)level;
 }
 
 void sendHistoryDebugStatus(
@@ -453,20 +442,11 @@ String createRuntimeAppSessionOnlinePayload(
   const String& sessionId,
   const String& sessionNonce
 ) {
-  const unsigned long highWaterSequence = nextHistorySequence > 0 ? nextHistorySequence - 1 : 0;
   return
-    "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"bootId\":\"" + escapeJsonString(bootId) +
-    "\",\"deviceName\":\"" + escapeJsonString(createBleDeviceName()) +
+    "{\"type\":\"app-session-online\",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
-    "\",\"hm\":" + String(runtimeNotifyMask) +
-    ",\"hp\":" + String(pendingHistorySyncRequest ? 1 : 0) +
-    ",\"ph\":" + String(static_cast<int>(historyWorkerState.phase)) +
-    ",\"ha\":" + String(ackedHistorySequence) +
-    ",\"hh\":" + String(highWaterSequence) +
-    ",\"rcw\":" + String(runtimeControlWriteCount) +
-    ",\"hcw\":" + String(historyControlWriteCount) + "}";
+    "\"}";
 }
 
 void sendRuntimeAppSessionOnline(
@@ -556,6 +536,31 @@ void logAdvertisingSetupFailure(const char* field) {
   Serial.println(field);
 }
 
+bool addRuntimeAdvertisingSessionData() {
+  static constexpr uint16_t kGymMotionManufacturerId = 0xFFFF;
+  uint8_t payload[10] = {
+    static_cast<uint8_t>(kGymMotionManufacturerId & 0xFF),
+    static_cast<uint8_t>((kGymMotionManufacturerId >> 8) & 0xFF),
+    'G',
+    'M',
+    0x01,
+    static_cast<uint8_t>(runtimeAppSessionConnected && runtimeAppSessionId.length() == 8 ? 0x01 : 0x00),
+    0,
+    0,
+    0,
+    0
+  };
+
+  if (runtimeAppSessionConnected && runtimeAppSessionId.length() == 8) {
+    for (int index = 0; index < 4; index++) {
+      const String byteHex = runtimeAppSessionId.substring(index * 2, index * 2 + 2);
+      payload[6 + index] = static_cast<uint8_t>(strtoul(byteHex.c_str(), nullptr, 16));
+    }
+  }
+
+  return Bluefruit.Advertising.addManufacturerData(payload, sizeof(payload));
+}
+
 void configureRuntimeAdvertisingPayload() {
   Bluefruit.Advertising.stop();
   Bluefruit.Advertising.clearData();
@@ -566,11 +571,12 @@ void configureRuntimeAdvertisingPayload() {
     logAdvertisingSetupFailure("flags");
   }
 
-  // Put the reconnect token directly into the primary advertisement local name. On Windows this
-  // is the most dependable identity surface during reconnect scans, and it fits in the 31-byte
-  // payload budget without auxiliary fields.
-  if (!Bluefruit.Advertising.addName()) {
-    logAdvertisingSetupFailure("device name");
+  if (!addRuntimeAdvertisingSessionData()) {
+    logAdvertisingSetupFailure("manufacturer session data");
+  }
+
+  if (!Bluefruit.ScanResponse.addName()) {
+    logAdvertisingSetupFailure("scan response name");
   }
 
   Bluefruit.Advertising.restartOnDisconnect(true);

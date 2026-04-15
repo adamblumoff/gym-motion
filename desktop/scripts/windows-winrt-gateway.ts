@@ -21,18 +21,15 @@ import {
   handlePersistAck,
   sendToDesktop,
 } from "./windows-winrt-gateway-desktop-ipc.js";
-import { createNodeConnectionStateEventQueue } from "./windows-winrt-gateway-node-connection-state.js";
-import { createRuntimeBridge } from "./windows-winrt-gateway-runtime-bridge.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 
 const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
-let pushedMetadataDevices = [];
 
 const runtimeServer = createGatewayRuntimeServer({
-  loadDevicesMetadata: async () => pushedMetadataDevices,
+  loadDevicesMetadata: async () => [],
   runtimeHost: config.runtimeHost,
   runtimePort: config.runtimePort,
   onControlCommand: handleDesktopControlCommand,
@@ -84,13 +81,6 @@ function emitAdaptersUpdated() {
   });
 }
 
-function emitManualScanUpdated() {
-  emitDesktopMessage({
-    type: "manual-scan-updated",
-    payload: runtimeServer.getManualScanPayload(),
-  });
-}
-
 function emitRuntimeDeviceUpdated(deviceId) {
   if (!deviceId) {
     return;
@@ -124,47 +114,10 @@ function emitCurrentRuntimeDevices() {
   }
 }
 
-const runtimeBridge = createRuntimeBridge({
-  config,
-  runtimeServer,
-  debug,
-  sendSidecarCommand(command) {
-    sendCommand(command.type, command);
-  },
-});
-
-const enqueueNodeConnectionStateEvent = createNodeConnectionStateEventQueue({
-  runtimeBridge,
-  runtimeServer,
-  emitGatewayState,
-  emitRuntimeDeviceUpdated,
-  onError(error) {
-    console.error("[gateway-winrt] failed to handle node connection state", error);
-    setRuntimeIssue(
-      error instanceof Error ? error.message : "Node connection-state handling failed.",
-    );
-  },
-});
-
 function setRuntimeIssue(issue) {
   latestGatewayIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
   runtimeServer.setGatewayIssue(latestGatewayIssue);
   emitGatewayState();
-}
-
-function setManualScanState({
-  state,
-  pairingCandidateId = null,
-  error = null,
-  clearCandidates = false,
-}) {
-  runtimeServer.setManualScanState({
-    state,
-    pairingCandidateId,
-    error,
-    clearCandidates,
-  });
-  emitManualScanUpdated();
 }
 
 function refreshSelectionIssue(adapters) {
@@ -198,13 +151,9 @@ function sendCommand(type, payload = {}) {
   sidecar.stdin.write(`${JSON.stringify({ type, ...payload })}\n`);
 }
 
-function sidecarAllowedNodesPayload() {
-  return normalizeAllowedNodesPayload(approvedNodeRules);
-}
-
 function syncAllowedNodes() {
   sendCommand("set_allowed_nodes", {
-    nodes: sidecarAllowedNodesPayload(),
+    nodes: normalizeAllowedNodesPayload(approvedNodeRules),
   });
 }
 
@@ -214,136 +163,102 @@ function requireSidecar(action) {
   }
 }
 
+function applyNodeConnectionState(event) {
+  const node = event.node ?? {};
+  const connectionState =
+    event.gateway_connection_state ??
+    event.gatewayConnectionState ??
+    "disconnected";
+  const peripheralInfo = describeNode(node);
+  const payload = {
+    ...peripheralInfo,
+    reconnectAttempt: null,
+    reconnectAttemptLimit: null,
+    reconnectRetryExhausted: false,
+    reconnectAwaitingDecision: false,
+  };
+
+  if (connectionState === "connecting" || connectionState === "reconnecting") {
+    runtimeServer.noteConnecting(payload);
+  } else if (connectionState === "connected") {
+    runtimeServer.noteConnected(payload);
+  } else {
+    runtimeServer.noteDisconnected({
+      ...payload,
+      reason: event.reason ?? "ble-disconnected",
+    });
+  }
+
+  emitGatewayState();
+  emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(peripheralInfo));
+}
+
+function normalizeAdapterState(adapterState) {
+  if (adapterState === "ready") {
+    return "poweredOn";
+  }
+
+  return adapterState ?? "unknown";
+}
+
 async function handleDesktopControlCommand(command) {
   if (!command || typeof command !== "object") {
     throw new Error("Invalid control command.");
   }
 
-  if (command.type === "set_allowed_nodes" && Array.isArray(command.nodes)) {
-    const nextApprovedNodeRules = command.nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-      address: node.address ?? null,
-      localName: node.localName ?? node.local_name ?? null,
-      knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-    }));
-    const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
-    const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
-    const forgottenRules = removedRules.filter(
-      (removedRule) =>
-        !nextApprovedNodeRules.some((nextRule) =>
-          approvedNodeRulesReferToSamePhysicalNode(removedRule, nextRule),
-        ),
-    );
-
-    for (const rule of nextApprovedNodeRules) {
-      runtimeServer.restoreApprovedDevice({
-        deviceId: rule.knownDeviceId ?? null,
-        knownDeviceId: rule.knownDeviceId ?? null,
-        peripheralId: rule.peripheralId ?? null,
-        address: rule.address ?? null,
-        localName: rule.localName ?? null,
-      });
-    }
-
-    for (const rule of forgottenRules) {
-      runtimeServer.forgetDevice({
-        deviceId: rule.knownDeviceId ?? null,
-        knownDeviceId: rule.knownDeviceId ?? null,
-        peripheralId: rule.peripheralId ?? null,
-        address: rule.address ?? null,
-        localName: rule.localName ?? null,
-      });
-    }
-
-    approvedNodeRules = nextApprovedNodeRules;
-    log("Approved-node rules updated from desktop runtime.", {
-      approvedCount: approvedNodeRules.length,
-      removedCount: removedRules.length,
-      forgottenCount: forgottenRules.length,
-    });
-    syncAllowedNodes();
-    emitGatewayState();
-    return {
-      approvedCount: approvedNodeRules.length,
-      removedCount: removedRules.length,
-      forgottenCount: forgottenRules.length,
-    };
+  if (command.type !== "set_allowed_nodes" || !Array.isArray(command.nodes)) {
+    throw new Error(`Unsupported control command: ${String(command.type ?? "unknown")}`);
   }
 
-  if (command.type === "set_devices_metadata" && Array.isArray(command.devices)) {
-    pushedMetadataDevices = command.devices.filter(
-      (device) => device && typeof device === "object" && typeof device.id === "string",
-    );
-    emitGatewayState();
-    return { deviceCount: pushedMetadataDevices.length };
+  requireSidecar("update approved nodes");
+
+  const nextApprovedNodeRules = command.nodes.map((node) => ({
+    id: node.id,
+    label: node.label,
+    peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
+    address: node.address ?? null,
+    localName: node.localName ?? node.local_name ?? null,
+    knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
+  }));
+  const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
+  const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
+  const forgottenRules = removedRules.filter(
+    (removedRule) =>
+      !nextApprovedNodeRules.some((nextRule) =>
+        approvedNodeRulesReferToSamePhysicalNode(removedRule, nextRule),
+      ),
+  );
+
+  for (const rule of nextApprovedNodeRules) {
+    runtimeServer.restoreApprovedDevice({
+      deviceId: rule.knownDeviceId ?? null,
+      knownDeviceId: rule.knownDeviceId ?? null,
+      peripheralId: rule.peripheralId ?? null,
+      address: rule.address ?? null,
+      localName: rule.localName ?? null,
+    });
   }
 
-  if (command.type === "start_manual_scan") {
-    requireSidecar("start a manual scan");
-    setManualScanState({
-      state: "scanning",
-      pairingCandidateId: null,
-      error: null,
-      clearCandidates: true,
+  for (const rule of forgottenRules) {
+    runtimeServer.forgetDevice({
+      deviceId: rule.knownDeviceId ?? null,
+      knownDeviceId: rule.knownDeviceId ?? null,
+      peripheralId: rule.peripheralId ?? null,
+      address: rule.address ?? null,
+      localName: rule.localName ?? null,
     });
-    log("Manual scan requested from desktop runtime.");
-    syncAllowedNodes();
-    sendCommand("start_manual_scan");
-    return { state: "scanning" };
   }
 
-  if (command.type === "pair_manual_candidate" && typeof command.candidateId === "string") {
-    requireSidecar("pair a manual scan candidate");
-    setManualScanState({
-      state: "pairing",
-      pairingCandidateId: command.candidateId,
-      error: null,
-    });
-    sendCommand("pair_manual_candidate", {
-      candidate_id: command.candidateId,
-    });
-    return {
-      state: "pairing",
-      pairingCandidateId: command.candidateId,
-    };
-  }
+  approvedNodeRules = nextApprovedNodeRules;
+  syncAllowedNodes();
+  sendCommand("refresh_scan_policy");
+  emitGatewayState();
 
-  if (command.type === "recover_approved_node" && typeof command.ruleId === "string") {
-    requireSidecar("recover an approved node");
-    sendCommand("recover_approved_node", {
-      rule_id: command.ruleId,
-    });
-    return { ruleId: command.ruleId };
-  }
-
-  if (
-    command.type === "resume_approved_node_reconnect" &&
-    typeof command.ruleId === "string"
-  ) {
-    requireSidecar("resume approved-node reconnect");
-    const rule = approvedNodeRules.find((node) => node.id === command.ruleId);
-    log("Resuming paused approved-node reconnect scan.", {
-      ruleId: command.ruleId,
-      knownDeviceId: rule?.knownDeviceId ?? null,
-      peripheralId: rule?.peripheralId ?? null,
-      address: rule?.address ?? null,
-    });
-    runtimeServer.clearReconnectDecision({
-      knownDeviceId: rule?.knownDeviceId ?? null,
-      peripheralId: rule?.peripheralId ?? null,
-      address: rule?.address ?? null,
-      localName: rule?.localName ?? null,
-    });
-    emitRuntimeDeviceUpdated(rule?.knownDeviceId ?? null);
-    sendCommand("resume_approved_node_reconnect", {
-      rule_id: command.ruleId,
-    });
-    return { ruleId: command.ruleId };
-  }
-
-  throw new Error(`Unsupported control command: ${String(command.type ?? "unknown")}`);
+  return {
+    approvedCount: approvedNodeRules.length,
+    removedCount: removedRules.length,
+    forgottenCount: forgottenRules.length,
+  };
 }
 
 function attachControlReader() {
@@ -409,8 +324,12 @@ function handleSidecarEvent(event) {
       const adapterSnapshot = JSON.stringify(adapters);
       if (adapterSnapshot !== lastLoggedAdapterSnapshot) {
         lastLoggedAdapterSnapshot = adapterSnapshot;
-        log(`received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`, adapters);
+        log(
+          `received ${adapters.length} adapter${adapters.length === 1 ? "" : "s"} from sidecar`,
+          adapters,
+        );
       }
+
       if (!selectedAdapterId) {
         selectedAdapterId = selectPreferredAdapter(adapters);
 
@@ -438,7 +357,7 @@ function handleSidecarEvent(event) {
     case "gateway_state":
       currentScanReason = event.gateway?.scan_reason ?? event.scanReason ?? null;
       runtimeServer.setAdapterState(
-        event.gateway?.adapter_state ?? event.adapterState ?? "unknown",
+        normalizeAdapterState(event.gateway?.adapter_state ?? event.adapterState),
       );
       runtimeServer.setScanState(
         event.gateway?.scan_state ?? event.scanState ?? "stopped",
@@ -447,23 +366,19 @@ function handleSidecarEvent(event) {
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       emitGatewayState();
       break;
-    case "manual_scan_state":
-      setManualScanState({
-        state: event.state ?? "idle",
-        pairingCandidateId: event.candidate_id ?? event.candidateId ?? null,
-        error: event.error ?? null,
-        clearCandidates: (event.state ?? "idle") === "idle",
+    case "node_discovered": {
+      const peripheralInfo = describeNode(event.node ?? {});
+      runtimeServer.noteDiscovery({
+        ...peripheralInfo,
+        reconnectAttempt: null,
+        reconnectAttemptLimit: null,
+        reconnectRetryExhausted: false,
+        reconnectAwaitingDecision: false,
       });
-      break;
-    case "node_discovered":
-      runtimeBridge.handleNodeDiscovered(
-        event.node ?? {},
-        event.scan_reason ?? event.scanReason ?? null,
-      );
-      emitManualScanUpdated();
       emitGatewayState();
-      emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(describeNode(event.node ?? {})));
+      emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(peripheralInfo));
       break;
+    }
     case "node_connection_state":
       log("received node connection state", {
         state:
@@ -472,102 +387,8 @@ function handleSidecarEvent(event) {
           "disconnected",
         peripheralId: event.node?.peripheral_id ?? event.node?.peripheralId ?? null,
         knownDeviceId: event.node?.known_device_id ?? event.node?.knownDeviceId ?? null,
-        bootId: event.boot_id ?? event.bootId ?? null,
       });
-      void enqueueNodeConnectionStateEvent(event);
-      break;
-    case "telemetry": {
-      const payload = {
-        deviceId: event.payload?.device_id ?? event.payload?.deviceId,
-        state: event.payload?.state,
-        timestamp: event.payload?.timestamp,
-        delta: event.payload?.delta ?? null,
-        sequence: event.payload?.sequence,
-        bootId: event.payload?.boot_id ?? event.payload?.bootId,
-        firmwareVersion: event.payload?.firmware_version ?? event.payload?.firmwareVersion,
-        hardwareId: event.payload?.hardware_id ?? event.payload?.hardwareId,
-      };
-
-      if (!payload.deviceId || !payload.state || !payload.timestamp) {
-        setRuntimeIssue("Windows BLE sidecar emitted an invalid telemetry payload.");
-        break;
-      }
-
-      void runtimeBridge
-        .forwardTelemetry(payload, event.node ?? {})
-        .then(() => {
-          emitRuntimeDeviceUpdated(payload.deviceId);
-          emitGatewayState();
-        })
-        .catch((error) => {
-          console.error("[gateway-winrt] failed to forward telemetry", error);
-          setRuntimeIssue(error instanceof Error ? error.message : "Telemetry forwarding failed.");
-        });
-      break;
-    }
-    case "history_record":
-      log("received history record", {
-        deviceId: event.device_id ?? null,
-        requestId: event.request_id ?? null,
-        sequence: event.record?.sequence ?? null,
-        kind: event.record?.kind ?? null,
-      });
-      void runtimeBridge.handleHistoryRecord({
-        device_id: event.device_id,
-        request_id: event.request_id,
-        node: event.node ?? {},
-        record: event.record,
-      }).catch((error) => {
-        console.error("[gateway-winrt] failed to buffer history record", error);
-        setRuntimeIssue(error instanceof Error ? error.message : "History record buffering failed.");
-      });
-      break;
-    case "history_sync_complete":
-      log("received history sync completion", {
-        deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
-        latestSequence:
-          event.payload?.latest_sequence ?? event.payload?.latestSequence ?? null,
-        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
-        highWaterSequence:
-          event.payload?.high_water_sequence ?? event.payload?.highWaterSequence ?? null,
-        sentCount: event.payload?.sent_count ?? event.payload?.sentCount ?? null,
-        hasMore: event.payload?.has_more ?? event.payload?.hasMore ?? null,
-      });
-      void runtimeBridge
-        .handleHistorySyncComplete({
-          node: event.node ?? {},
-          payload: event.payload ?? {},
-        })
-        .catch((error) => {
-          console.error("[gateway-winrt] failed to complete history sync page", error);
-          setRuntimeIssue(error instanceof Error ? error.message : "History sync failed.");
-        });
-      break;
-    case "history_error":
-      log("received history sync error", {
-        deviceId: event.payload?.device_id ?? event.payload?.deviceId ?? null,
-        requestId: event.payload?.request_id ?? event.payload?.requestId ?? null,
-        code: event.payload?.code ?? null,
-        detail: event.payload?.message ?? null,
-      });
-      void runtimeBridge
-        .handleHistoryError({
-          node: event.node ?? {},
-          payload: event.payload ?? {},
-        })
-        .then(() => {
-          emitDesktopMessage({
-            type: "history_error",
-            node: event.node ?? {},
-            payload: event.payload ?? {},
-          });
-        })
-        .catch((error) => {
-          console.error("[gateway-winrt] failed to process history sync error", error);
-          setRuntimeIssue(
-            error instanceof Error ? error.message : "History sync failure handling failed.",
-          );
-        });
+      applyNodeConnectionState(event);
       break;
     case "log":
       if (
@@ -589,12 +410,6 @@ async function startSidecar() {
   sidecarSessionStarted = false;
   scanRequestedFromBoot = config.startScanOnBoot;
   lastLoggedAdapterSnapshot = null;
-  setManualScanState({
-    state: "idle",
-    pairingCandidateId: null,
-    error: null,
-    clearCandidates: true,
-  });
   sidecar = spawn(config.sidecarPath, config.sidecarArgs ?? [], {
     cwd: process.cwd(),
     env: {
@@ -613,12 +428,6 @@ async function startSidecar() {
     currentScanReason = null;
     runtimeServer.setAdapterState("unknown");
     runtimeServer.setScanState("stopped", null);
-    setManualScanState({
-      state: "idle",
-      pairingCandidateId: null,
-      error: null,
-      clearCandidates: true,
-    });
 
     if (!shuttingDown) {
       setRuntimeIssue(`Windows BLE sidecar exited (${signal ?? code ?? "unknown"}).`);

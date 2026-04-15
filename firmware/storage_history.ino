@@ -662,6 +662,10 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
     firmware_runtime::createHistorySyncRequest(command, HISTORY_SYNC_PAGE_SIZE);
   const String effectiveSessionId =
     request.sessionId.length() > 0 ? String(request.sessionId.c_str()) : runtimeAppSessionId;
+  const bool shortReconnectToken = effectiveSessionId.length() == 8;
+  const bool sessionMatches = shortReconnectToken
+    ? runtimeAppSessionId.startsWith(effectiveSessionId)
+    : effectiveSessionId == runtimeAppSessionId;
 
   if (!runtimeBleConnected || !runtimeAppSessionConnected) {
     sendHistoryError(
@@ -683,7 +687,7 @@ void beginHistorySyncRequest(const firmware_runtime::HistoryControlCommand& comm
     return;
   }
 
-  if (effectiveSessionId != runtimeAppSessionId) {
+  if (!sessionMatches) {
     sendHistoryError(
       effectiveSessionId,
       request.requestId.c_str(),
@@ -749,8 +753,12 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
     firmware_runtime::createHistoryAckRequest(command);
   const String effectiveSessionId =
     request.sessionId.length() > 0 ? String(request.sessionId.c_str()) : runtimeAppSessionId;
+  const bool shortReconnectToken = effectiveSessionId.length() == 8;
+  const bool sessionMatches = shortReconnectToken
+    ? runtimeAppSessionId.startsWith(effectiveSessionId)
+    : effectiveSessionId == runtimeAppSessionId;
 
-  if (!runtimeAppSessionConnected || effectiveSessionId != runtimeAppSessionId) {
+  if (!runtimeAppSessionConnected || !sessionMatches) {
     sendHistoryError(
       effectiveSessionId,
       request.requestId.c_str(),

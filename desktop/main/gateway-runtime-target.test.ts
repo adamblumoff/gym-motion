@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveGatewayScriptPath,
-  resolveWindowsBridgeRelayPath,
   resolveWindowsSidecarLaunch,
   usesWindowsNativeGateway,
 } from "./gateway-runtime-target";
@@ -39,7 +38,7 @@ describe("gateway runtime target", () => {
     ).toThrow("Unsupported desktop BLE platform: linux");
   });
 
-  it("resolves the packaged sidecar path", () => {
+  it("resolves the packaged native sidecar path by default", () => {
     expect(
       resolveWindowsSidecarLaunch({
         isPackaged: true,
@@ -53,12 +52,7 @@ describe("gateway runtime target", () => {
     });
   });
 
-  it("resolves the .NET sidecar path in dev by default", () => {
-    delete process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL;
-    delete process.env.GYM_MOTION_WINDOWS_BLE_BACKEND;
-    delete process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT;
-    delete process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR;
-
+  it("resolves the .NET WinRT sidecar path in dev by default", () => {
     expect(
       resolveWindowsSidecarLaunch({
         isPackaged: false,
@@ -79,53 +73,5 @@ describe("gateway runtime target", () => {
       ),
       args: [],
     });
-  });
-
-  it("prefers the bridge sidecar when bridge mode is configured", () => {
-    process.env.GYM_MOTION_WINDOWS_BLE_BACKEND = "bridge";
-
-    expect(
-      resolveWindowsSidecarLaunch({
-        isPackaged: false,
-        cwd: "/repo",
-        resourcesPath: "/resources",
-        execPath: "/electron",
-      }),
-    ).toEqual({
-      command: "/electron",
-      args: [
-        path.join(
-          "/repo",
-          "out",
-          "runtime",
-          "desktop",
-          "scripts",
-          "windows-serial-bridge-sidecar.js",
-        ),
-      ],
-    });
-
-    delete process.env.GYM_MOTION_WINDOWS_BLE_BACKEND;
-  });
-
-  it("resolves the bridge relay path in dev", () => {
-    expect(
-      resolveWindowsBridgeRelayPath({
-        isPackaged: false,
-        cwd: "/repo",
-        resourcesPath: "/resources",
-      }),
-    ).toBe(
-      path.join(
-        "/repo",
-        "native",
-        "windows-serial-bridge-relay",
-        "bin",
-        "Release",
-        "net9.0-windows10.0.19041.0",
-        "publish",
-        "gym-motion-usb-bridge-relay.exe",
-      ),
-    );
   });
 });

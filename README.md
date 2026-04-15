@@ -24,7 +24,7 @@ Historical bug context lives in [docs/bugs/windows-ble-bugs.md](/home/adamblumof
 - Electron main process for lifecycle, tray, persistence, and native integration
 - React renderer app for operator workflows
 - Shared TypeScript core for contracts and runtime helpers
-- Rust WinRT BLE sidecar on Windows for built-in Bluetooth support
+- Windows-native BLE sidecar for direct communication with the XIAO nRF52840 motion node
 - Windows-first packaging via `electron-builder`
 
 ## Commands
@@ -63,6 +63,6 @@ bun run test:windows-desktop
 ## Notes
 
 - The desktop product target is Windows only.
-- The supported BLE runtime path is Windows app + Rust WinRT sidecar + ESP32 firmware app-session protocol.
+- The supported BLE runtime path is Windows app + direct BLE sidecar + one XIAO nRF52840 node that reads the sensor and serves BLE.
 - The desktop app reads env config from `.env` and `.env.local` before starting the local runtime pieces.
 - Remote Postgres remains the v1 source of truth.

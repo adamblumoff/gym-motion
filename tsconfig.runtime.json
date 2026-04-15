@@ -13,7 +13,6 @@
   "include": [
     "backend/runtime/**/*.ts",
     "desktop/scripts/windows-winrt-gateway*.ts",
-    "desktop/scripts/windows-serial-bridge-sidecar.ts",
     "desktop/e2e/fake-gateway-child.ts"
   ],
   "exclude": [

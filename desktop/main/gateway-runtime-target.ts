@@ -1,21 +1,5 @@
 import path from "node:path";
 
-function selectedWindowsGatewayBackend() {
-  if (
-    process.env.GYM_MOTION_WINDOWS_BLE_BACKEND === "bridge" ||
-    process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT ||
-    process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR === "1"
-  ) {
-    return "bridge";
-  }
-
-  return "winrt";
-}
-
-function selectedWindowsSidecarImplementation() {
-  return process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust" ? "rust" : "dotnet";
-}
-
 export function usesWindowsNativeGateway(platform: NodeJS.Platform) {
   return platform === "win32";
 }
@@ -58,49 +42,9 @@ export function resolveWindowsSidecarLaunch(options: {
   resourcesPath: string;
   execPath: string;
 }) {
-  if (selectedWindowsGatewayBackend() === "bridge") {
-    const bridgeSidecarScript = options.isPackaged
-      ? path.join(
-          options.resourcesPath,
-          "app.asar.unpacked",
-          "out",
-          "runtime",
-          "desktop",
-          "scripts",
-          "windows-serial-bridge-sidecar.js",
-        )
-      : path.join(
-          options.cwd,
-          "out",
-          "runtime",
-          "desktop",
-          "scripts",
-          "windows-serial-bridge-sidecar.js",
-        );
-
-    return {
-      command: options.execPath,
-      args: [bridgeSidecarScript],
-    };
-  }
-
   if (options.isPackaged) {
     return {
       command: path.join(options.resourcesPath, "bin", "gym-motion-ble-winrt.exe"),
-      args: [],
-    };
-  }
-
-  if (selectedWindowsSidecarImplementation() === "rust") {
-    return {
-      command: path.join(
-        options.cwd,
-        "native",
-        "windows-ble-sidecar",
-        "target",
-        "release",
-        "gym-motion-ble-winrt.exe",
-      ),
       args: [],
     };
   }
@@ -118,25 +62,4 @@ export function resolveWindowsSidecarLaunch(options: {
     ),
     args: [],
   };
-}
-
-export function resolveWindowsBridgeRelayPath(options: {
-  isPackaged: boolean;
-  cwd: string;
-  resourcesPath: string;
-}) {
-  if (options.isPackaged) {
-    return path.join(options.resourcesPath, "bin", "gym-motion-usb-bridge-relay.exe");
-  }
-
-  return path.join(
-    options.cwd,
-    "native",
-    "windows-serial-bridge-relay",
-    "bin",
-    "Release",
-    "net9.0-windows10.0.19041.0",
-    "publish",
-    "gym-motion-usb-bridge-relay.exe",
-  );
 }

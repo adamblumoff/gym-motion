@@ -2,12 +2,10 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Devices.Radios;
-using Windows.Foundation;
 using Windows.Security.Cryptography;
 using Windows.Storage.Streams;
 
@@ -41,10 +39,8 @@ internal sealed class SidecarApp
 
     private BluetoothLEAdvertisementWatcher? _watcher;
     private bool _sessionStarted;
-    private bool _manualScanRequested;
     private string? _selectedAdapterId;
     private DateTimeOffset? _lastAdvertisementAt;
-    private string? _gatewayIssue;
 
     public async Task RunAsync()
     {
@@ -115,46 +111,22 @@ internal sealed class SidecarApp
                 break;
             case "set_allowed_nodes":
                 UpdateAllowedNodes(root);
+                if (_sessionStarted)
+                {
+                    TryConnectApprovedNodes();
+                }
                 break;
             case "start":
                 _sessionStarted = true;
-                _manualScanRequested = false;
                 EnsureWatcher();
                 await EmitGatewayStateAsync();
-                await TryConnectApprovedNodesAsync();
+                TryConnectApprovedNodes();
                 break;
             case "rescan":
-                _manualScanRequested = false;
-                EnsureWatcher(forceRestart: true);
-                await EmitGatewayStateAsync();
-                break;
-            case "start_manual_scan":
-                _manualScanRequested = true;
-                EnsureWatcher(forceRestart: true);
-                await EmitEventAsync(new
-                {
-                    type = "manual_scan_state",
-                    state = "scanning",
-                    candidate_id = (string?)null,
-                    error = (string?)null,
-                });
-                await EmitGatewayStateAsync();
-                break;
             case "refresh_scan_policy":
-                await TryConnectApprovedNodesAsync();
-                break;
-            case "begin_history_sync":
-                await BeginHistorySyncAsync(root);
-                break;
-            case "acknowledge_history_sync":
-                await AcknowledgeHistorySyncAsync(root);
-                break;
-            case "pair_manual_candidate":
-                await PairManualCandidateAsync(root);
-                break;
-            case "recover_approved_node":
-            case "resume_approved_node_reconnect":
-                await TryConnectApprovedNodesAsync();
+                EnsureWatcher(forceRestart: true);
+                await EmitGatewayStateAsync();
+                TryConnectApprovedNodes();
                 break;
             case "stop":
                 await StopAsync();
@@ -175,132 +147,23 @@ internal sealed class SidecarApp
     {
         _allowedRulesById.Clear();
 
-        if (root.TryGetProperty("nodes", out var nodesElement) && nodesElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var node in nodesElement.EnumerateArray())
-            {
-                var rule = new AllowedNodeRule(
-                    Id: GetString(node, "id") ?? $"rule-{Guid.NewGuid():N}",
-                    Label: GetString(node, "label") ?? "Approved node",
-                    PeripheralId: GetString(node, "peripheral_id"),
-                    Address: NormalizeAddress(GetString(node, "address")),
-                    LocalName: GetString(node, "local_name"),
-                    KnownDeviceId: GetString(node, "known_device_id"));
-
-                _allowedRulesById[rule.Id] = rule;
-            }
-        }
-    }
-
-    private async Task BeginHistorySyncAsync(JsonElement root)
-    {
-        var deviceId = GetString(root, "device_id");
-        var requestId = GetString(root, "request_id");
-
-        if (deviceId is null || requestId is null)
+        if (!root.TryGetProperty("nodes", out var nodesElement) || nodesElement.ValueKind != JsonValueKind.Array)
         {
             return;
         }
 
-        var connection = FindConnectionByDeviceId(deviceId);
-
-        if (connection is null)
+        foreach (var node in nodesElement.EnumerateArray())
         {
-            await EmitHistoryErrorAsync(deviceId, requestId, "history_connection_missing", "Node is not connected.");
-            return;
+            var rule = new AllowedNodeRule(
+                Id: GetString(node, "id") ?? $"rule-{Guid.NewGuid():N}",
+                Label: GetString(node, "label") ?? "Approved node",
+                PeripheralId: GetString(node, "peripheral_id"),
+                Address: NormalizeAddress(GetString(node, "address")),
+                LocalName: GetString(node, "local_name"),
+                KnownDeviceId: GetString(node, "known_device_id"));
+
+            _allowedRulesById[rule.Id] = rule;
         }
-
-        var payload = JsonSerializer.Serialize(new
-        {
-            type = "history-page-request",
-            sessionId = connection.SessionId,
-            requestId,
-            afterSequence = GetUInt64(root, "after_sequence") ?? 0,
-            maxRecords = GetInt32(root, "max_records") ?? 0,
-        }, _jsonOptions);
-
-        var wrote = await connection.WriteHistoryControlAsync(payload, _shutdown.Token);
-
-        if (!wrote)
-        {
-            await EmitHistoryErrorAsync(deviceId, requestId, "history_write_failed", "History request write failed.");
-        }
-    }
-
-    private async Task AcknowledgeHistorySyncAsync(JsonElement root)
-    {
-        var deviceId = GetString(root, "device_id");
-        var requestId = GetString(root, "request_id");
-
-        if (deviceId is null || requestId is null)
-        {
-            return;
-        }
-
-        var connection = FindConnectionByDeviceId(deviceId);
-
-        if (connection is null)
-        {
-            await EmitHistoryErrorAsync(deviceId, requestId, "history_connection_missing", "Node is not connected.");
-            return;
-        }
-
-        var payload = JsonSerializer.Serialize(new
-        {
-            type = "history-page-ack",
-            sessionId = connection.SessionId,
-            requestId,
-            sequence = GetUInt64(root, "sequence") ?? 0,
-        }, _jsonOptions);
-
-        var wrote = await connection.WriteHistoryControlAsync(payload, _shutdown.Token);
-
-        if (!wrote)
-        {
-            await EmitHistoryErrorAsync(deviceId, requestId, "history_ack_failed", "History ack write failed.");
-        }
-    }
-
-    private async Task PairManualCandidateAsync(JsonElement root)
-    {
-        var candidateId = GetString(root, "candidate_id");
-
-        if (candidateId is null)
-        {
-            return;
-        }
-
-        var candidate = _discoveredNodes.Values.FirstOrDefault(node => node.NodeId == candidateId);
-
-        if (candidate is null)
-        {
-            await EmitEventAsync(new
-            {
-                type = "manual_scan_state",
-                state = "failed",
-                candidate_id = (string?)null,
-                error = "The requested pairing candidate is no longer visible.",
-            });
-            return;
-        }
-
-        await EmitEventAsync(new
-        {
-            type = "manual_scan_state",
-            state = "pairing",
-            candidate_id = candidate.NodeId,
-            error = (string?)null,
-        });
-
-        await EmitNodeDiscoveredAsync(candidate, "manual_scan");
-
-        await EmitEventAsync(new
-        {
-            type = "manual_scan_state",
-            state = "idle",
-            candidate_id = (string?)null,
-            error = (string?)null,
-        });
     }
 
     private void EnsureWatcher(bool forceRestart = false)
@@ -354,8 +217,7 @@ internal sealed class SidecarApp
 
         try
         {
-            var info = BuildDiscoveredNode(args);
-
+            var info = BuildApprovedNode(args);
             if (info is null)
             {
                 return;
@@ -364,14 +226,10 @@ internal sealed class SidecarApp
             _discoveredNodes[args.BluetoothAddress] = info;
             _lastAdvertisementAt = DateTimeOffset.UtcNow;
 
-            if (_manualScanRequested || info.MatchedRule is not null)
-            {
-                await EmitNodeDiscoveredAsync(info, _manualScanRequested && info.MatchedRule is null ? "manual_scan" : null);
-            }
-
+            await EmitNodeDiscoveredAsync(info);
             await EmitGatewayStateAsync();
 
-            if (_sessionStarted && info.MatchedRule is not null)
+            if (_sessionStarted)
             {
                 _ = EnsureConnectedAsync(info);
             }
@@ -398,24 +256,29 @@ internal sealed class SidecarApp
         });
     }
 
-    private async Task TryConnectApprovedNodesAsync()
+    private void TryConnectApprovedNodes()
     {
-        foreach (var node in _discoveredNodes.Values.Where(candidate => candidate.MatchedRule is not null))
+        foreach (var discovered in _discoveredNodes.Values.ToArray())
         {
-            _ = EnsureConnectedAsync(node);
+            if (discovered.MatchedRule is null)
+            {
+                continue;
+            }
+
+            _ = EnsureConnectedAsync(discovered);
         }
     }
 
     private async Task EnsureConnectedAsync(DiscoveredNodeInfo discovered)
     {
         var rule = discovered.MatchedRule;
-
         if (rule is null)
         {
             return;
         }
 
-        var connection = _connectionsByRuleId.GetOrAdd(rule.Id, _ => new NodeConnection(discovered, rule, this, _config));
+        var connection = _connectionsByRuleId.GetOrAdd(rule.Id, _ => new NodeConnection(rule, this, _config));
+        connection.UpdateDiscovered(discovered);
         await connection.ConnectIfNeededAsync(_shutdown.Token);
     }
 
@@ -423,7 +286,6 @@ internal sealed class SidecarApp
     {
         StopWatcher();
         _sessionStarted = false;
-        _manualScanRequested = false;
 
         foreach (var connection in _connectionsByRuleId.Values)
         {
@@ -472,7 +334,7 @@ internal sealed class SidecarApp
         lock (_stateGate)
         {
             scanState = _watcher?.Status == BluetoothLEAdvertisementWatcherStatus.Started
-                ? (_manualScanRequested ? "manual_scanning" : "scanning")
+                ? "scanning"
                 : "stopped";
         }
 
@@ -481,29 +343,24 @@ internal sealed class SidecarApp
             type = "gateway_state",
             gateway = new
             {
-                adapter_state = string.IsNullOrWhiteSpace(_selectedAdapterId) ? "unknown" : "ready",
+                adapter_state = string.IsNullOrWhiteSpace(_selectedAdapterId) ? "unknown" : "poweredOn",
                 scan_state = scanState,
-                scan_reason = _manualScanRequested ? "manual" : (_sessionStarted ? "approved_nodes" : (string?)null),
+                scan_reason = _sessionStarted ? "approved_nodes" : (string?)null,
                 selected_adapter_id = _selectedAdapterId,
                 last_advertisement_at = _lastAdvertisementAt?.ToString("O"),
-                issue = _gatewayIssue,
             },
         });
     }
 
-    internal async Task EmitNodeDiscoveredAsync(DiscoveredNodeInfo discovered, string? scanReason)
-    {
-        await EmitEventAsync(new
+    internal Task EmitNodeDiscoveredAsync(DiscoveredNodeInfo discovered)
+        => EmitEventAsync(new
         {
             type = "node_discovered",
             node = discovered.ToProtocolNode(),
-            scan_reason = scanReason,
         });
-    }
 
-    internal async Task EmitNodeConnectionStateAsync(DiscoveredNodeInfo discovered, string state, string? bootId, string? reason = null)
-    {
-        await EmitEventAsync(new
+    internal Task EmitNodeConnectionStateAsync(DiscoveredNodeInfo discovered, string state, string? bootId, string? reason = null)
+        => EmitEventAsync(new
         {
             type = "node_connection_state",
             node = discovered.ToProtocolNode(),
@@ -512,67 +369,6 @@ internal sealed class SidecarApp
             reason,
             reconnect = (object?)null,
         });
-    }
-
-    internal async Task EmitTelemetryAsync(DiscoveredNodeInfo discovered, JsonObject payload)
-    {
-        await EmitEventAsync(new
-        {
-            type = "telemetry",
-            node = discovered.ToProtocolNode(),
-            payload,
-        });
-    }
-
-    internal async Task EmitHistoryRecordAsync(DiscoveredNodeInfo discovered, string deviceId, string requestId, JsonNode record)
-    {
-        await EmitEventAsync(new
-        {
-            type = "history_record",
-            node = discovered.ToProtocolNode(),
-            device_id = deviceId,
-            request_id = requestId,
-            record,
-        });
-    }
-
-    internal async Task EmitHistorySyncCompleteAsync(DiscoveredNodeInfo discovered, JsonObject payload)
-    {
-        await EmitEventAsync(new
-        {
-            type = "history_sync_complete",
-            node = discovered.ToProtocolNode(),
-            payload,
-        });
-    }
-
-    internal async Task EmitHistoryErrorAsync(string deviceId, string? requestId, string code, string message)
-    {
-        await EmitEventAsync(new
-        {
-            type = "history_error",
-            node = new
-            {
-                id = deviceId,
-                label = deviceId,
-                peripheral_id = (string?)null,
-                address = (string?)null,
-                local_name = (string?)null,
-                known_device_id = deviceId,
-                last_rssi = (int?)null,
-                last_seen_at = (string?)null,
-            },
-            payload = new
-            {
-                type = "history-error",
-                device_id = deviceId,
-                session_id = (string?)null,
-                request_id = requestId,
-                code,
-                message,
-            },
-        });
-    }
 
     internal Task EmitLogAsync(string level, string message, object? details = null)
         => EmitEventAsync(new
@@ -607,20 +403,13 @@ internal sealed class SidecarApp
         }
     }
 
-    private DiscoveredNodeInfo? BuildDiscoveredNode(BluetoothLEAdvertisementReceivedEventArgs args)
+    private DiscoveredNodeInfo? BuildApprovedNode(BluetoothLEAdvertisementReceivedEventArgs args)
     {
         var localName = args.Advertisement.LocalName;
         var address = FormatBluetoothAddress(args.BluetoothAddress);
         var matchedRule = _allowedRulesById.Values.FirstOrDefault(rule => RuleMatches(rule, localName, address));
 
-        if (!_manualScanRequested && matchedRule is null)
-        {
-            return null;
-        }
-
-        if (_manualScanRequested && matchedRule is null &&
-            !string.IsNullOrEmpty(_config.DeviceNamePrefix) &&
-            !(localName?.StartsWith(_config.DeviceNamePrefix, StringComparison.OrdinalIgnoreCase) ?? false))
+        if (matchedRule is null)
         {
             return null;
         }
@@ -628,11 +417,11 @@ internal sealed class SidecarApp
         return new DiscoveredNodeInfo(
             BluetoothAddress: args.BluetoothAddress,
             NodeId: $"peripheral:{address}",
-            Label: matchedRule?.Label ?? localName ?? address,
+            Label: matchedRule.Label,
             PeripheralId: $"winrt:{address}",
             Address: address,
             LocalName: localName,
-            KnownDeviceId: matchedRule?.KnownDeviceId,
+            KnownDeviceId: matchedRule.KnownDeviceId,
             LastRssi: args.RawSignalStrengthInDBm,
             LastSeenAt: DateTimeOffset.UtcNow,
             MatchedRule: matchedRule);
@@ -640,6 +429,12 @@ internal sealed class SidecarApp
 
     private static bool RuleMatches(AllowedNodeRule rule, string? localName, string address)
     {
+        if (!string.IsNullOrWhiteSpace(rule.PeripheralId) &&
+            string.Equals(rule.PeripheralId, $"winrt:{address}", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         if (!string.IsNullOrWhiteSpace(rule.Address) &&
             string.Equals(NormalizeAddress(rule.Address), NormalizeAddress(address), StringComparison.OrdinalIgnoreCase))
         {
@@ -652,13 +447,14 @@ internal sealed class SidecarApp
             return true;
         }
 
-        return false;
-    }
+        if (!string.IsNullOrWhiteSpace(rule.LocalName) &&
+            !string.IsNullOrWhiteSpace(localName) &&
+            localName.StartsWith(rule.LocalName + "-s", StringComparison.Ordinal))
+        {
+            return true;
+        }
 
-    private NodeConnection? FindConnectionByDeviceId(string deviceId)
-    {
-        return _connectionsByRuleId.Values.FirstOrDefault(connection =>
-            string.Equals(connection.DeviceId, deviceId, StringComparison.Ordinal));
+        return false;
     }
 
     private static string? GetString(JsonElement root, string propertyName)
@@ -669,26 +465,6 @@ internal sealed class SidecarApp
         }
 
         return property.GetString();
-    }
-
-    private static int? GetInt32(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Number)
-        {
-            return null;
-        }
-
-        return property.GetInt32();
-    }
-
-    private static ulong? GetUInt64(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Number)
-        {
-            return null;
-        }
-
-        return property.GetUInt64();
     }
 
     private static string FormatBluetoothAddress(ulong address)
@@ -720,143 +496,132 @@ internal sealed class NodeConnection
     private const int ControlChunkSize = 96;
     private static readonly TimeSpan ControlChunkInterval = TimeSpan.FromMilliseconds(60);
 
-    private readonly DiscoveredNodeInfo _discovered;
     private readonly AllowedNodeRule _rule;
     private readonly SidecarApp _app;
     private readonly Config _config;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
 
+    private DiscoveredNodeInfo? _discovered;
     private BluetoothLEDevice? _device;
     private GattDeviceService? _runtimeService;
-    private GattDeviceService? _historyService;
-    private GattCharacteristic? _telemetryCharacteristic;
     private GattCharacteristic? _controlCharacteristic;
     private GattCharacteristic? _statusCharacteristic;
-    private GattCharacteristic? _historyControlCharacteristic;
-    private GattCharacteristic? _historyStatusCharacteristic;
+    private CancellationTokenSource? _sessionLifetime;
     private Task? _leaseLoop;
 
-    public NodeConnection(DiscoveredNodeInfo discovered, AllowedNodeRule rule, SidecarApp app, Config config)
+    public NodeConnection(AllowedNodeRule rule, SidecarApp app, Config config)
     {
-        _discovered = discovered;
         _rule = rule;
         _app = app;
         _config = config;
     }
 
-    public string? SessionId { get; private set; }
-
     public string? DeviceId { get; private set; }
+
+    public void UpdateDiscovered(DiscoveredNodeInfo discovered)
+    {
+        _discovered = discovered;
+    }
 
     public async Task ConnectIfNeededAsync(CancellationToken shutdownToken)
     {
+        if (_discovered is null)
+        {
+            return;
+        }
+
         await _connectGate.WaitAsync(shutdownToken);
 
         try
         {
-            if (_device is not null && _device.ConnectionStatus == BluetoothConnectionStatus.Connected && SessionId is not null)
+            if (_device is not null &&
+                _device.ConnectionStatus == BluetoothConnectionStatus.Connected &&
+                _sessionLifetime is not null &&
+                !_sessionLifetime.IsCancellationRequested)
             {
                 return;
             }
 
-            await _app.EmitNodeConnectionStateAsync(_discovered, "connecting", bootId: null);
+            var discovered = _discovered;
+            await _app.EmitNodeConnectionStateAsync(discovered, "connecting", bootId: null);
 
-            await DisposeRuntimeAsync();
+            await ConnectGattAsync(discovered, shutdownToken);
 
-            _device = await WithTimeout(
-                BluetoothLEDevice.FromBluetoothAddressAsync(_discovered.BluetoothAddress).AsTask(),
-                TimeSpan.FromSeconds(8),
-                shutdownToken);
-
-            if (_device is null)
+            var existingStatus = await ReadSessionStatusAsync(shutdownToken);
+            if (existingStatus is not null &&
+                string.Equals(existingStatus.Type, "app-session-online", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(existingStatus.SessionId))
             {
-                await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: "Device connection failed.");
+                DeviceId = existingStatus.DeviceId ?? _rule.KnownDeviceId ?? discovered.NodeId;
+
+                var adoptedBootId = existingStatus.BootId;
+                var adoptedSessionId = existingStatus.SessionId;
+                await _app.EmitLogAsync("info", "Adopted active session from direct runtime-status read.", new
+                {
+                    node = discovered.NodeId,
+                    sessionId = adoptedSessionId,
+                    bootId = adoptedBootId,
+                });
+
+                StartLeaseLoop(discovered, adoptedSessionId, shutdownToken);
+                await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
                 return;
             }
 
-            _device.ConnectionStatusChanged += OnConnectionStatusChanged;
-
-            _runtimeService = await GetRequiredServiceAsync(_device, _config.RuntimeServiceUuid, shutdownToken);
-            _historyService = await GetRequiredServiceAsync(_device, _config.HistoryServiceUuid, shutdownToken, required: false);
-
-            _telemetryCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.TelemetryUuid, shutdownToken);
-            _controlCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.ControlUuid, shutdownToken);
-            _statusCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.StatusUuid, shutdownToken);
-
-            if (_historyService is not null)
-            {
-                _historyControlCharacteristic = await GetRequiredCharacteristicAsync(_historyService, _config.HistoryControlUuid, shutdownToken, required: false);
-                _historyStatusCharacteristic = await GetRequiredCharacteristicAsync(_historyService, _config.HistoryStatusUuid, shutdownToken, required: false);
-            }
-
-            await SubscribeAsync(_telemetryCharacteristic, OnTelemetryChanged, shutdownToken);
-            await SubscribeAsync(_statusCharacteristic, OnRuntimeStatusChanged, shutdownToken);
-
-            if (_historyStatusCharacteristic is not null)
-            {
-                await SubscribeAsync(_historyStatusCharacteristic, OnHistoryStatusChanged, shutdownToken);
-            }
-
-            var initialStatus = await ReadCharacteristicJsonAsync(_statusCharacteristic, shutdownToken);
-            await _app.EmitLogAsync("info", "Read runtime status before app-session-begin.", new
-            {
-                node = _discovered.NodeId,
-                status = initialStatus,
-            });
-
-            var sessionId = RandomHexToken(16);
-            var sessionNonce = RandomHexToken(16);
-
-            var began = await WriteControlAsync(JsonSerializer.Serialize(new
+            var sessionId = RandomHexToken(8);
+            var sessionNonce = RandomHexToken(8);
+            var beginPayload = JsonSerializer.Serialize(new
             {
                 type = "app-session-begin",
-                sessionId = sessionId,
-                sessionNonce = sessionNonce,
-                expiresInMs = 15000,
-            }), shutdownToken);
-
-            if (!began)
-            {
-                await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: "app-session-begin write failed.");
-                return;
-            }
-
-            await _app.EmitLogAsync("info", "Wrote app-session-begin over .NET WinRT companion.", new
-            {
-                node = _discovered.NodeId,
                 sessionId,
                 sessionNonce,
+                expiresInMs = 15000,
             });
 
-            var verified = await PollRuntimeStatusForSessionAsync(sessionId, sessionNonce, shutdownToken);
-
-            if (verified is null)
+            if (!await WriteControlAsync(beginPayload, shutdownToken))
             {
-                await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: "Session token never became visible.");
-                return;
+                throw new InvalidOperationException("Session begin write failed.");
             }
 
-            SessionId = sessionId;
-            DeviceId = verified["deviceId"]?.GetValue<string>();
-            var bootId = verified["bootId"]?.GetValue<string>();
+            var status = await WaitForSessionStatusAsync(sessionId, sessionNonce, shutdownToken);
+            if (status is null)
+            {
+                throw new InvalidOperationException("Session status verification failed.");
+            }
 
-            await _app.EmitNodeConnectionStateAsync(_discovered, "connected", bootId);
-            _leaseLoop = Task.Run(() => RunLeaseLoopAsync(_lifetime.Token));
+            DeviceId = status.DeviceId ?? _rule.KnownDeviceId ?? discovered.NodeId;
+
+            var bootId = status.BootId;
+            await _app.EmitLogAsync("info", "Established session via direct runtime-status verification.", new
+            {
+                node = discovered.NodeId,
+                sessionId,
+                sessionNonce,
+                bootId,
+            });
+
+            StartLeaseLoop(discovered, sessionId, shutdownToken);
+            await _app.EmitNodeConnectionStateAsync(discovered, "connected", bootId);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception error)
         {
-            await _app.EmitLogAsync("error", "Failed to connect approved node via .NET WinRT companion.", new
+            var discovered = _discovered;
+            if (discovered is not null)
             {
-                ruleId = _rule.Id,
-                node = _discovered.NodeId,
-                error = error.Message,
-            });
-            await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: error.Message);
-            await DisposeRuntimeAsync();
+                await _app.EmitLogAsync("error", "Failed to connect approved node via .NET WinRT companion.", new
+                {
+                    ruleId = _rule.Id,
+                    node = discovered.NodeId,
+                    error = error.Message,
+                });
+                await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: error.Message);
+            }
+
+            ResetConnectionState();
         }
         finally
         {
@@ -864,24 +629,15 @@ internal sealed class NodeConnection
         }
     }
 
-    public async Task<bool> WriteHistoryControlAsync(string payload, CancellationToken shutdownToken)
-    {
-        if (_historyControlCharacteristic is null)
-        {
-            return false;
-        }
-
-        return await WriteFramedJsonAsync(_historyControlCharacteristic, payload, shutdownToken);
-    }
-
     public async ValueTask DisposeAsync()
     {
         _lifetime.Cancel();
-        await DisposeRuntimeAsync();
-    }
 
-    private async Task DisposeRuntimeAsync()
-    {
+        if (_sessionLifetime is not null)
+        {
+            _sessionLifetime.Cancel();
+        }
+
         if (_leaseLoop is not null)
         {
             try
@@ -891,52 +647,149 @@ internal sealed class NodeConnection
             catch
             {
             }
-
-            _leaseLoop = null;
         }
 
-        if (_telemetryCharacteristic is not null)
-        {
-            _telemetryCharacteristic.ValueChanged -= OnTelemetryChanged;
-        }
-
-        if (_statusCharacteristic is not null)
-        {
-            _statusCharacteristic.ValueChanged -= OnRuntimeStatusChanged;
-        }
-
-        if (_historyStatusCharacteristic is not null)
-        {
-            _historyStatusCharacteristic.ValueChanged -= OnHistoryStatusChanged;
-        }
-
-        if (_device is not null)
-        {
-            _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
-        }
-
-        _telemetryCharacteristic = null;
-        _controlCharacteristic = null;
-        _statusCharacteristic = null;
-        _historyControlCharacteristic = null;
-        _historyStatusCharacteristic = null;
-
-        _runtimeService?.Dispose();
-        _historyService?.Dispose();
-        _device?.Dispose();
-
-        _runtimeService = null;
-        _historyService = null;
-        _device = null;
-        SessionId = null;
-        DeviceId = null;
+        ResetConnectionState();
+        _connectGate.Dispose();
+        _lifetime.Dispose();
     }
 
-    private async Task<GattDeviceService?> GetRequiredServiceAsync(
+    private async Task ConnectGattAsync(DiscoveredNodeInfo discovered, CancellationToken shutdownToken)
+    {
+        ResetConnectionState();
+
+        _device = await WithTimeout(
+            BluetoothLEDevice.FromBluetoothAddressAsync(discovered.BluetoothAddress).AsTask(),
+            TimeSpan.FromSeconds(8),
+            shutdownToken);
+
+        if (_device is null)
+        {
+            throw new InvalidOperationException("Device connection failed.");
+        }
+
+        _device.ConnectionStatusChanged += OnConnectionStatusChanged;
+
+        _runtimeService = await GetRequiredServiceAsync(_device, _config.RuntimeServiceUuid, shutdownToken);
+
+        _controlCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.ControlUuid, shutdownToken);
+        _statusCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.StatusUuid, shutdownToken);
+    }
+
+    private async Task<SessionStatus?> WaitForSessionStatusAsync(
+        string expectedSessionId,
+        string expectedSessionNonce,
+        CancellationToken shutdownToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(12);
+
+        while (DateTimeOffset.UtcNow < deadline && !shutdownToken.IsCancellationRequested)
+        {
+            var status = await ReadSessionStatusAsync(shutdownToken);
+            if (status is not null &&
+                string.Equals(status.Type, "app-session-online", StringComparison.Ordinal) &&
+                string.Equals(status.SessionId, expectedSessionId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(status.SessionNonce, expectedSessionNonce, StringComparison.OrdinalIgnoreCase))
+            {
+                return status;
+            }
+
+            await Task.Delay(250, shutdownToken);
+        }
+
+        return null;
+    }
+
+    private void StartLeaseLoop(DiscoveredNodeInfo discovered, string sessionId, CancellationToken shutdownToken)
+    {
+        _sessionLifetime?.Cancel();
+        _sessionLifetime?.Dispose();
+        _sessionLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, shutdownToken);
+        var leaseToken = _sessionLifetime.Token;
+
+        _leaseLoop = Task.Run(async () =>
+        {
+            while (!leaseToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), leaseToken);
+
+                var wrote = await WriteControlAsync(JsonSerializer.Serialize(new
+                {
+                    type = "app-session-lease",
+                    sessionId,
+                    expiresInMs = 15000,
+                }), leaseToken);
+
+                if (!wrote)
+                {
+                    await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: "Session lease write failed.");
+                    ResetConnectionState();
+                    return;
+                }
+            }
+        }, leaseToken);
+    }
+
+    private async void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
+    {
+        if (sender.ConnectionStatus == BluetoothConnectionStatus.Connected)
+        {
+            return;
+        }
+
+        var discovered = _discovered;
+        ResetConnectionState();
+
+        if (discovered is not null)
+        {
+            await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: "Bluetooth connection dropped.");
+        }
+    }
+
+    private async Task<SessionStatus?> ReadSessionStatusAsync(CancellationToken shutdownToken)
+    {
+        if (_statusCharacteristic is null)
+        {
+            return null;
+        }
+
+        var result = await WithTimeout(
+            _statusCharacteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(),
+            TimeSpan.FromSeconds(8),
+            shutdownToken);
+
+        if (result.Status != GattCommunicationStatus.Success)
+        {
+            return null;
+        }
+
+        var text = ReadBufferText(result.Value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            var root = document.RootElement;
+            return new SessionStatus(
+                Type: GetString(root, "type"),
+                DeviceId: GetString(root, "deviceId"),
+                BootId: GetString(root, "bootId"),
+                SessionId: GetString(root, "sessionId"),
+                SessionNonce: GetString(root, "sessionNonce"));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<GattDeviceService> GetRequiredServiceAsync(
         BluetoothLEDevice device,
         Guid uuid,
-        CancellationToken shutdownToken,
-        bool required = true)
+        CancellationToken shutdownToken)
     {
         var result = await WithTimeout(
             device.GetGattServicesForUuidAsync(uuid, BluetoothCacheMode.Uncached).AsTask(),
@@ -948,25 +801,14 @@ internal sealed class NodeConnection
             return result.Services[0];
         }
 
-        if (!required)
-        {
-            return null;
-        }
-
         throw new InvalidOperationException($"Required GATT service {uuid} was not available.");
     }
 
-    private async Task<GattCharacteristic?> GetRequiredCharacteristicAsync(
-        GattDeviceService? service,
+    private async Task<GattCharacteristic> GetRequiredCharacteristicAsync(
+        GattDeviceService service,
         Guid uuid,
-        CancellationToken shutdownToken,
-        bool required = true)
+        CancellationToken shutdownToken)
     {
-        if (service is null)
-        {
-            return null;
-        }
-
         var result = await WithTimeout(
             service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached).AsTask(),
             TimeSpan.FromSeconds(8),
@@ -977,33 +819,7 @@ internal sealed class NodeConnection
             return result.Characteristics[0];
         }
 
-        if (!required)
-        {
-            return null;
-        }
-
         throw new InvalidOperationException($"Required GATT characteristic {uuid} was not available.");
-    }
-
-    private async Task SubscribeAsync(
-        GattCharacteristic characteristic,
-        TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs> handler,
-        CancellationToken shutdownToken)
-    {
-        characteristic.ValueChanged += handler;
-        var descriptorMode = characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Indicate)
-            ? GattClientCharacteristicConfigurationDescriptorValue.Indicate
-            : GattClientCharacteristicConfigurationDescriptorValue.Notify;
-
-        var result = await WithTimeout(
-            characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(descriptorMode).AsTask(),
-            TimeSpan.FromSeconds(8),
-            shutdownToken);
-
-        if (result != GattCommunicationStatus.Success)
-        {
-            throw new InvalidOperationException($"CCCD write failed for {characteristic.Uuid}: {result}");
-        }
     }
 
     private async Task<bool> WriteControlAsync(string payload, CancellationToken shutdownToken)
@@ -1013,29 +829,13 @@ internal sealed class NodeConnection
             return false;
         }
 
-        return await WriteFramedJsonAsync(_controlCharacteristic, payload, shutdownToken);
-    }
-
-    private static async Task<bool> WriteAsync(GattCharacteristic characteristic, string payload, CancellationToken shutdownToken)
-    {
-        var buffer = CryptographicBuffer.ConvertStringToBinary(payload, BinaryStringEncoding.Utf8);
-        var result = await WithTimeout(
-            characteristic.WriteValueWithResultAsync(buffer, GattWriteOption.WriteWithoutResponse).AsTask(),
-            TimeSpan.FromSeconds(8),
-            shutdownToken);
-
-        return result.Status == GattCommunicationStatus.Success;
-    }
-
-    private static async Task<bool> WriteFramedJsonAsync(GattCharacteristic characteristic, string payload, CancellationToken shutdownToken)
-    {
         var frames = BuildControlFrames(payload);
 
         foreach (var frame in frames)
         {
             var buffer = CryptographicBuffer.CreateFromByteArray(frame);
             var result = await WithTimeout(
-                characteristic.WriteValueWithResultAsync(buffer, GattWriteOption.WriteWithResponse).AsTask(),
+                _controlCharacteristic.WriteValueWithResultAsync(buffer, GattWriteOption.WriteWithResponse).AsTask(),
                 TimeSpan.FromSeconds(8),
                 shutdownToken);
 
@@ -1050,180 +850,35 @@ internal sealed class NodeConnection
         return true;
     }
 
-    private async Task<JsonObject?> PollRuntimeStatusForSessionAsync(string sessionId, string sessionNonce, CancellationToken shutdownToken)
+    private void ResetConnectionState()
     {
-        if (_statusCharacteristic is null)
+        _sessionLifetime?.Cancel();
+        _sessionLifetime?.Dispose();
+        _sessionLifetime = null;
+        _leaseLoop = null;
+
+        if (_device is not null)
         {
-            return null;
+            _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
         }
 
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(8);
-        JsonObject? lastObserved = null;
-
-        while (DateTimeOffset.UtcNow < deadline && !shutdownToken.IsCancellationRequested)
-        {
-            var payload = await ReadCharacteristicJsonAsync(_statusCharacteristic, shutdownToken);
-
-            if (payload is not null)
-            {
-                lastObserved = payload;
-                var observedSessionId = payload["sessionId"]?.GetValue<string>();
-                var observedSessionNonce = payload["sessionNonce"]?.GetValue<string>();
-
-                if (string.Equals(observedSessionId, sessionId, StringComparison.Ordinal) &&
-                    string.Equals(observedSessionNonce, sessionNonce, StringComparison.Ordinal))
-                {
-                    return payload;
-                }
-            }
-
-            await Task.Delay(250, shutdownToken);
-        }
-
-        await _app.EmitLogAsync("warn", "Session token never became visible from runtime status polling.", new
-        {
-            node = _discovered.NodeId,
-            expectedSessionId = sessionId,
-            expectedSessionNonce = sessionNonce,
-            lastObservedStatus = lastObserved,
-        });
-
-        return null;
+        _statusCharacteristic = null;
+        _controlCharacteristic = null;
+        _runtimeService?.Dispose();
+        _runtimeService = null;
+        _device?.Dispose();
+        _device = null;
+        DeviceId = null;
     }
 
-    private async Task RunLeaseLoopAsync(CancellationToken lifetimeToken)
-    {
-        if (SessionId is null)
-        {
-            return;
-        }
-
-        while (!lifetimeToken.IsCancellationRequested)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(5), lifetimeToken);
-
-            if (SessionId is null)
-            {
-                return;
-            }
-
-            var wrote = await WriteControlAsync(JsonSerializer.Serialize(new
-            {
-                type = "app-session-lease",
-                sessionId = SessionId,
-                expiresInMs = 15000,
-            }), lifetimeToken);
-
-            if (!wrote)
-            {
-                await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: "Session lease write failed.");
-                await DisposeRuntimeAsync();
-                return;
-            }
-        }
-    }
-
-    private async void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
-    {
-        if (sender.ConnectionStatus == BluetoothConnectionStatus.Connected)
-        {
-            return;
-        }
-
-        await _app.EmitNodeConnectionStateAsync(_discovered, "disconnected", bootId: null, reason: "Bluetooth connection dropped.");
-        await DisposeRuntimeAsync();
-    }
-
-    private async void OnTelemetryChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
-    {
-        var payload = ParseJsonBuffer(args.CharacteristicValue);
-
-        if (payload is null)
-        {
-            return;
-        }
-
-        await _app.EmitTelemetryAsync(_discovered, payload);
-    }
-
-    private async void OnRuntimeStatusChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
-    {
-        var payload = ParseJsonBuffer(args.CharacteristicValue);
-
-        if (payload is null)
-        {
-            return;
-        }
-
-        var type = payload["type"]?.GetValue<string>();
-
-        if (string.Equals(type, "board-log", StringComparison.Ordinal))
-        {
-            await _app.EmitLogAsync("info", payload["message"]?.GetValue<string>() ?? "Board log", new
-            {
-                deviceId = payload["deviceId"]?.GetValue<string>(),
-                source = "board:runtime",
-            });
-        }
-    }
-
-    private async void OnHistoryStatusChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
-    {
-        var payload = ParseJsonBuffer(args.CharacteristicValue);
-
-        if (payload is null)
-        {
-            return;
-        }
-
-        var type = payload["type"]?.GetValue<string>();
-        var deviceId = payload["deviceId"]?.GetValue<string>() ?? DeviceId ?? _discovered.KnownDeviceId ?? _discovered.NodeId;
-
-        switch (type)
-        {
-            case "history-record":
-                if (payload["record"] is not null && payload["requestId"] is JsonNode requestNode)
-                {
-                    await _app.EmitHistoryRecordAsync(_discovered, deviceId, requestNode.GetValue<string>(), payload["record"]!);
-                }
-                break;
-            case "history-page-complete":
-                await _app.EmitHistorySyncCompleteAsync(_discovered, payload);
-                break;
-            case "history-error":
-                await _app.EmitEventAsync(new
-                {
-                    type = "history_error",
-                    node = _discovered.ToProtocolNode(),
-                    payload,
-                });
-                break;
-        }
-    }
-
-    private static async Task<JsonObject?> ReadCharacteristicJsonAsync(GattCharacteristic characteristic, CancellationToken shutdownToken)
-    {
-        var result = await WithTimeout(
-            characteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(),
-            TimeSpan.FromSeconds(8),
-            shutdownToken);
-
-        if (result.Status != GattCommunicationStatus.Success)
-        {
-            return null;
-        }
-
-        return ParseJsonBuffer(result.Value);
-    }
-
-    private static JsonObject? ParseJsonBuffer(IBuffer buffer)
+    private static string ReadBufferText(IBuffer buffer)
     {
         CryptographicBuffer.CopyToByteArray(buffer, out byte[] bytes);
         var text = Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n', '\t');
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            return null;
+            return string.Empty;
         }
 
         var firstBrace = text.IndexOf('{');
@@ -1234,14 +889,7 @@ internal sealed class NodeConnection
             text = text[firstBrace..(lastBrace + 1)];
         }
 
-        try
-        {
-            return JsonNode.Parse(text) as JsonObject;
-        }
-        catch
-        {
-            return null;
-        }
+        return text;
     }
 
     private static string RandomHexToken(int characterCount)
@@ -1291,6 +939,16 @@ internal sealed class NodeConnection
         timeoutCts.Cancel();
         return await task;
     }
+
+    private static string? GetString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return property.GetString();
+    }
 }
 
 internal sealed record AllowedNodeRule(
@@ -1326,25 +984,22 @@ internal sealed record DiscoveredNodeInfo(
     };
 }
 
+internal sealed record SessionStatus(
+    string? Type,
+    string? DeviceId,
+    string? BootId,
+    string? SessionId,
+    string? SessionNonce);
+
 internal sealed record Config(
     Guid RuntimeServiceUuid,
-    Guid TelemetryUuid,
     Guid ControlUuid,
-    Guid StatusUuid,
-    Guid HistoryServiceUuid,
-    Guid HistoryControlUuid,
-    Guid HistoryStatusUuid,
-    string DeviceNamePrefix)
+    Guid StatusUuid)
 {
     public static Config FromEnvironment() => new(
         RuntimeServiceUuid: ReadGuid("BLE_RUNTIME_SERVICE_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001"),
-        TelemetryUuid: ReadGuid("BLE_TELEMETRY_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002"),
         ControlUuid: ReadGuid("BLE_CONTROL_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003"),
-        StatusUuid: ReadGuid("BLE_STATUS_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004"),
-        HistoryServiceUuid: ReadGuid("BLE_HISTORY_SERVICE_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7101"),
-        HistoryControlUuid: ReadGuid("BLE_HISTORY_CONTROL_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7102"),
-        HistoryStatusUuid: ReadGuid("BLE_HISTORY_STATUS_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7103"),
-        DeviceNamePrefix: Environment.GetEnvironmentVariable("BLE_DEVICE_NAME_PREFIX") ?? "GymMotion-");
+        StatusUuid: ReadGuid("BLE_STATUS_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004"));
 
     private static Guid ReadGuid(string name, string fallback)
         => Guid.Parse(Environment.GetEnvironmentVariable(name) ?? fallback);
