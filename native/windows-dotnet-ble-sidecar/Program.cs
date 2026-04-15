@@ -370,6 +370,14 @@ internal sealed class SidecarApp
             reconnect = (object?)null,
         });
 
+    internal Task EmitTelemetryAsync(DiscoveredNodeInfo discovered, string payloadText)
+        => EmitEventAsync(new
+        {
+            type = "telemetry",
+            node = discovered.ToProtocolNode(),
+            payload_text = payloadText,
+        });
+
     internal Task EmitLogAsync(string level, string message, object? details = null)
         => EmitEventAsync(new
         {
@@ -505,10 +513,15 @@ internal sealed class NodeConnection
     private DiscoveredNodeInfo? _discovered;
     private BluetoothLEDevice? _device;
     private GattDeviceService? _runtimeService;
+    private GattCharacteristic? _telemetryCharacteristic;
     private GattCharacteristic? _controlCharacteristic;
     private GattCharacteristic? _statusCharacteristic;
     private CancellationTokenSource? _sessionLifetime;
     private Task? _leaseLoop;
+    private Task? _telemetryLoop;
+    private string? _lastTelemetryPayload;
+    private string? _activeSessionId;
+    private bool _disposed;
 
     public NodeConnection(AllowedNodeRule rule, SidecarApp app, Config config)
     {
@@ -531,10 +544,20 @@ internal sealed class NodeConnection
             return;
         }
 
-        await _connectGate.WaitAsync(shutdownToken);
+        using var connectAttempt = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken, _lifetime.Token);
+        var connectToken = connectAttempt.Token;
+        var gateHeld = false;
 
         try
         {
+            await _connectGate.WaitAsync(connectToken);
+            gateHeld = true;
+
+            if (_disposed || connectToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (_device is not null &&
                 _device.ConnectionStatus == BluetoothConnectionStatus.Connected &&
                 _sessionLifetime is not null &&
@@ -546,9 +569,9 @@ internal sealed class NodeConnection
             var discovered = _discovered;
             await _app.EmitNodeConnectionStateAsync(discovered, "connecting", bootId: null);
 
-            await ConnectGattAsync(discovered, shutdownToken);
+            await ConnectGattAsync(discovered, connectToken);
 
-            var existingStatus = await ReadSessionStatusAsync(shutdownToken);
+            var existingStatus = await ReadSessionStatusAsync(connectToken);
             if (existingStatus is not null &&
                 string.Equals(existingStatus.Type, "app-session-online", StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(existingStatus.SessionId))
@@ -564,7 +587,9 @@ internal sealed class NodeConnection
                     bootId = adoptedBootId,
                 });
 
-                StartLeaseLoop(discovered, adoptedSessionId, shutdownToken);
+                _activeSessionId = adoptedSessionId;
+                StartLeaseLoop(discovered, adoptedSessionId, connectToken);
+                StartTelemetryLoop(discovered, connectToken);
                 await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
                 return;
             }
@@ -579,12 +604,12 @@ internal sealed class NodeConnection
                 expiresInMs = 15000,
             });
 
-            if (!await WriteControlAsync(beginPayload, shutdownToken))
+            if (!await WriteControlAsync(beginPayload, connectToken))
             {
                 throw new InvalidOperationException("Session begin write failed.");
             }
 
-            var status = await WaitForSessionStatusAsync(sessionId, sessionNonce, shutdownToken);
+            var status = await WaitForSessionStatusAsync(sessionId, sessionNonce, connectToken);
             if (status is null)
             {
                 throw new InvalidOperationException("Session status verification failed.");
@@ -601,7 +626,9 @@ internal sealed class NodeConnection
                 bootId,
             });
 
-            StartLeaseLoop(discovered, sessionId, shutdownToken);
+            _activeSessionId = sessionId;
+            StartLeaseLoop(discovered, sessionId, connectToken);
+            StartTelemetryLoop(discovered, connectToken);
             await _app.EmitNodeConnectionStateAsync(discovered, "connected", bootId);
         }
         catch (OperationCanceledException)
@@ -625,33 +652,70 @@ internal sealed class NodeConnection
         }
         finally
         {
-            _connectGate.Release();
+            if (gateHeld)
+            {
+                _connectGate.Release();
+            }
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        _lifetime.Cancel();
-
-        if (_sessionLifetime is not null)
+        if (_disposed)
         {
-            _sessionLifetime.Cancel();
+            return;
         }
 
-        if (_leaseLoop is not null)
-        {
-            try
-            {
-                await _leaseLoop;
-            }
-            catch
-            {
-            }
-        }
+        _disposed = true;
 
-        ResetConnectionState();
-        _connectGate.Dispose();
-        _lifetime.Dispose();
+        var gateHeld = false;
+
+        try
+        {
+            await _connectGate.WaitAsync();
+            gateHeld = true;
+
+            await TryEndSessionAsync();
+
+            _lifetime.Cancel();
+            _sessionLifetime?.Cancel();
+
+            var leaseLoop = _leaseLoop;
+            var telemetryLoop = _telemetryLoop;
+            if (leaseLoop is not null)
+            {
+                try
+                {
+                    await leaseLoop;
+                }
+                catch
+                {
+                }
+            }
+
+            if (telemetryLoop is not null)
+            {
+                try
+                {
+                    await telemetryLoop;
+                }
+                catch
+                {
+                }
+            }
+
+            ResetConnectionState();
+        }
+        finally
+        {
+            if (gateHeld)
+            {
+                _connectGate.Release();
+            }
+
+            _connectGate.Dispose();
+            _lifetime.Dispose();
+        }
     }
 
     private async Task ConnectGattAsync(DiscoveredNodeInfo discovered, CancellationToken shutdownToken)
@@ -672,6 +736,7 @@ internal sealed class NodeConnection
 
         _runtimeService = await GetRequiredServiceAsync(_device, _config.RuntimeServiceUuid, shutdownToken);
 
+        _telemetryCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.TelemetryUuid, shutdownToken);
         _controlCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.ControlUuid, shutdownToken);
         _statusCharacteristic = await GetRequiredCharacteristicAsync(_runtimeService, _config.StatusUuid, shutdownToken);
     }
@@ -732,6 +797,11 @@ internal sealed class NodeConnection
 
     private async void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
     {
+        if (_disposed || _lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
         if (sender.ConnectionStatus == BluetoothConnectionStatus.Connected)
         {
             return;
@@ -743,6 +813,60 @@ internal sealed class NodeConnection
         if (discovered is not null)
         {
             await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: "Bluetooth connection dropped.");
+        }
+    }
+
+    private void StartTelemetryLoop(DiscoveredNodeInfo discovered, CancellationToken shutdownToken)
+    {
+        _lastTelemetryPayload = null;
+        var telemetryToken = _sessionLifetime?.Token ?? shutdownToken;
+
+        _telemetryLoop = Task.Run(async () =>
+        {
+            while (!telemetryToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var payload = await ReadTelemetryPayloadAsync(telemetryToken);
+                    if (!string.IsNullOrWhiteSpace(payload) &&
+                        !string.Equals(payload, _lastTelemetryPayload, StringComparison.Ordinal))
+                    {
+                        _lastTelemetryPayload = payload;
+                        await _app.EmitTelemetryAsync(discovered, payload);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500), telemetryToken);
+            }
+        }, telemetryToken);
+    }
+
+    private async Task TryEndSessionAsync()
+    {
+        if (_controlCharacteristic is null || string.IsNullOrWhiteSpace(_activeSessionId))
+        {
+            return;
+        }
+
+        try
+        {
+            await WriteControlAsync(JsonSerializer.Serialize(new
+            {
+                type = "app-session-end",
+                sessionId = _activeSessionId,
+            }), _lifetime.Token);
+
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+        }
+        catch
+        {
         }
     }
 
@@ -784,6 +908,32 @@ internal sealed class NodeConnection
         {
             return null;
         }
+    }
+
+    private async Task<string?> ReadTelemetryPayloadAsync(CancellationToken shutdownToken)
+    {
+        if (_telemetryCharacteristic is null)
+        {
+            return null;
+        }
+
+        var result = await WithTimeout(
+            _telemetryCharacteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(),
+            TimeSpan.FromSeconds(8),
+            shutdownToken);
+
+        if (result.Status != GattCommunicationStatus.Success)
+        {
+            return null;
+        }
+
+        var text = ReadBufferText(result.Value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        return text.StartsWith("{", StringComparison.Ordinal) ? text : null;
     }
 
     private async Task<GattDeviceService> GetRequiredServiceAsync(
@@ -856,12 +1006,15 @@ internal sealed class NodeConnection
         _sessionLifetime?.Dispose();
         _sessionLifetime = null;
         _leaseLoop = null;
+        _telemetryLoop = null;
+        _activeSessionId = null;
 
         if (_device is not null)
         {
             _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
         }
 
+        _telemetryCharacteristic = null;
         _statusCharacteristic = null;
         _controlCharacteristic = null;
         _runtimeService?.Dispose();
@@ -873,7 +1026,7 @@ internal sealed class NodeConnection
 
     private static string ReadBufferText(IBuffer buffer)
     {
-        CryptographicBuffer.CopyToByteArray(buffer, out byte[] bytes);
+        var bytes = ReadBufferBytes(buffer);
         var text = Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n', '\t');
 
         if (string.IsNullOrWhiteSpace(text))
@@ -890,6 +1043,12 @@ internal sealed class NodeConnection
         }
 
         return text;
+    }
+
+    private static byte[] ReadBufferBytes(IBuffer buffer)
+    {
+        CryptographicBuffer.CopyToByteArray(buffer, out byte[] bytes);
+        return bytes;
     }
 
     private static string RandomHexToken(int characterCount)
@@ -993,11 +1152,13 @@ internal sealed record SessionStatus(
 
 internal sealed record Config(
     Guid RuntimeServiceUuid,
+    Guid TelemetryUuid,
     Guid ControlUuid,
     Guid StatusUuid)
 {
     public static Config FromEnvironment() => new(
         RuntimeServiceUuid: ReadGuid("BLE_RUNTIME_SERVICE_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7001"),
+        TelemetryUuid: ReadGuid("BLE_TELEMETRY_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002"),
         ControlUuid: ReadGuid("BLE_CONTROL_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003"),
         StatusUuid: ReadGuid("BLE_STATUS_UUID", "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004"));
 

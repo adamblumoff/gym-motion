@@ -875,7 +875,8 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
-  enqueueRuntimeNotificationChunked(runtimeTelemetryCharacteristic, payload);
+  writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
+  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, payload);
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;
@@ -1009,6 +1010,47 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       false,
       notifyConnHandle
     );
+    return;
+  }
+
+  if (command.type == firmware_runtime::ControlCommandType::AppSessionEnd) {
+    const String sessionId = command.sessionId.c_str();
+    const bool shortReconnectToken = sessionId.length() == 8;
+    const bool sessionMatches =
+      sessionId.length() == 0 ||
+      (shortReconnectToken
+        ? runtimeAppSessionId.startsWith(sessionId)
+        : runtimeAppSessionId == sessionId);
+
+    if (!runtimeAppSessionConnected ||
+        runtimeAppSessionId.length() == 0 ||
+        !sessionMatches) {
+      journalNodeLog(
+        "warn",
+        "runtime.app_session.end_ignored",
+        "Ignored app-session-end for a non-active session.",
+        millis()
+      );
+      return;
+    }
+
+    journalNodeLog(
+      "info",
+      "runtime.app_session.ended",
+      "Windows app session ended by client request.",
+      millis()
+    );
+    logRuntimeTransportEvent(
+      "Windows app requested runtime session teardown; disconnecting BLE transport."
+    );
+    resetRuntimeAppSessionState();
+
+    if (runtimeBleConnIdKnown) {
+      Bluefruit.disconnect(runtimeBleConnId);
+      return;
+    }
+
+    startRuntimeAdvertising("requested app-session end");
     return;
   }
 

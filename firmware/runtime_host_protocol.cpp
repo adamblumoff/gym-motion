@@ -191,6 +191,12 @@ ControlCommand parseRuntimeControlCommand(
     return command;
   }
 
+  if (type == "app-session-end") {
+    command.type = ControlCommandType::AppSessionEnd;
+    command.sessionId = extractJsonString(payload, "sessionId");
+    return command;
+  }
+
   if (type == "sync-now") {
     command.type = ControlCommandType::SyncNow;
     return command;

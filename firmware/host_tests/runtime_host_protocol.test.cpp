@@ -88,6 +88,14 @@ TEST_CASE("parseRuntimeControlCommand validates runtime session payload defaults
   CHECK(lease.type == ControlCommandType::AppSessionLease);
   CHECK(lease.sessionId == "session-1");
   CHECK(lease.expiresInMs == 15'000);
+
+  const auto end = parseRuntimeControlCommand(
+    R"({"type":"app-session-end","sessionId":"session-1"})",
+    15'000
+  );
+  CHECK(end.type == ControlCommandType::AppSessionEnd);
+  CHECK(end.sessionId == "session-1");
+  CHECK(end.expiresInMs == 0);
 }
 
 TEST_CASE("parseHistoryControlCommand validates request and ack payload defaults") {

@@ -9,6 +9,7 @@ enum class ControlCommandType {
   Unknown,
   AppSessionBegin,
   AppSessionLease,
+  AppSessionEnd,
   SyncNow,
   OtaBegin,
   OtaEnd,
