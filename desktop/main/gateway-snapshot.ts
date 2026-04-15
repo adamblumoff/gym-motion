@@ -45,7 +45,8 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     telemetryFreshness: hasNewerTelemetry
       ? "fresh"
       : existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),
-    sensorIssue: existing?.sensorIssue ?? null,
+    // Repository refreshes do not know about live sensor faults. Let runtime telemetry own this.
+    sensorIssue: null,
     peripheralId: existing?.peripheralId ?? null,
     address: existing?.address ?? null,
     gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,

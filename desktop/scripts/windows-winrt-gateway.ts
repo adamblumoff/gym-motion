@@ -5,7 +5,10 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.js";
-import { shouldWriteSidecarLog } from "./windows-winrt-gateway-logging.js";
+import {
+  shouldWriteGatewayLog,
+  shouldWriteSidecarLog,
+} from "./windows-winrt-gateway-logging.js";
 import {
   createGatewayConfig,
   parseApprovedNodeRules,
@@ -49,6 +52,10 @@ const deviceContexts = new Map();
 const liveTaskChains = new Map();
 
 function log(message, details) {
+  if (!shouldWriteGatewayLog(message, config.verbose)) {
+    return;
+  }
+
   if (details !== undefined) {
     console.log(`[gateway-winrt] ${message}`, details);
     return;
