@@ -237,7 +237,7 @@ function applyNodeConnectionState(event) {
   }
 
   emitGatewayState();
-  emitRuntimeDeviceUpdated(runtimeServer.resolveKnownDeviceId(peripheralInfo));
+  emitRuntimeDeviceUpdated(knownDeviceId ?? runtimeServer.resolveKnownDeviceId(peripheralInfo));
 }
 
 async function forwardTelemetryNow(event) {
