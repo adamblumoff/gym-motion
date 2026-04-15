@@ -3,6 +3,14 @@ import path from "node:path";
 import process from "node:process";
 
 function defaultSidecarPath() {
+  if (
+    process.env.GYM_MOTION_WINDOWS_BLE_BACKEND === "bridge" ||
+    process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT ||
+    process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR === "1"
+  ) {
+    return process.execPath;
+  }
+
   if (process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust") {
     return path.join(
       process.cwd(),
@@ -26,6 +34,19 @@ function defaultSidecarPath() {
   );
 }
 
+function parseSidecarArgs(raw) {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export function createGatewayConfig() {
   return {
     apiBaseUrl: (process.env.API_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -45,6 +66,7 @@ export function createGatewayConfig() {
     ),
     startScanOnBoot: process.env.GATEWAY_START_SCAN_ON_BOOT === "1",
     sidecarPath: process.env.GATEWAY_SIDECAR_PATH ?? defaultSidecarPath(),
+    sidecarArgs: parseSidecarArgs(process.env.GATEWAY_SIDECAR_ARGS_JSON),
     verbose: process.env.GATEWAY_VERBOSE === "1",
   };
 }

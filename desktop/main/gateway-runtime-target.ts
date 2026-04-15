@@ -1,5 +1,17 @@
 import path from "node:path";
 
+function selectedWindowsGatewayBackend() {
+  if (
+    process.env.GYM_MOTION_WINDOWS_BLE_BACKEND === "bridge" ||
+    process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT ||
+    process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR === "1"
+  ) {
+    return "bridge";
+  }
+
+  return "winrt";
+}
+
 function selectedWindowsSidecarImplementation() {
   return process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust" ? "rust" : "dotnet";
 }
@@ -40,34 +52,70 @@ export function resolveGatewayScriptPath(options: {
   );
 }
 
-export function resolveWindowsSidecarPath(options: {
+export function resolveWindowsSidecarLaunch(options: {
   isPackaged: boolean;
   cwd: string;
   resourcesPath: string;
+  execPath: string;
 }) {
+  if (selectedWindowsGatewayBackend() === "bridge") {
+    const bridgeSidecarScript = options.isPackaged
+      ? path.join(
+          options.resourcesPath,
+          "app.asar.unpacked",
+          "out",
+          "runtime",
+          "desktop",
+          "scripts",
+          "windows-serial-bridge-sidecar.js",
+        )
+      : path.join(
+          options.cwd,
+          "out",
+          "runtime",
+          "desktop",
+          "scripts",
+          "windows-serial-bridge-sidecar.js",
+        );
+
+    return {
+      command: options.execPath,
+      args: [bridgeSidecarScript],
+    };
+  }
+
   if (options.isPackaged) {
-    return path.join(options.resourcesPath, "bin", "gym-motion-ble-winrt.exe");
+    return {
+      command: path.join(options.resourcesPath, "bin", "gym-motion-ble-winrt.exe"),
+      args: [],
+    };
   }
 
   if (selectedWindowsSidecarImplementation() === "rust") {
-    return path.join(
-      options.cwd,
-      "native",
-      "windows-ble-sidecar",
-      "target",
-      "release",
-      "gym-motion-ble-winrt.exe",
-    );
+    return {
+      command: path.join(
+        options.cwd,
+        "native",
+        "windows-ble-sidecar",
+        "target",
+        "release",
+        "gym-motion-ble-winrt.exe",
+      ),
+      args: [],
+    };
   }
 
-  return path.join(
-    options.cwd,
-    "native",
-    "windows-dotnet-ble-sidecar",
-    "bin",
-    "Release",
-    "net9.0-windows10.0.19041.0",
-    "publish",
-    "gym-motion-ble-winrt.exe",
-  );
+  return {
+    command: path.join(
+      options.cwd,
+      "native",
+      "windows-dotnet-ble-sidecar",
+      "bin",
+      "Release",
+      "net9.0-windows10.0.19041.0",
+      "publish",
+      "gym-motion-ble-winrt.exe",
+    ),
+    args: [],
+  };
 }

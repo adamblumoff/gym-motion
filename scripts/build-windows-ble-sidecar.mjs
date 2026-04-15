@@ -5,6 +5,17 @@ if (process.platform !== "win32") {
   process.exit(0);
 }
 
+const gatewayBackend =
+  process.env.GYM_MOTION_WINDOWS_BLE_BACKEND === "bridge" ||
+  process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT ||
+  process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR === "1"
+    ? "bridge"
+    : "winrt";
+
+if (gatewayBackend === "bridge") {
+  process.exit(0);
+}
+
 const implementation = process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust" ? "rust" : "dotnet";
 
 const child =

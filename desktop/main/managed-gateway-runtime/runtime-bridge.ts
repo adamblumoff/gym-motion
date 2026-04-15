@@ -10,7 +10,7 @@ import type {
   GatewayStatusSummary,
 } from "@core/contracts";
 
-import { resolveGatewayScriptPath, resolveWindowsSidecarPath } from "../gateway-runtime-target";
+import { resolveGatewayScriptPath, resolveWindowsSidecarLaunch } from "../gateway-runtime-target";
 import { buildGatewayChildEnv } from "./gateway-child-env";
 import {
   parseGatewayChildMessage,
@@ -217,11 +217,14 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
 
     env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
     env.GATEWAY_START_SCAN_ON_BOOT = deps.getWindowsScanRequested() ? "1" : "0";
-    env.GATEWAY_SIDECAR_PATH = resolveWindowsSidecarPath({
+    const sidecarLaunch = resolveWindowsSidecarLaunch({
       isPackaged: app.isPackaged,
       cwd: process.cwd(),
       resourcesPath: process.resourcesPath,
+      execPath: process.execPath,
     });
+    env.GATEWAY_SIDECAR_PATH = sidecarLaunch.command;
+    env.GATEWAY_SIDECAR_ARGS_JSON = JSON.stringify(sidecarLaunch.args);
 
     const gatewayScriptPath =
       process.env.GYM_MOTION_GATEWAY_CHILD_SCRIPT

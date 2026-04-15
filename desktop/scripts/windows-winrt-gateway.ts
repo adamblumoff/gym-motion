@@ -595,7 +595,7 @@ async function startSidecar() {
     error: null,
     clearCandidates: true,
   });
-  sidecar = spawn(config.sidecarPath, [], {
+  sidecar = spawn(config.sidecarPath, config.sidecarArgs ?? [], {
     cwd: process.cwd(),
     env: {
       ...process.env,

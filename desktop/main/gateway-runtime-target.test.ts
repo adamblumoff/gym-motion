@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveGatewayScriptPath,
-  resolveWindowsSidecarPath,
+  resolveWindowsSidecarLaunch,
   usesWindowsNativeGateway,
 } from "./gateway-runtime-target";
 
@@ -40,25 +40,33 @@ describe("gateway runtime target", () => {
 
   it("resolves the packaged sidecar path", () => {
     expect(
-      resolveWindowsSidecarPath({
+      resolveWindowsSidecarLaunch({
         isPackaged: true,
         cwd: "/repo",
         resourcesPath: "/resources",
+        execPath: "/electron",
       }),
-    ).toBe(path.join("/resources", "bin", "gym-motion-ble-winrt.exe"));
+    ).toEqual({
+      command: path.join("/resources", "bin", "gym-motion-ble-winrt.exe"),
+      args: [],
+    });
   });
 
   it("resolves the .NET sidecar path in dev by default", () => {
     delete process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL;
+    delete process.env.GYM_MOTION_WINDOWS_BLE_BACKEND;
+    delete process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT;
+    delete process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR;
 
     expect(
-      resolveWindowsSidecarPath({
+      resolveWindowsSidecarLaunch({
         isPackaged: false,
         cwd: "/repo",
         resourcesPath: "/resources",
+        execPath: "/electron",
       }),
-    ).toBe(
-      path.join(
+    ).toEqual({
+      command: path.join(
         "/repo",
         "native",
         "windows-dotnet-ble-sidecar",
@@ -68,6 +76,34 @@ describe("gateway runtime target", () => {
         "publish",
         "gym-motion-ble-winrt.exe",
       ),
-    );
+      args: [],
+    });
+  });
+
+  it("prefers the bridge sidecar when bridge mode is configured", () => {
+    process.env.GYM_MOTION_WINDOWS_BLE_BACKEND = "bridge";
+
+    expect(
+      resolveWindowsSidecarLaunch({
+        isPackaged: false,
+        cwd: "/repo",
+        resourcesPath: "/resources",
+        execPath: "/electron",
+      }),
+    ).toEqual({
+      command: "/electron",
+      args: [
+        path.join(
+          "/repo",
+          "out",
+          "runtime",
+          "desktop",
+          "scripts",
+          "windows-serial-bridge-sidecar.js",
+        ),
+      ],
+    });
+
+    delete process.env.GYM_MOTION_WINDOWS_BLE_BACKEND;
   });
 });

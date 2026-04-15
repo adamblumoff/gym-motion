@@ -4,6 +4,12 @@ const isWindowsTarget =
   process.platform === "win32" ||
   process.argv.includes("--win") ||
   process.env.npm_lifecycle_event === "build:win";
+const gatewayBackend =
+  process.env.GYM_MOTION_WINDOWS_BLE_BACKEND === "bridge" ||
+  process.env.GYM_MOTION_USB_BLE_BRIDGE_PORT ||
+  process.env.GYM_MOTION_USB_BLE_BRIDGE_SIMULATOR === "1"
+    ? "bridge"
+    : "winrt";
 const sidecarImplementation =
   process.env.GYM_MOTION_WINDOWS_SIDECAR_IMPL === "rust" ? "rust" : "dotnet";
 const sidecarPath = path.join(
@@ -29,7 +35,7 @@ export default {
     "out/**",
     "package.json",
   ],
-  extraResources: isWindowsTarget
+  extraResources: isWindowsTarget && gatewayBackend === "winrt"
     ? [
         {
           from: sidecarPath,
