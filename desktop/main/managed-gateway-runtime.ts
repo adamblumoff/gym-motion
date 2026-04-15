@@ -171,7 +171,6 @@ export function createManagedGatewayRuntime(
     listDeviceMotionEventsByReceivedAt: e2eRuntimeStore?.listDeviceMotionEventsByReceivedAt,
     findLatestDeviceMotionEventBeforeReceivedAt:
       e2eRuntimeStore?.findLatestDeviceMotionEventBeforeReceivedAt,
-    getDeviceSyncState: e2eRuntimeStore?.getDeviceSyncState,
   });
   ensureReceivedAtRollupsInBackground();
 
@@ -229,13 +228,13 @@ export function createManagedGatewayRuntime(
     });
   }
 
-  function reportHistoryRefreshFailure(detail: string) {
-    setGatewayIssue(`History refresh unavailable: ${detail}`);
+  function reportSnapshotRefreshFailure(detail: string) {
+    setGatewayIssue(`Snapshot refresh unavailable: ${detail}`);
     emitGatewayIssueSnapshot();
   }
 
-  function clearHistoryRefreshFailure() {
-    if (!snapshot.gatewayIssue?.startsWith("History refresh unavailable:")) {
+  function clearSnapshotRefreshFailure() {
+    if (!snapshot.gatewayIssue?.startsWith("Snapshot refresh unavailable:")) {
       return;
     }
 
@@ -409,12 +408,6 @@ export function createManagedGatewayRuntime(
       case "runtime-device-updated":
         applyRuntimeDevicePatch(message.device);
         break;
-      case "history_error":
-        analyticsService.markSyncFailure(
-          message.payload.device_id,
-          message.payload.message ?? "History sync failed.",
-        );
-        break;
       case "control-response":
         break;
     }
@@ -492,13 +485,6 @@ export function createManagedGatewayRuntime(
     pruneSnapshot,
     clearOptimisticMessage: (messageId) => runtimeCache.clearOptimisticMessage(messageId),
     emit,
-    refreshHistory: () => runtimeSync.refreshHistory(),
-    refreshDeviceHistory: (deviceId) => runtimeSync.refreshDeviceHistory(deviceId),
-    refreshSyncStateOnly: (deviceId) => analyticsService.refreshSyncStateOnly(deviceId),
-    markAnalyticsSyncInProgress: (deviceId) => analyticsService.markSyncInProgress(deviceId),
-    markAnalyticsSyncComplete: (deviceId) => analyticsService.markSyncComplete(deviceId),
-    markAnalyticsSyncFailure: (deviceId, detail) =>
-      analyticsService.markSyncFailure(deviceId, detail),
     refreshAnalyticsNow: (deviceId) => analyticsService.scheduleRefresh(deviceId, 0),
     scheduleAnalyticsRefresh: (deviceId) => analyticsService.scheduleRefresh(deviceId),
     recordLiveMotion: (event) => {
@@ -506,8 +492,6 @@ export function createManagedGatewayRuntime(
         analyticsService.recordLiveMotion(event);
       }
     },
-    reportHistoryRefreshFailure,
-    clearHistoryRefreshFailure,
   });
 
   function applyDataEvent(event: Parameters<typeof applyDataEventToSnapshot>[0]) {
@@ -523,7 +507,6 @@ export function createManagedGatewayRuntime(
     recordMotion: e2eRuntimeStore?.recordMotion,
     recordHeartbeat: e2eRuntimeStore?.recordHeartbeat,
     recordLog: e2eRuntimeStore?.recordLog,
-    recordBackfill: e2eRuntimeStore?.recordBackfill,
   });
   const dataIngestSpool = createDataIngestSpool({
     dbPath: path.join(app.getPath("userData"), "gateway-ingest-spool.sqlite"),
@@ -533,8 +516,8 @@ export function createManagedGatewayRuntime(
     },
   });
 
-  async function refreshHistory() {
-    await runtimeSync.refreshHistory();
+  async function refreshSnapshotData() {
+    await runtimeSync.refreshSnapshotData();
     syncDeviceMetadataInBackground();
   }
 
@@ -594,15 +577,15 @@ export function createManagedGatewayRuntime(
     apiServerStart: () => apiServer.start(),
     runtimeStartIssue,
     startChild,
-    refreshHistory,
+    refreshSnapshotData,
     setGatewayIssue,
-    onHistoryRefreshError: (error) => {
+    onSnapshotRefreshError: (error) => {
       const detail =
         error instanceof Error
           ? error.message
-          : "History refresh failed while starting the gateway runtime.";
-      setGatewayIssue(`History refresh unavailable: ${detail}`);
-      console.error("[runtime] history refresh failed during startup", error);
+          : "Snapshot refresh failed while starting the gateway runtime.";
+      setGatewayIssue(`Snapshot refresh unavailable: ${detail}`);
+      console.error("[runtime] snapshot refresh failed during startup", error);
     },
     applyManualScanPayload,
     emitSnapshot: () => {

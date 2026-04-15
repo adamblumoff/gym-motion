@@ -8,10 +8,6 @@ struct PersistedStateSnapshot {
   std::string deviceId;
   std::string siteId;
   std::string machineLabel;
-  unsigned long nextHistorySequence = 1;
-  unsigned long ackedHistorySequence = 0;
-  bool historyOverflowed = false;
-  unsigned long historyDroppedCount = 0;
 };
 
 enum class PersistedStateLoadAction {

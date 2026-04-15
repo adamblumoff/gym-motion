@@ -16,12 +16,6 @@ enum class ControlCommandType {
   OtaAbort,
 };
 
-enum class HistoryControlCommandType {
-  Unknown,
-  HistoryPageRequest,
-  HistoryPageAck,
-};
-
 enum class LeaseEnforcementResultKind {
   None,
   BootstrapTimedOut,
@@ -59,40 +53,6 @@ struct ControlCommand {
   unsigned long expiresInMs = 0;
 };
 
-struct HistorySyncState {
-  unsigned long nextSequence = 1;
-  unsigned long ackedSequence = 0;
-  bool overflowed = false;
-  unsigned long droppedCount = 0;
-};
-
-struct HistoryAckResult {
-  bool advanced = false;
-  bool clearedOverflow = false;
-};
-
-struct HistoryControlCommand {
-  HistoryControlCommandType type = HistoryControlCommandType::Unknown;
-  std::string sessionId;
-  std::string requestId;
-  unsigned long afterSequence = 0;
-  std::size_t maxRecords = 0;
-  unsigned long sequence = 0;
-};
-
-struct HistorySyncRequest {
-  std::string sessionId;
-  std::string requestId;
-  unsigned long afterSequence = 0;
-  std::size_t maxRecords = 0;
-};
-
-struct HistoryAckRequest {
-  std::string sessionId;
-  std::string requestId;
-  unsigned long sequence = 0;
-};
-
 AppSessionState createResetAppSessionState(unsigned long defaultLeaseTimeoutMs);
 bool armBootstrapWatchdog(AppSessionState& state);
 void disarmBootstrapWatchdog(AppSessionState& state);
@@ -113,16 +73,5 @@ ControlCommand parseRuntimeControlCommand(
   const std::string& payload,
   unsigned long defaultLeaseTimeoutMs
 );
-HistoryControlCommand parseHistoryControlCommand(
-  const std::string& payload,
-  std::size_t defaultHistoryPageSize
-);
-unsigned long allocateHistorySequence(HistorySyncState& state);
-HistoryAckResult acknowledgeHistoryThrough(HistorySyncState& state, unsigned long sequence);
-HistorySyncRequest createHistorySyncRequest(
-  const HistoryControlCommand& command,
-  std::size_t defaultHistoryPageSize
-);
-HistoryAckRequest createHistoryAckRequest(const HistoryControlCommand& command);
 
 }  // namespace firmware_runtime

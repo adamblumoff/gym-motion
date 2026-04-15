@@ -10,7 +10,6 @@ export {
   listRecentEvents,
 } from "./motion-events";
 export { recordDeviceLog, listDeviceLogs, listDeviceActivity, listRecentActivity } from "./logs";
-export { getDeviceSyncState, getFirmwareHistorySyncState, recordBackfillBatch } from "./backfill";
 export {
   hasMotionRollupTables,
   listMotionRollupBuckets,

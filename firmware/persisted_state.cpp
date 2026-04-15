@@ -82,10 +82,6 @@ bool parsePersistedStatePayload(
     "device_id",
     "site_id",
     "machine_label",
-    "next_seq",
-    "acked_seq",
-    "hist_ovf",
-    "hist_drop",
   };
 
   for (const char* key : requiredKeys) {
@@ -98,17 +94,6 @@ bool parsePersistedStatePayload(
   parsed.deviceId = extractJsonStringValue(payload, "device_id");
   parsed.siteId = extractJsonStringValue(payload, "site_id");
   parsed.machineLabel = extractJsonStringValue(payload, "machine_label");
-  parsed.nextHistorySequence = extractJsonUnsignedLongValue(payload, "next_seq", 1);
-  parsed.ackedHistorySequence = extractJsonUnsignedLongValue(payload, "acked_seq", 0);
-  parsed.historyOverflowed = extractJsonUnsignedLongValue(payload, "hist_ovf", 0) != 0;
-  parsed.historyDroppedCount = extractJsonUnsignedLongValue(payload, "hist_drop", 0);
-
-  if (
-    parsed.nextHistorySequence == 0 ||
-    parsed.ackedHistorySequence >= parsed.nextHistorySequence
-  ) {
-    return false;
-  }
 
   const bool anyProvisioningValue =
     !parsed.deviceId.empty() || !parsed.siteId.empty() || !parsed.machineLabel.empty();

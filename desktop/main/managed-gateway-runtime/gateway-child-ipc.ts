@@ -9,8 +9,7 @@ import type {
 type GatewayChildPersistMessageType =
   | "persist-motion"
   | "persist-heartbeat"
-  | "persist-device-log"
-  | "persist-device-backfill";
+  | "persist-device-log";
 
 export type GatewayChildPersistMessage = {
   messageId: string;
@@ -94,52 +93,6 @@ export type GatewayChildControlResponseMessage = {
   error?: string;
 };
 
-export type GatewayChildHistoryRecordMessage = {
-  type: "history_record";
-  node: {
-    id: string;
-    label: string;
-    peripheral_id?: string | null;
-    address?: string | null;
-    local_name?: string | null;
-    known_device_id?: string | null;
-    last_rssi?: number | null;
-    last_seen_at?: string | null;
-  };
-  device_id: string;
-  request_id: string;
-  record: unknown;
-};
-
-export type GatewayChildHistorySyncCompleteMessage = {
-  type: "history_sync_complete";
-  node: GatewayChildHistoryRecordMessage["node"];
-  payload: {
-    status_type: string;
-    device_id: string;
-    request_id: string;
-    latest_sequence: number;
-    high_water_sequence: number;
-    sent_count: number;
-    has_more: boolean;
-    overflowed?: boolean | null;
-    dropped_count?: number | null;
-  };
-};
-
-export type GatewayChildHistoryErrorMessage = {
-  type: "history_error";
-  node: GatewayChildHistoryRecordMessage["node"];
-  payload: {
-    status_type: string;
-    device_id: string;
-    session_id?: string | null;
-    request_id?: string | null;
-    code: string;
-    message: string;
-  };
-};
-
 export type GatewayParentPersistAckMessage = {
   type: "persist-ack";
   messageId: string;
@@ -153,10 +106,7 @@ export type GatewayChildRuntimeMessage =
   | GatewayChildAdaptersUpdatedMessage
   | GatewayChildManualScanUpdatedMessage
   | GatewayChildRuntimeReadyMessage
-  | GatewayChildControlResponseMessage
-  | GatewayChildHistoryRecordMessage
-  | GatewayChildHistorySyncCompleteMessage
-  | GatewayChildHistoryErrorMessage;
+  | GatewayChildControlResponseMessage;
 
 export type GatewayChildMessage = GatewayChildPersistMessage | GatewayChildRuntimeMessage;
 
@@ -168,8 +118,7 @@ function isPersistMessageType(input: unknown): input is GatewayChildPersistMessa
   return (
     input === "persist-motion" ||
     input === "persist-heartbeat" ||
-    input === "persist-device-log" ||
-    input === "persist-device-backfill"
+    input === "persist-device-log"
   );
 }
 
@@ -204,9 +153,6 @@ export function parseGatewayChildMessage(input: unknown): GatewayChildMessage | 
     case "manual-scan-updated":
     case "runtime-ready":
     case "control-response":
-    case "history_record":
-    case "history_sync_complete":
-    case "history_error":
       return input as GatewayChildRuntimeMessage;
     default:
       return null;

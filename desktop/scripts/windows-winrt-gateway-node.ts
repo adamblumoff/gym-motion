@@ -23,10 +23,6 @@ export function createDeviceContext(deviceId) {
     advertisedName: null,
     rssi: null,
     lastGatewayConnectionState: null,
-    backfillStatus: "idle",
-    backfillBootId: null,
-    backfillNextEligibleAt: null,
-    backfillPausedReason: null,
   };
 }
 

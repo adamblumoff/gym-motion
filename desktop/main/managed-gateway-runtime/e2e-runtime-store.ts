@@ -1,13 +1,9 @@
 import type {
   AnalyticsWindow,
-  BackfillBatchInput,
-  BackfillBatchResult,
   DeviceActivitySummary,
   DeviceLogInput,
   DeviceLogSummary,
   DeviceSummary,
-  DeviceSyncStateSummary,
-  FirmwareHistorySyncStateSummary,
   HeartbeatPayload,
   IngestPayload,
   MotionEventSummary,
@@ -105,8 +101,6 @@ export function createE2eRuntimeStore() {
   const devices = new Map<string, DeviceSummary>();
   const motionEvents = new Map<string, MotionEventSummary[]>();
   const deviceLogs = new Map<string, DeviceLogSummary[]>();
-  const syncStates = new Map<string, DeviceSyncStateSummary>();
-  const historySyncStates = new Map<string, FirmwareHistorySyncStateSummary>();
   let nextMotionEventId = 1;
   let nextDeviceLogId = 1;
 
@@ -227,73 +221,10 @@ export function createE2eRuntimeStore() {
     return clone(log);
   }
 
-  async function recordBackfill(input: BackfillBatchInput): Promise<BackfillBatchResult> {
-    const insertedEvents: MotionEventSummary[] = [];
-    const insertedLogs: DeviceLogSummary[] = [];
-
-    for (const record of input.records) {
-      if (record.kind === "motion") {
-        const payload = await recordMotion({
-          deviceId: input.deviceId,
-          state: record.state,
-          timestamp: record.timestamp,
-          delta: record.delta ?? null,
-          sequence: record.sequence,
-          bootId: record.bootId ?? input.bootId ?? undefined,
-          firmwareVersion: record.firmwareVersion ?? undefined,
-          hardwareId: record.hardwareId ?? undefined,
-        });
-        if (payload.event) {
-          insertedEvents.push(payload.event);
-        }
-        continue;
-      }
-
-      insertedLogs.push(
-        await recordLog({
-          deviceId: input.deviceId,
-          level: record.level,
-          code: record.code,
-          message: record.message,
-          sequence: record.sequence,
-          bootId: record.bootId ?? input.bootId ?? undefined,
-          firmwareVersion: record.firmwareVersion ?? undefined,
-          hardwareId: record.hardwareId ?? undefined,
-          timestamp: record.timestamp ?? undefined,
-          metadata: record.metadata ?? undefined,
-        }),
-      );
-    }
-
-    const syncState: DeviceSyncStateSummary = {
-      deviceId: input.deviceId,
-      lastAckedSequence: input.ackSequence,
-      lastAckedBootId: input.bootId ?? null,
-      lastSyncCompletedAt: isoNow(),
-      lastOverflowDetectedAt: input.overflowDetectedAt ?? null,
-    };
-    const historySyncState: FirmwareHistorySyncStateSummary = {
-      deviceId: input.deviceId,
-      lastAckedHistorySequence: input.ackSequence,
-      lastHistorySyncCompletedAt: isoNow(),
-      lastHistoryOverflowDetectedAt: input.overflowDetectedAt ?? null,
-    };
-    syncStates.set(input.deviceId, clone(syncState));
-    historySyncStates.set(input.deviceId, clone(historySyncState));
-
-    return {
-      insertedEvents,
-      insertedLogs,
-      syncState,
-      historySyncState,
-    };
-  }
-
   return {
     recordMotion,
     recordHeartbeat,
     recordLog,
-    recordBackfill,
 
     async getDevice(deviceId: string) {
       return getDevice(deviceId);
@@ -494,27 +425,5 @@ export function createE2eRuntimeStore() {
       return matches.length > 0 ? clone(matches.at(-1) ?? null) : null;
     },
 
-    async getDeviceSyncState(deviceId: string) {
-      return clone(
-        syncStates.get(deviceId) ?? {
-          deviceId,
-          lastAckedSequence: 0,
-          lastAckedBootId: null,
-          lastSyncCompletedAt: null,
-          lastOverflowDetectedAt: null,
-        },
-      );
-    },
-
-    async getFirmwareHistorySyncState(deviceId: string) {
-      return clone(
-        historySyncStates.get(deviceId) ?? {
-          deviceId,
-          lastAckedHistorySequence: 0,
-          lastHistorySyncCompletedAt: null,
-          lastHistoryOverflowDetectedAt: null,
-        },
-      );
-    },
   };
 }

@@ -20,7 +20,6 @@ import {
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
-  buildAnalyticsSyncDisplay,
   sortAnalyticsNodes,
 } from "../selectors/analytics";
 import { buildBluetoothNodes as buildDashboardNodes } from "../selectors/dashboard";
@@ -205,7 +204,6 @@ export function AnalyticsPage() {
       cancelled = true;
     };
   }, [
-    currentAnalytics?.sync.lastSyncCompletedAt,
     loadDeviceActivity,
     selectedNodeId,
   ]);
@@ -220,10 +218,6 @@ export function AnalyticsPage() {
   );
   const overview = useMemo(
     () => buildAnalyticsOverview(currentAnalytics),
-    [currentAnalytics],
-  );
-  const syncDisplay = useMemo(
-    () => buildAnalyticsSyncDisplay(currentAnalytics),
     [currentAnalytics],
   );
   const activityLogs = useMemo(() => {
@@ -249,7 +243,7 @@ export function AnalyticsPage() {
   }, [deviceActivities, selectedNodeId, snapshot?.activities]);
   const utilizationSummary = useMemo(() => {
     if (isLoadingAnalytics && !overview) {
-      return "Loading utilization from canonical history...";
+      return "Loading machine utilization...";
     }
 
     if (!overview) {
@@ -274,7 +268,8 @@ export function AnalyticsPage() {
           <Card className="max-w-xl border-zinc-800 bg-zinc-950/80 p-8 text-center">
             <p className="text-sm text-zinc-300">No approved nodes are available for analytics yet.</p>
             <p className="mt-2 text-sm text-zinc-500">
-              Pair a node from Setup, then return here to view cached and canonical movement history.
+              Pair a node from Setup, then return here to view live motion analytics.
+              Pair a node from Setup, then return here to view movement analytics.
             </p>
           </Card>
         </div>
@@ -413,39 +408,12 @@ export function AnalyticsPage() {
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Data Status</p>
                 <p className="mt-2 text-sm text-zinc-400">
-                  Live connection and history sync stay visible here while usage remains the primary signal.
+                  Live connection stays visible here while usage remains the primary signal.
                 </p>
-                {syncDisplay ? (
-                  <div className="mt-3 flex items-center gap-2 text-sm">
-                    <span
-                      className={[
-                        "size-2 rounded-full",
-                        syncDisplay.tone === "warning"
-                          ? "bg-amber-300"
-                          : syncDisplay.tone === "muted"
-                            ? "bg-sky-300"
-                            : "bg-emerald-300",
-                        syncDisplay.showAnimation ? "animate-pulse" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    />
-                    <span
-                      className={
-                        syncDisplay.tone === "warning"
-                          ? "text-amber-200"
-                          : syncDisplay.tone === "muted"
-                            ? "text-zinc-200"
-                            : "text-zinc-300"
-                      }
-                    >
-                      {syncDisplay.label}
-                    </span>
-                    {syncDisplay.detail ? (
-                      <span className="text-zinc-500">{syncDisplay.detail}</span>
-                    ) : null}
-                  </div>
-                ) : null}
+                <div className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+                  <span className="size-2 rounded-full bg-emerald-300" />
+                  <span>Analytics come from live persisted motion transitions.</span>
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -462,28 +430,6 @@ export function AnalyticsPage() {
                   {signalLabel(selectedNode.signalStrength)}
                 </Badge>
               </div>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-3 border-t border-zinc-900 pt-4 lg:flex-row lg:items-center lg:justify-between">
-              <p className="text-xs text-zinc-500">
-                {currentAnalytics?.sync.lastSyncCompletedAt
-                  ? `Last completed sync ${new Date(currentAnalytics.sync.lastSyncCompletedAt).toLocaleString()}`
-                  : "No completed sync recorded yet"}
-              </p>
-
-              {currentAnalytics?.warningFlags.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {currentAnalytics.warningFlags.map((warning) => (
-                    <Badge
-                      key={warning}
-                      variant="outline"
-                      className="border-zinc-800 bg-zinc-900 text-zinc-300"
-                    >
-                      {warning}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
             </div>
           </Card>
 
@@ -520,7 +466,7 @@ export function AnalyticsPage() {
               ) : (
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
                   {isLoadingAnalytics
-                    ? "Loading usage history…"
+                    ? "Loading live analytics…"
                     : "No recorded use in this window yet."}
                 </div>
               )}
@@ -556,7 +502,7 @@ export function AnalyticsPage() {
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
                   {isLoadingAnalytics
                     ? "Loading session starts…"
-                    : "Movement starts will appear once canonical history is available."}
+                    : "Movement starts will appear here once live motion transitions are recorded."}
                 </div>
               )}
             </Card>
@@ -603,7 +549,7 @@ export function AnalyticsPage() {
                   <div className="flex h-full min-h-40 items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
                     {isLoadingActivity
                       ? "Loading machine activity…"
-                      : "Machine activity will appear here as canonical history and live runtime events arrive."}
+                      : "Machine activity will appear here as live motion events and device logs arrive."}
                   </div>
                 )}
               </div>

@@ -30,12 +30,12 @@ type RuntimeSyncDeps = {
 };
 
 export type RuntimeSync = {
-  refreshHistory: () => Promise<void>;
-  refreshDeviceHistory: (deviceId: string) => Promise<void>;
+  refreshSnapshotData: () => Promise<void>;
+  refreshDeviceData: (deviceId: string) => Promise<void>;
   getDeviceActivity: (deviceId: string, limit?: number) => Promise<DeviceActivitySummary[]>;
 };
 
-async function loadSnapshotHistory(deps: RuntimeSyncDeps) {
+async function loadSnapshotData(deps: RuntimeSyncDeps) {
   const loadDevices = deps.listDevices ?? listDevices;
   const loadRecentEvents = deps.listRecentEvents ?? listRecentEvents;
   const loadDeviceLogs = deps.listDeviceLogs ?? listDeviceLogs;
@@ -61,12 +61,12 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
   const loadDeviceRecentEvents = deps.listDeviceRecentEvents ?? listDeviceRecentEvents;
   const loadDeviceLogs = deps.listDeviceLogs ?? listDeviceLogs;
 
-  async function refreshHistory() {
-    const history = await loadSnapshotHistory(deps);
+  async function refreshSnapshotData() {
+    const snapshotData = await loadSnapshotData(deps);
     const snapshot = deps.getSnapshot();
     let devices = snapshot.devices;
 
-    for (const device of history.repositoryDevices) {
+    for (const device of snapshotData.repositoryDevices) {
       devices = mergeGatewayDeviceUpdate(
         devices,
         mergeRepositoryDeviceIntoGatewaySnapshot(devices, device),
@@ -76,13 +76,13 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
     deps.setSnapshot({
       ...snapshot,
       devices,
-      events: history.events,
-      logs: history.logs,
-      activities: history.activities,
+      events: snapshotData.events,
+      logs: snapshotData.logs,
+      activities: snapshotData.activities,
     });
   }
 
-  async function refreshDeviceHistory(deviceId: string) {
+  async function refreshDeviceData(deviceId: string) {
     const [repositoryDevice, deviceEvents, deviceLogs, deviceActivities] = await Promise.all([
       loadDevice(deviceId),
       loadDeviceRecentEvents({ deviceId, limit: 14 }),
@@ -124,8 +124,8 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
   }
 
   return {
-    refreshHistory,
-    refreshDeviceHistory,
+    refreshSnapshotData,
+    refreshDeviceData,
     async getDeviceActivity(deviceId, limit) {
       return loadDeviceActivity({ deviceId, limit });
     },

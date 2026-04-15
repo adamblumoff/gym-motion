@@ -4,7 +4,7 @@ import { createRuntimeLifecycle } from "./lifecycle";
 import { createEmptySnapshot } from "./snapshot";
 
 describe("createRuntimeLifecycle", () => {
-  it("keeps startup alive when history refresh fails", async () => {
+  it("keeps startup alive when snapshot refresh fails", async () => {
     let snapshot = createEmptySnapshot();
     const emitSnapshot = vi.fn();
     const setGatewayIssue = vi.fn((issue: string | null) => {
@@ -13,9 +13,9 @@ describe("createRuntimeLifecycle", () => {
         gatewayIssue: issue,
       };
     });
-    const onHistoryRefreshError = vi.fn((error: unknown) => {
+    const onSnapshotRefreshError = vi.fn((error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
-      setGatewayIssue(`History refresh unavailable: ${detail}`);
+      setGatewayIssue(`Snapshot refresh unavailable: ${detail}`);
     });
 
     const lifecycle = createRuntimeLifecycle({
@@ -33,11 +33,11 @@ describe("createRuntimeLifecycle", () => {
           runtimeState: "running",
         };
       },
-      refreshHistory: async () => {
+      refreshSnapshotData: async () => {
         throw new Error("connect ETIMEDOUT");
       },
       setGatewayIssue,
-      onHistoryRefreshError,
+      onSnapshotRefreshError,
       applyManualScanPayload: vi.fn(),
       emitSnapshot,
       setWindowsScanRequested: vi.fn(),
@@ -45,8 +45,8 @@ describe("createRuntimeLifecycle", () => {
 
     await expect(lifecycle.startRuntime()).resolves.toBeUndefined();
 
-    expect(onHistoryRefreshError).toHaveBeenCalledOnce();
-    expect(setGatewayIssue).toHaveBeenCalledWith("History refresh unavailable: connect ETIMEDOUT");
+    expect(onSnapshotRefreshError).toHaveBeenCalledOnce();
+    expect(setGatewayIssue).toHaveBeenCalledWith("Snapshot refresh unavailable: connect ETIMEDOUT");
     expect(snapshot.runtimeState).toBe("running");
   });
 });

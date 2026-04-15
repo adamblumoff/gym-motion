@@ -1,8 +1,6 @@
 import type { z } from "zod";
 
 import type {
-  backfillBatchSchema,
-  backfillRecordSchema,
   deviceAssignmentSchema,
   deviceLogLevelSchema,
   deviceLogSchema,
@@ -39,8 +37,6 @@ export type DeviceRegistrationInput = z.infer<typeof deviceRegistrationSchema>;
 export type FirmwareReleaseInput = z.infer<typeof firmwareReleaseSchema>;
 export type FirmwareReportInput = z.infer<typeof firmwareReportSchema>;
 export type DeviceLogInput = z.infer<typeof deviceLogSchema>;
-export type BackfillBatchInput = z.infer<typeof backfillBatchSchema>;
-export type BackfillRecordInput = z.infer<typeof backfillRecordSchema>;
 
 export type DeviceSummary = {
   id: string;
@@ -235,12 +231,6 @@ export type DeviceActivitySummary = {
 
 export type AnalyticsWindow = "24h" | "7d";
 
-export type AnalyticsWarningFlag =
-  | "history-overflow"
-  | "sync-delayed"
-  | "sync-failed"
-  | "stale-cache";
-
 export type DeviceAnalyticsBucket = {
   key: string;
   label: string;
@@ -248,17 +238,6 @@ export type DeviceAnalyticsBucket = {
   endAt: string;
   movementCount: number;
   movingSeconds: number;
-};
-
-export type DeviceAnalyticsSyncState = {
-  deviceId: string;
-  state: "idle" | "syncing" | "failed";
-  detail: string | null;
-  lastCanonicalAt: string | null;
-  lastSyncCompletedAt: string | null;
-  lastAckedSequence: number;
-  lastAckedBootId: string | null;
-  lastOverflowDetectedAt: string | null;
 };
 
 export type DeviceAnalyticsSnapshot = {
@@ -269,8 +248,6 @@ export type DeviceAnalyticsSnapshot = {
   buckets: DeviceAnalyticsBucket[];
   totalMovementCount: number;
   totalMovingSeconds: number;
-  warningFlags: AnalyticsWarningFlag[];
-  sync: DeviceAnalyticsSyncState;
   liveOverlay?: {
     active: boolean;
     generatedAt: string | null;
@@ -309,28 +286,6 @@ export type GatewayStatusStreamPayload = GatewayHealthResponse;
 
 export type DeviceActivityResponse = {
   activities: DeviceActivitySummary[];
-};
-
-export type DeviceSyncStateSummary = {
-  deviceId: string;
-  lastAckedSequence: number;
-  lastAckedBootId: string | null;
-  lastSyncCompletedAt: string | null;
-  lastOverflowDetectedAt: string | null;
-};
-
-export type FirmwareHistorySyncStateSummary = {
-  deviceId: string;
-  lastAckedHistorySequence: number;
-  lastHistorySyncCompletedAt: string | null;
-  lastHistoryOverflowDetectedAt: string | null;
-};
-
-export type BackfillBatchResult = {
-  insertedEvents: MotionEventSummary[];
-  insertedLogs: DeviceLogSummary[];
-  syncState: DeviceSyncStateSummary;
-  historySyncState: FirmwareHistorySyncStateSummary;
 };
 
 export type GetDeviceAnalyticsInput = {

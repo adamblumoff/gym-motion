@@ -3,13 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
-  buildAnalyticsSyncDisplay,
   formatMovingDuration,
   sortAnalyticsNodes,
 } from "./analytics";
 
 describe("buildAnalyticsChartData", () => {
-  it("maps canonical analytics buckets into chart points", () => {
+  it("maps analytics buckets into chart points", () => {
     const chart = buildAnalyticsChartData({
       deviceId: "stack-001",
       window: "24h",
@@ -27,17 +26,6 @@ describe("buildAnalyticsChartData", () => {
       ],
       totalMovementCount: 3,
       totalMovingSeconds: 900,
-      warningFlags: [],
-      sync: {
-        deviceId: "stack-001",
-        state: "idle",
-        detail: null,
-        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
     });
 
     expect(chart).toEqual([
@@ -78,17 +66,6 @@ describe("buildAnalyticsOverview", () => {
       ],
       totalMovementCount: 12,
       totalMovingSeconds: 5_400,
-      warningFlags: [],
-      sync: {
-        deviceId: "stack-001",
-        state: "idle",
-        detail: null,
-        lastCanonicalAt: new Date(2026, 2, 18, 12, 0, 0).toISOString(),
-        lastSyncCompletedAt: new Date(2026, 2, 18, 11, 30, 0).toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
     });
 
     expect(overview).toEqual({
@@ -123,17 +100,6 @@ describe("buildAnalyticsOverview", () => {
       ],
       totalMovementCount: 0,
       totalMovingSeconds: 0,
-      warningFlags: [],
-      sync: {
-        deviceId: "stack-001",
-        state: "idle",
-        detail: null,
-        lastCanonicalAt: new Date(2026, 2, 18, 12, 0, 0).toISOString(),
-        lastSyncCompletedAt: new Date(2026, 2, 18, 11, 30, 0).toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
     });
 
     expect(overview).toEqual({
@@ -144,143 +110,6 @@ describe("buildAnalyticsOverview", () => {
       movementStarts: 0,
       busiestPeriodLabel: null,
       busiestPeriodDurationLabel: null,
-    });
-  });
-
-  it("summarizes utilization and the busiest day for the 7d window", () => {
-    const bucketStart = new Date(2026, 2, 17, 0, 0, 0);
-    const bucketEnd = new Date(2026, 2, 18, 0, 0, 0);
-
-    const overview = buildAnalyticsOverview({
-      deviceId: "stack-001",
-      window: "7d",
-      generatedAt: new Date(2026, 2, 18, 12, 0, 0).toISOString(),
-      source: "canonical",
-      buckets: [
-        {
-          key: "7d-1",
-          label: "Mar 17",
-          startAt: bucketStart.toISOString(),
-          endAt: bucketEnd.toISOString(),
-          movementCount: 5,
-          movingSeconds: 7_200,
-        },
-      ],
-      totalMovementCount: 20,
-      totalMovingSeconds: 7_200,
-      warningFlags: [],
-      sync: {
-        deviceId: "stack-001",
-        state: "idle",
-        detail: null,
-        lastCanonicalAt: new Date(2026, 2, 18, 12, 0, 0).toISOString(),
-        lastSyncCompletedAt: new Date(2026, 2, 18, 11, 30, 0).toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
-    });
-
-    expect(overview).toEqual({
-      utilizationPercent: 1,
-      activeTimeLabel: "2h",
-      windowLabel: "last 7d",
-      hasRecordedUse: true,
-      movementStarts: 20,
-      busiestPeriodLabel: "Tuesday",
-      busiestPeriodDurationLabel: "2h",
-    });
-  });
-});
-
-describe("buildAnalyticsSyncDisplay", () => {
-  it("returns a quiet complete state for idle analytics sync", () => {
-    const display = buildAnalyticsSyncDisplay({
-      deviceId: "stack-001",
-      window: "24h",
-      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-      source: "canonical",
-      buckets: [],
-      totalMovementCount: 0,
-      totalMovingSeconds: 0,
-      warningFlags: [],
-      sync: {
-        deviceId: "stack-001",
-        state: "idle",
-        detail: null,
-        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
-    });
-
-    expect(display).toEqual({
-      label: "History up to date",
-      detail: null,
-      tone: "neutral",
-      showAnimation: false,
-    });
-  });
-
-  it("returns an animated syncing state while catch-up is running", () => {
-    const display = buildAnalyticsSyncDisplay({
-      deviceId: "stack-001",
-      window: "24h",
-      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-      source: "cache",
-      buckets: [],
-      totalMovementCount: 0,
-      totalMovingSeconds: 0,
-      warningFlags: ["sync-delayed"],
-      sync: {
-        deviceId: "stack-001",
-        state: "syncing",
-        detail: null,
-        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
-    });
-
-    expect(display).toEqual({
-      label: "Syncing history",
-      detail: "Live updates stay current while analytics catches up in the background.",
-      tone: "muted",
-      showAnimation: true,
-    });
-  });
-
-  it("returns the failure detail when sync fails", () => {
-    const display = buildAnalyticsSyncDisplay({
-      deviceId: "stack-001",
-      window: "24h",
-      generatedAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-      source: "cache",
-      buckets: [],
-      totalMovementCount: 0,
-      totalMovingSeconds: 0,
-      warningFlags: ["sync-failed"],
-      sync: {
-        deviceId: "stack-001",
-        state: "failed",
-        detail: "Database unavailable",
-        lastCanonicalAt: new Date("2026-03-18T12:00:00.000Z").toISOString(),
-        lastSyncCompletedAt: new Date("2026-03-18T11:30:00.000Z").toISOString(),
-        lastAckedSequence: 12,
-        lastAckedBootId: "boot-1",
-        lastOverflowDetectedAt: null,
-      },
-    });
-
-    expect(display).toEqual({
-      label: "History sync failed",
-      detail: "Database unavailable",
-      tone: "warning",
-      showAnimation: false,
     });
   });
 });

@@ -3,19 +3,15 @@ import http from "node:http";
 import {
   createOrUpdateDeviceRegistration,
   formatZodError,
-  getFirmwareHistorySyncState,
-  getDeviceSyncState,
   listDeviceActivity,
   listDeviceLogs,
   listDevices,
-  parseBackfillBatch,
   parseDeviceAssignment,
   parseDeviceLog,
   parseDeviceRegistration,
   parseHeartbeatPayload,
   parseIngestPayload,
   purgeDeviceData,
-  recordBackfillBatch,
   recordDeviceLog,
   recordHeartbeat,
   recordMotionEvent,
@@ -153,37 +149,6 @@ export async function handleDeviceRoutes(args: {
     const deviceUpdate = await recordHeartbeat(parsed.data);
     emit({ type: "device-updated", payload: deviceUpdate.device });
     json(response, 200, { ok: true });
-    return true;
-  }
-
-  if (method === "GET" && pathname.startsWith("/api/device-sync/")) {
-    const deviceId = decodeURIComponent(pathname.replace("/api/device-sync/", ""));
-    const bootId = url.searchParams.get("bootId");
-    json(response, 200, {
-      ok: true,
-      syncState: await getDeviceSyncState(deviceId, bootId),
-      historySyncState: await getFirmwareHistorySyncState(deviceId),
-    });
-    return true;
-  }
-
-  if (method === "POST" && pathname === "/api/device-backfill") {
-    const payload = await readJsonBody(request);
-    const parsed = parseBackfillBatch(payload);
-
-    if (!parsed.success) {
-      json(response, 400, { ok: false, error: formatZodError(parsed.error) });
-      return true;
-    }
-
-    const result = await recordBackfillBatch(parsed.data);
-    emit({
-      type: "backfill-recorded",
-      payload: result,
-      deviceId: parsed.data.deviceId,
-      syncComplete: parsed.data.syncComplete ?? false,
-    });
-    json(response, 200, { ok: true, ...result });
     return true;
   }
 

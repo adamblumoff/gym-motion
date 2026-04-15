@@ -40,13 +40,12 @@ describe("createDataEventHandler", () => {
         snapshot = nextSnapshot;
       },
       pruneSnapshot: (nextSnapshot) => nextSnapshot,
+      clearOptimisticMessage: () => ({
+        removedEventIds: [],
+        removedLogIds: [],
+        removedActivityIds: [],
+      }),
       emit: (event) => emittedEvents.push(event.type),
-      refreshHistory: async () => {},
-      refreshDeviceHistory: async () => {},
-      refreshSyncStateOnly: async () => {},
-      markAnalyticsSyncInProgress: () => {},
-      markAnalyticsSyncComplete: () => {},
-      markAnalyticsSyncFailure: () => {},
       refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
       scheduleAnalyticsRefresh: (deviceId) => scheduleAnalyticsRefreshCalls.push(deviceId),
       recordLiveMotion: (event) => {
@@ -54,8 +53,6 @@ describe("createDataEventHandler", () => {
           recordLiveMotionCalls.push(event.deviceId);
         }
       },
-      reportHistoryRefreshFailure: () => {},
-      clearHistoryRefreshFailure: () => {},
     });
 
     applyDataEvent({
@@ -65,7 +62,7 @@ describe("createDataEventHandler", () => {
         event: {
           id: 11,
           deviceId: "stack-001",
-          sequence: 7,
+          sequence: null,
           state: "moving",
           delta: 4,
           eventTimestamp: 1234,
@@ -86,7 +83,7 @@ describe("createDataEventHandler", () => {
   });
 
   it("removes optimistic live records from the renderer batch before adding canonical records", () => {
-    const emittedEvents: Array<ReturnType<typeof createEmptySnapshot> | { type: string; patch?: unknown }> = [];
+    const emittedEvents: Array<{ type: string; patch?: unknown }> = [];
     let snapshot = createEmptySnapshot();
 
     const applyDataEvent = createDataEventHandler({
@@ -101,17 +98,9 @@ describe("createDataEventHandler", () => {
         removedActivityIds: ["optimistic-motion:message-1"],
       }),
       emit: (event) => emittedEvents.push(event),
-      refreshHistory: async () => {},
-      refreshDeviceHistory: async () => {},
-      refreshSyncStateOnly: async () => {},
-      markAnalyticsSyncInProgress: () => {},
-      markAnalyticsSyncComplete: () => {},
-      markAnalyticsSyncFailure: () => {},
       refreshAnalyticsNow: () => {},
       scheduleAnalyticsRefresh: () => {},
       recordLiveMotion: () => {},
-      reportHistoryRefreshFailure: () => {},
-      clearHistoryRefreshFailure: () => {},
     });
 
     applyDataEvent({
@@ -122,7 +111,7 @@ describe("createDataEventHandler", () => {
         event: {
           id: 11,
           deviceId: "stack-001",
-          sequence: 7,
+          sequence: null,
           state: "moving",
           delta: 4,
           eventTimestamp: 1234,
@@ -149,68 +138,5 @@ describe("createDataEventHandler", () => {
         ],
       },
     });
-  });
-
-  it("keeps backfill on the background analytics refresh path", async () => {
-    const refreshAnalyticsNowCalls: string[] = [];
-    const scheduleAnalyticsRefreshCalls: string[] = [];
-    const markedSyncStates: string[] = [];
-    const emittedEvents: string[] = [];
-    const refreshedDevices: string[] = [];
-    const callOrder: string[] = [];
-    let snapshot = createEmptySnapshot();
-
-    const applyDataEvent = createDataEventHandler({
-      getSnapshot: () => snapshot,
-      setSnapshot: (nextSnapshot) => {
-        snapshot = nextSnapshot;
-      },
-      pruneSnapshot: (nextSnapshot) => nextSnapshot,
-      emit: (event) => emittedEvents.push(event.type),
-      refreshHistory: async () => {
-        throw new Error("should not refresh full history");
-      },
-      refreshDeviceHistory: async (deviceId) => {
-        refreshedDevices.push(deviceId);
-        callOrder.push(`history:${deviceId}`);
-      },
-      refreshSyncStateOnly: async () => {
-        throw new Error("should not refresh sync-only state on final page");
-      },
-      markAnalyticsSyncInProgress: (deviceId) => {
-        markedSyncStates.push(`syncing:${deviceId}`);
-      },
-      markAnalyticsSyncComplete: (deviceId) => {
-        markedSyncStates.push(`complete:${deviceId}`);
-      },
-      markAnalyticsSyncFailure: (deviceId, detail) => {
-        markedSyncStates.push(`failed:${deviceId}:${detail}`);
-      },
-      refreshAnalyticsNow: (deviceId) => refreshAnalyticsNowCalls.push(deviceId),
-      scheduleAnalyticsRefresh: (deviceId) => {
-        scheduleAnalyticsRefreshCalls.push(deviceId);
-        callOrder.push(`analytics:${deviceId}`);
-      },
-      recordLiveMotion: () => {},
-      reportHistoryRefreshFailure: () => {},
-      clearHistoryRefreshFailure: () => {},
-    });
-
-    applyDataEvent({
-      type: "backfill-recorded",
-      payload: {},
-      deviceId: "stack-001",
-      syncComplete: true,
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(refreshAnalyticsNowCalls).toEqual([]);
-    expect(scheduleAnalyticsRefreshCalls).toEqual(["stack-001"]);
-    expect(refreshedDevices).toEqual(["stack-001"]);
-    expect(markedSyncStates).toEqual(["complete:stack-001"]);
-    expect(callOrder).toEqual(["history:stack-001", "analytics:stack-001"]);
-    expect(emittedEvents).toContain("snapshot");
   });
 });

@@ -1,6 +1,5 @@
 BLEService provisioningService{BLEUuid(PROVISIONING_SERVICE_UUID)};
 BLEService runtimeService{BLEUuid(RUNTIME_SERVICE_UUID)};
-BLEService historyService{BLEUuid(HISTORY_SERVICE_UUID)};
 BLEDfu dfuService;
 
 BLECharacteristic provisioningControlCharacteristicImpl{BLEUuid(PROVISIONING_CONTROL_UUID)};
@@ -9,8 +8,6 @@ BLECharacteristic runtimeTelemetryCharacteristicImpl{BLEUuid(RUNTIME_TELEMETRY_U
 BLECharacteristic runtimeControlCharacteristicImpl{BLEUuid(RUNTIME_CONTROL_UUID)};
 BLECharacteristic runtimeStatusCharacteristicImpl{BLEUuid(RUNTIME_STATUS_UUID)};
 BLECharacteristic runtimeOtaDataCharacteristicImpl{BLEUuid(RUNTIME_OTA_DATA_UUID)};
-BLECharacteristic historyControlCharacteristicImpl{BLEUuid(HISTORY_CONTROL_UUID)};
-BLECharacteristic historyStatusCharacteristicImpl{BLEUuid(HISTORY_STATUS_UUID)};
 
 String bytesToString(const uint8_t* data, size_t length) {
   String value;
@@ -225,22 +222,6 @@ bool enqueueRuntimeStatusPayload(const String& payload) {
   return enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
 }
 
-bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload) {
-  return enqueueBleTxMessage(historyTxQueue, characteristic, &runtimeBleConnected, payload);
-}
-
-bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
-  return enqueueChunkedNotification(historyTxQueue, characteristic, &runtimeBleConnected, payload);
-}
-
-bool enqueueHistoryStatusPayload(const String& payload) {
-  if (payload.length() <= 244) {
-    return enqueueHistoryNotification(historyStatusCharacteristic, payload);
-  }
-
-  return enqueueHistoryNotificationChunked(historyStatusCharacteristic, payload);
-}
-
 bool processBleTxMessage(BleTxQueue& queue) {
   if (queue.length == 0) {
     return false;
@@ -272,14 +253,6 @@ void processBleNotificationQueues() {
       return;
     }
   }
-
-  size_t historyBudget = BLE_TX_BURST_HISTORY_LIMIT;
-  while (historyBudget > 0 && historyTxQueue.length > 0) {
-    if (processBleTxMessage(historyTxQueue)) {
-      return;
-    }
-    historyBudget -= 1;
-  }
 }
 
 void sendProvisioningStatus(const String& payload) {
@@ -293,7 +266,6 @@ String createRuntimeReadyPayload() {
     "\",\"bootUptimeMs\":" + String(millis()) +
     ",\"notifyMask\":" + String(runtimeNotifyMask) +
     ",\"rcw\":" + String(runtimeControlWriteCount) +
-    ",\"hcw\":" + String(historyControlWriteCount) +
     ",\"connectionEpoch\":" + String(runtimeConnectionEpoch) +
     ",\"disconnectCount\":" + String(runtimeDisconnectCount) + "}";
 }
@@ -334,80 +306,6 @@ void enqueueBoardLogStatus(const String& tag, const String& message, const Strin
   (void)level;
 }
 
-void sendHistoryDebugStatus(
-  const String& stage,
-  const String& requestId,
-  unsigned long afterSequence,
-  size_t sentCount,
-  const String& code,
-  const String& message
-) {
-  String payload =
-    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"stage\":\"" + escapeJsonString(stage) +
-    "\",\"requestId\":\"" + escapeJsonString(requestId) + "\"";
-
-  if (afterSequence > 0) {
-    payload += ",\"afterSequence\":" + String(afterSequence);
-  }
-
-  if (sentCount > 0) {
-    payload += ",\"sentCount\":" + String(sentCount);
-  }
-
-  if (code.length() > 0) {
-    payload += ",\"code\":\"" + escapeJsonString(code) + "\"";
-  }
-
-  if (message.length() > 0) {
-    payload += ",\"message\":\"" + escapeJsonString(message) + "\"";
-  }
-
-  payload += "}";
-  writeCharacteristicValue(historyStatusCharacteristic, payload);
-  enqueueHistoryStatusPayload(payload);
-  if (runtimeStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(runtimeStatusCharacteristic, payload);
-    enqueueRuntimeStatusPayload(payload);
-  }
-}
-
-void notePendingHistoryControlDebug(
-  const String& stage,
-  const String& requestId,
-  unsigned long afterSequence
-) {
-  pendingHistoryControlDebugStage = stage;
-  pendingHistoryControlDebugRequestId = requestId;
-  pendingHistoryControlDebugAfterSequence = afterSequence;
-  pendingHistoryControlDebugPublish = true;
-}
-
-void publishPendingHistoryControlDebug() {
-  if (!pendingHistoryControlDebugPublish) {
-    return;
-  }
-
-  String payload =
-    "{\"type\":\"history-debug\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
-    "\",\"stage\":\"" + escapeJsonString(pendingHistoryControlDebugStage) +
-    "\",\"requestId\":\"" + escapeJsonString(pendingHistoryControlDebugRequestId) + "\"";
-
-  if (pendingHistoryControlDebugAfterSequence > 0) {
-    payload += ",\"afterSequence\":" + String(pendingHistoryControlDebugAfterSequence);
-  }
-
-  payload += "}";
-
-  pendingHistoryControlDebugPublish = false;
-  if (payload == publishedHistoryControlDebugPayload) {
-    return;
-  }
-
-  publishedHistoryControlDebugPayload = payload;
-  enqueueRuntimeStatusPayload(payload);
-}
-
 void notifyCurrentRuntimeStatus() {
   if (runtimeAppSessionConnected &&
       runtimeAppSessionId.length() > 0 &&
@@ -432,10 +330,6 @@ void writeCurrentStatusSnapshots() {
       writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
     }
   }
-
-  if (historyStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
-  }
 }
 
 String createRuntimeAppSessionOnlinePayload(
@@ -448,8 +342,7 @@ String createRuntimeAppSessionOnlinePayload(
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"bootUptimeMs\":" + String(millis()) +
     ",\"notifyMask\":" + String(runtimeNotifyMask) +
-    ",\"rcw\":" + String(runtimeControlWriteCount) +
-    ",\"hcw\":" + String(historyControlWriteCount) + "}";
+    ",\"rcw\":" + String(runtimeControlWriteCount) + "}";
 }
 
 void sendRuntimeAppSessionOnline(
@@ -474,17 +367,6 @@ void logRuntimeControlFrame(const String& stage, const String& payload) {
   Serial.println(payload);
 }
 
-void logRuntimeHistoryEvent(const String& message) {
-  Serial.print("[history] ");
-  Serial.println(message);
-  enqueueBoardLogStatus("history", message);
-}
-
-bool isHistoryControlPayload(const String& payload) {
-  return payload.indexOf("\"history-page-request\"") >= 0 ||
-         payload.indexOf("\"history-page-ack\"") >= 0;
-}
-
 String classifyRuntimeControlPayloadType(const String& payload) {
   if (payload.indexOf("\"app-session-begin\"") >= 0) {
     return "app-session-begin";
@@ -496,14 +378,6 @@ String classifyRuntimeControlPayloadType(const String& payload) {
 
   if (payload.indexOf("\"sync-now\"") >= 0) {
     return "sync-now";
-  }
-
-  if (payload.indexOf("\"history-page-request\"") >= 0) {
-    return "history-page-request";
-  }
-
-  if (payload.indexOf("\"history-page-ack\"") >= 0) {
-    return "history-page-ack";
   }
 
   return "";
@@ -526,11 +400,6 @@ void sendRuntimeControlDebugStatus(const String& stage, const String& controlTyp
   writeCharacteristicValue(runtimeStatusCharacteristic, payload);
   enqueueRuntimeStatusPayload(payload);
 }
-
-String historyControlRequestIdFromPayload(const String& payload) {
-  return extractJsonString(payload, "requestId");
-}
-
 void logAdvertisingSetupFailure(const char* field) {
   markNodeBleFailure();
   Serial.print("BLE advertising payload setup failed: ");
@@ -647,27 +516,11 @@ void resetRuntimeAppSessionState() {
   if (runtimeStatusCharacteristic != nullptr) {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
-  if (historyStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
-  }
 }
 
 void resetRuntimeTransportBuffers() {
   runtimeCommandBuffer = "";
-  historyCommandBuffer = "";
   runtimeCommandFramed = false;
-  historyCommandFramed = false;
-  runtimeHistoryChunkDirectNotified = false;
-  pendingHistoryControlDebugPublish = false;
-  pendingHistoryControlDebugStage = "";
-  pendingHistoryControlDebugRequestId = "";
-  pendingHistoryControlDebugAfterSequence = 0;
-  publishedHistoryControlDebugPayload = "";
-  pendingHistorySyncCommand = firmware_runtime::HistoryControlCommand();
-  pendingHistorySyncRequest = false;
-  cancelHistoryWorker();
-  lastCompletedHistoryRequestId = "";
-  lastAutoHistoryDecisionMessage = "";
 }
 
 void armRuntimeBootstrapWatchdog(const String& message) {
@@ -845,7 +698,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
   const String payload =
     "{\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"state\":\"" + String(currentDetectedState) +
-    "\",\"sequence\":" + String(lastJournaledSequence) +
+    "\"" +
     ",\"delta\":" + String(delta) +
     ",\"timestamp\":" + String(timestamp) +
     ",\"bootId\":\"" + escapeJsonString(bootId) +
@@ -914,8 +767,6 @@ void handleProvisioningCommand(const String& payload) {
 
 void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) {
   logRuntimeControlFrame("payload", payload);
-  const bool historyPayload = isHistoryControlPayload(payload);
-  const String historyRequestId = historyControlRequestIdFromPayload(payload);
   const firmware_runtime::ControlCommand command =
     firmware_runtime::parseRuntimeControlCommand(
       payload.c_str(),
@@ -1045,109 +896,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     abortOtaTransfer("ota-aborted-by-gateway");
     return;
   }
-
-  const firmware_runtime::HistoryControlCommand historyCommand =
-    firmware_runtime::parseHistoryControlCommand(
-      payload.c_str(),
-      HISTORY_SYNC_PAGE_SIZE
-    );
-
-  if (historyCommand.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
-    disarmRuntimeBootstrapWatchdog();
-    notePendingHistoryControlDebug(
-      "parsed-request",
-      historyCommand.requestId.c_str(),
-      historyCommand.afterSequence
-    );
-    sendHistoryDebugStatus(
-      "parsed-request",
-      historyCommand.requestId.c_str(),
-      historyCommand.afterSequence,
-      0,
-      "",
-      ""
-    );
-    scheduleHistorySyncRequest(historyCommand);
-    return;
-  }
-
-  if (historyCommand.type == firmware_runtime::HistoryControlCommandType::HistoryPageAck) {
-    disarmRuntimeBootstrapWatchdog();
-    notePendingHistoryControlDebug(
-      "parsed-ack",
-      historyCommand.requestId.c_str(),
-      historyCommand.sequence
-    );
-    sendHistoryDebugStatus(
-      "parsed-ack",
-      historyCommand.requestId.c_str(),
-      historyCommand.sequence,
-      0,
-      "",
-      ""
-    );
-    acknowledgeHistorySyncRequest(historyCommand);
-    return;
-  }
-
-  if (historyPayload) {
-    notePendingHistoryControlDebug(
-      "invalid-control",
-      historyRequestId,
-      0
-    );
-    sendHistoryDebugStatus(
-      "invalid-control",
-      historyRequestId,
-      0,
-      0,
-      "history.invalid_control",
-      "Runtime control payload mentioned history sync but did not parse."
-    );
-  }
-}
-
-void handleHistoryControl(const String& payload) {
-  const firmware_runtime::HistoryControlCommand command =
-    firmware_runtime::parseHistoryControlCommand(
-      payload.c_str(),
-      HISTORY_SYNC_PAGE_SIZE
-    );
-
-  if (command.type == firmware_runtime::HistoryControlCommandType::Unknown) {
-    enqueueBoardLogStatus(
-      "history-control",
-      "History control payload did not parse into a supported command.",
-      "warn"
-    );
-    sendHistoryError("", "", "history.invalid_command", "Unsupported history control command.");
-    return;
-  }
-
-  disarmRuntimeBootstrapWatchdog();
-  lastRuntimeControlAt = millis();
-
-  if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageRequest) {
-    const String requestId = String(command.requestId.c_str());
-    enqueueBoardLogStatus(
-      "history-control",
-      "Accepted history-page-request " + requestId + " after=" +
-        String(command.afterSequence) + " max=" + String(command.maxRecords)
-    );
-    scheduleHistorySyncRequest(command);
-    return;
-  }
-
-  if (command.type == firmware_runtime::HistoryControlCommandType::HistoryPageAck) {
-    const String requestId = String(command.requestId.c_str());
-    enqueueBoardLogStatus(
-      "history-control",
-      "Accepted history-page-ack " + requestId + " sequence=" +
-        String(command.sequence)
-    );
-    acknowledgeHistorySyncRequest(command);
-    return;
-  }
 }
 
 void handleProvisioningControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
@@ -1206,10 +954,8 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
 
   if (value.startsWith("BEGIN:")) {
     sendRuntimeControlDebugStatus("frame-begin", "");
-    notePendingHistoryControlDebug("runtime-begin", "", 0);
     runtimeCommandBuffer = "";
     runtimeCommandFramed = true;
-    runtimeHistoryChunkDirectNotified = false;
     logRuntimeControlFrame("begin", value);
     return;
   }
@@ -1217,27 +963,11 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   if (runtimeCommandFramed && value == "END") {
     const String command = runtimeCommandBuffer;
     const String framedControlType = classifyRuntimeControlPayloadType(command);
-    notePendingHistoryControlDebug("runtime-end", framedControlType, 0);
     runtimeCommandBuffer = "";
     runtimeCommandFramed = false;
     logRuntimeControlFrame("end", command);
     if (framedControlType.length() > 0) {
       sendRuntimeControlDebugStatus("assembled-framed", framedControlType);
-    }
-    if (isHistoryControlPayload(command)) {
-      notePendingHistoryControlDebug(
-        "assembled-framed",
-        historyControlRequestIdFromPayload(command),
-        0
-      );
-      sendHistoryDebugStatus(
-        "assembled-framed",
-        historyControlRequestIdFromPayload(command),
-        0,
-        0,
-        "",
-        ""
-      );
     }
     handleRuntimeControl(command, conn_hdl);
     return;
@@ -1246,44 +976,16 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   if (runtimeCommandFramed) {
     runtimeCommandBuffer += value;
     const String chunkedControlType = classifyRuntimeControlPayloadType(runtimeCommandBuffer);
-    notePendingHistoryControlDebug("runtime-frame-chunk", chunkedControlType, 0);
     if (chunkedControlType.length() > 0) {
       sendRuntimeControlDebugStatus("frame-chunk", chunkedControlType);
-    }
-    if (!runtimeHistoryChunkDirectNotified &&
-        runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
-      runtimeHistoryChunkDirectNotified = true;
-    }
-    if (runtimeCommandBuffer.indexOf("\"history-page-") >= 0) {
-      notePendingHistoryControlDebug(
-        "runtime-chunk",
-        historyControlRequestIdFromPayload(runtimeCommandBuffer),
-        0
-      );
     }
     logRuntimeControlFrame("chunk", value);
     return;
   }
 
   if (value.startsWith("{") && value.endsWith("}")) {
-    notePendingHistoryControlDebug("runtime-inline", controlType, 0);
     if (controlType.length() > 0) {
       sendRuntimeControlDebugStatus("assembled-inline", controlType);
-    }
-    if (isHistoryControlPayload(value)) {
-      notePendingHistoryControlDebug(
-        "assembled-inline",
-        historyControlRequestIdFromPayload(value),
-        0
-      );
-      sendHistoryDebugStatus(
-        "assembled-inline",
-        historyControlRequestIdFromPayload(value),
-        0,
-        0,
-        "",
-        ""
-      );
     }
     handleRuntimeControl(value, conn_hdl);
     return;
@@ -1292,88 +994,6 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   runtimeCommandBuffer = "";
   runtimeCommandBuffer += value;
   logRuntimeControlFrame("chunk", value);
-}
-
-void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
-  (void)conn_hdl;
-  (void)characteristic;
-  const String value = bytesToString(data, len);
-
-  if (value.length() == 0) {
-    return;
-  }
-
-  historyControlWriteCount += 1;
-  writeCurrentStatusSnapshots();
-  enqueueBoardLogStatus(
-    "history-control",
-    "History control write callback entered len=" + String(value.length())
-  );
-
-  if (value.startsWith("BEGIN:")) {
-    notePendingHistoryControlDebug("history-begin", "", 0);
-    historyCommandBuffer = "";
-    historyCommandFramed = true;
-    return;
-  }
-
-  if (historyCommandFramed && value == "END") {
-    const String command = historyCommandBuffer;
-    historyCommandBuffer = "";
-    historyCommandFramed = false;
-    if (isHistoryControlPayload(command)) {
-      notePendingHistoryControlDebug(
-        "history-assembled-framed",
-        historyControlRequestIdFromPayload(command),
-        0
-      );
-      sendHistoryDebugStatus(
-        "history-assembled-framed",
-        historyControlRequestIdFromPayload(command),
-        0,
-        0,
-        "",
-        ""
-      );
-    }
-    handleHistoryControl(command);
-    return;
-  }
-
-  if (historyCommandFramed) {
-    historyCommandBuffer += value;
-    if (historyCommandBuffer.indexOf("\"history-page-") >= 0) {
-      notePendingHistoryControlDebug(
-        "history-chunk",
-        historyControlRequestIdFromPayload(historyCommandBuffer),
-        0
-      );
-    }
-    return;
-  }
-
-  if (value.startsWith("{") && value.endsWith("}")) {
-    if (isHistoryControlPayload(value)) {
-      notePendingHistoryControlDebug(
-        "history-assembled-inline",
-        historyControlRequestIdFromPayload(value),
-        0
-      );
-      sendHistoryDebugStatus(
-        "history-assembled-inline",
-        historyControlRequestIdFromPayload(value),
-        0,
-        0,
-        "",
-        ""
-      );
-    }
-    handleHistoryControl(value);
-    return;
-  }
-
-  historyCommandBuffer = "";
-  historyCommandBuffer += value;
 }
 
 void handleRuntimeOtaDataWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
@@ -1426,23 +1046,6 @@ void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristi
   enqueueRuntimeStatusPayload(payload);
 }
 
-void handleHistoryStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
-  ensureRuntimeConnectionInitialized(conn_hdl, "history status cccd");
-  const bool deliveryEnabled = (cccd_value & 0x0003) != 0;
-  if (deliveryEnabled) {
-    runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_HISTORY;
-  } else {
-    runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_HISTORY);
-  }
-
-  writeCharacteristicValue(characteristic, createRuntimeReadyPayload());
-  if (!deliveryEnabled) {
-    return;
-  }
-
-  enqueueHistoryStatusPayload(createRuntimeReadyPayload());
-}
-
 void initializeRuntimeConnection(uint16_t conn_handle) {
   const bool hasActiveSession =
     runtimeAppSessionConnected &&
@@ -1483,7 +1086,6 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
   } else {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
-  writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
   if (motionSensorReady) {
     sendTelemetry(lastReportedDelta, millis(), true, false);
   } else {
@@ -1520,9 +1122,6 @@ void handleBleDisconnect(uint16_t conn_handle, uint8_t reason) {
   lastConnectedRuntimeDebugAt = 0;
   runtimeNotifyMask = 0;
   runtimeTxQueue = BleTxQueue();
-  historyTxQueue = BleTxQueue();
-  cancelHistoryWorker();
-  lastCompletedHistoryRequestId = "";
   noteRuntimeTransportDisconnected(millis());
   startRuntimeAdvertising("BLE client disconnected");
 }
@@ -1630,38 +1229,12 @@ void setupBle() {
   runtimeOtaDataCharacteristicImpl.setWriteCallback(handleRuntimeOtaDataWrite);
   runtimeStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
 
-  setupBleService(historyService, "history");
-  if (!setupBleCharacteristic(
-    historyControlCharacteristicImpl,
-    CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP,
-    SECMODE_NO_ACCESS,
-    SECMODE_OPEN,
-    244
-  )) {
-    Serial.println("BLE characteristic registration failed: history control");
-  }
-  historyControlCharacteristicImpl.setWriteCallback(handleHistoryControlWrite, true);
-
-  if (!setupBleCharacteristic(
-    historyStatusCharacteristicImpl,
-    CHR_PROPS_READ | CHR_PROPS_NOTIFY | CHR_PROPS_INDICATE,
-    SECMODE_OPEN,
-    SECMODE_NO_ACCESS,
-    244
-  )) {
-    Serial.println("BLE characteristic registration failed: history status");
-  }
-  historyStatusCharacteristicImpl.setCccdWriteCallback(handleHistoryStatusCccd);
-  historyStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
-
   provisioningControlCharacteristic = &provisioningControlCharacteristicImpl;
   provisioningStatusCharacteristic = &provisioningStatusCharacteristicImpl;
   runtimeTelemetryCharacteristic = &runtimeTelemetryCharacteristicImpl;
   runtimeControlCharacteristic = &runtimeControlCharacteristicImpl;
   runtimeStatusCharacteristic = &runtimeStatusCharacteristicImpl;
   runtimeOtaDataCharacteristic = &runtimeOtaDataCharacteristicImpl;
-  historyControlCharacteristic = &historyControlCharacteristicImpl;
-  historyStatusCharacteristic = &historyStatusCharacteristicImpl;
 
   blePeripheralReady = true;
   configureRuntimeAdvertisingPayload();

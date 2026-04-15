@@ -10,7 +10,6 @@ const PERSIST_MESSAGE_TYPES = new Set([
   "persist-motion",
   "persist-heartbeat",
   "persist-device-log",
-  "persist-device-backfill",
 ]);
 const ACK_TIMEOUT_MS = 4_000;
 const MAX_BACKOFF_MS = 30_000;

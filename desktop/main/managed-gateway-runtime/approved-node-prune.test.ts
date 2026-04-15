@@ -116,7 +116,7 @@ function createSnapshot(): DesktopSnapshot {
 }
 
 describe("approved-node-prune", () => {
-  it("purges forgotten devices and their history from the snapshot", () => {
+  it("purges forgotten devices and their live runtime data from the snapshot", () => {
     const snapshot = createSnapshot();
 
     const nextSnapshot = pruneForgottenDevicesFromSnapshot(snapshot, []);

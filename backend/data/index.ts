@@ -1,6 +1,5 @@
 export {
   formatZodError,
-  parseBackfillBatch,
   parseDeviceAssignment,
   parseDeviceLog,
   parseDeviceRegistration,
@@ -15,8 +14,6 @@ export {
   findLatestDeviceMotionEventBefore,
   findLatestDeviceMotionEventBeforeReceivedAt,
   getDevice,
-  getDeviceSyncState,
-  getFirmwareHistorySyncState,
   hasMotionRollupTables,
   listDeviceActivity,
   listDeviceLogs,
@@ -28,7 +25,6 @@ export {
   listDevices,
   listRecentEvents,
   purgeDeviceData,
-  recordBackfillBatch,
   recordDeviceLog,
   recordFirmwareReport,
   recordHeartbeat,

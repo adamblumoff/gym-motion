@@ -13,9 +13,9 @@ type RuntimeLifecycleDeps = {
   apiServerStart: () => Promise<void>;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
-  refreshHistory: () => Promise<void>;
+  refreshSnapshotData: () => Promise<void>;
   setGatewayIssue: (issue: string | null) => void;
-  onHistoryRefreshError: (error: unknown) => void;
+  onSnapshotRefreshError: (error: unknown) => void;
   applyManualScanPayload: (payload: ManualScanPayload) => void;
   emitSnapshot: () => void;
   setWindowsScanRequested: (requested: boolean) => void;
@@ -79,10 +79,10 @@ export function createRuntimeLifecycle(
       await deps.apiServerStart();
       await deps.startChild();
       try {
-        await deps.refreshHistory();
+        await deps.refreshSnapshotData();
         deps.setGatewayIssue(null);
       } catch (error) {
-        deps.onHistoryRefreshError(error);
+        deps.onSnapshotRefreshError(error);
       }
       deps.emitSnapshot();
       deps.setWindowsScanRequested(false);

@@ -26,36 +26,10 @@ type DataEventHandlerDeps = {
     removedActivityIds: Array<number | string>;
   };
   emit: (event: DesktopRuntimeEvent) => void;
-  refreshHistory: () => Promise<void>;
-  refreshDeviceHistory: (deviceId: string) => Promise<void>;
-  refreshSyncStateOnly: (deviceId: string) => Promise<void>;
-  markAnalyticsSyncInProgress: (deviceId: string) => void;
-  markAnalyticsSyncComplete: (deviceId: string) => void;
-  markAnalyticsSyncFailure: (deviceId: string, detail: string) => void;
   refreshAnalyticsNow: (deviceId: string) => void;
   scheduleAnalyticsRefresh: (deviceId: string) => void;
   recordLiveMotion: (event: MotionStreamPayload["event"]) => void;
-  reportHistoryRefreshFailure: (detail: string) => void;
-  clearHistoryRefreshFailure: () => void;
 };
-
-async function refreshWithRetry(work: () => Promise<void>) {
-  try {
-    await work();
-    return;
-  } catch (firstError) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    try {
-      await work();
-    } catch {
-      throw firstError;
-    }
-  }
-}
-
-function logBackfillEvent(message: string, details: Record<string, unknown>) {
-  console.info(`[runtime] ${message}`, details);
-}
 
 export function createDataEventHandler(deps: DataEventHandlerDeps) {
   return function applyDataEvent(event: DesktopDataEvent) {
@@ -188,47 +162,6 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
             },
           });
         }
-        break;
-      case "backfill-recorded":
-        logBackfillEvent("backfill recorded; updating history state", {
-          deviceId: event.deviceId,
-          syncComplete: event.syncComplete ?? false,
-        });
-        if (event.syncComplete) {
-          deps.markAnalyticsSyncComplete(event.deviceId);
-        } else {
-          deps.markAnalyticsSyncInProgress(event.deviceId);
-        }
-        void refreshWithRetry(() =>
-          event.syncComplete
-            ? deps.refreshDeviceHistory(event.deviceId)
-            : deps.refreshSyncStateOnly(event.deviceId),
-        )
-          .then(() => {
-            deps.clearHistoryRefreshFailure();
-            if (event.syncComplete) {
-              deps.scheduleAnalyticsRefresh(event.deviceId);
-            }
-            logBackfillEvent("backfill history state refresh completed", {
-              deviceId: event.deviceId,
-              syncComplete: event.syncComplete ?? false,
-            });
-            deps.emit({ type: "snapshot", snapshot: deps.getSnapshot() });
-          })
-          .catch((error) => {
-            const detail =
-              error instanceof Error
-                ? error.message
-                : "History refresh failed after backfill.";
-            logBackfillEvent("backfill device history refresh failed", {
-              deviceId: event.deviceId,
-              detail,
-            });
-            deps.markAnalyticsSyncFailure(event.deviceId, detail);
-            deps.reportHistoryRefreshFailure(
-              detail,
-            );
-          });
         break;
     }
   };

@@ -21,12 +21,6 @@ export type DesktopDataEvent =
   | {
       type: "device-updated";
       payload: unknown;
-    }
-  | {
-      type: "backfill-recorded";
-      payload: unknown;
-      deviceId: string;
-      syncComplete?: boolean;
     };
 
 type ServerHandle = {

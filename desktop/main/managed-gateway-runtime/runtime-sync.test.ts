@@ -4,7 +4,7 @@ import { createEmptySnapshot } from "./snapshot";
 import { createRuntimeSync } from "./runtime-sync";
 
 describe("createRuntimeSync", () => {
-  it("loads global recent activity without per-device activity fanout", async () => {
+  it("loads recent global activity without per-device fanout", async () => {
     let snapshot = createEmptySnapshot();
     const listDeviceActivity = vi.fn();
     const listRecentActivity = vi.fn(async () => [
@@ -40,14 +40,14 @@ describe("createRuntimeSync", () => {
       listRecentActivity,
     });
 
-    await runtimeSync.refreshHistory();
+    await runtimeSync.refreshSnapshotData();
 
     expect(listRecentActivity).toHaveBeenCalledOnce();
     expect(listDeviceActivity).not.toHaveBeenCalled();
     expect(snapshot.activities).toHaveLength(1);
   });
 
-  it("refreshes only the affected device history after backfill", async () => {
+  it("refreshes only the affected device runtime data", async () => {
     let snapshot = {
       ...createEmptySnapshot(),
       devices: [
@@ -268,7 +268,7 @@ describe("createRuntimeSync", () => {
               {
                 id: 12,
                 deviceId: "stack-001",
-                sequence: 12,
+                sequence: null,
                 state: "moving",
                 delta: 5,
                 eventTimestamp: 100,
@@ -285,10 +285,10 @@ describe("createRuntimeSync", () => {
               {
                 id: 13,
                 deviceId: "stack-001",
-                sequence: 13,
-                level: "warn",
-                code: "sync.backfill",
-                message: "Backfill applied",
+                sequence: null,
+                level: "info",
+                code: "runtime.connected",
+                message: "Leg Press connected",
                 bootId: "boot-1",
                 firmwareVersion: "1.1.0",
                 hardwareId: "hw-1",
@@ -304,13 +304,13 @@ describe("createRuntimeSync", () => {
               {
                 id: "log-13",
                 deviceId: "stack-001",
-                sequence: 13,
+                sequence: null,
                 kind: "lifecycle",
-                title: "sync.backfill",
-                message: "Backfill applied",
+                title: "runtime.connected",
+                message: "Leg Press connected",
                 state: null,
-                level: "warn",
-                code: "sync.backfill",
+                level: "info",
+                code: "runtime.connected",
                 delta: null,
                 eventTimestamp: 101,
                 receivedAt: "2026-03-18T12:10:02.000Z",
@@ -323,11 +323,11 @@ describe("createRuntimeSync", () => {
           : [],
     });
 
-    await runtimeSync.refreshDeviceHistory("stack-001");
+    await runtimeSync.refreshDeviceData("stack-001");
 
     expect(snapshot.events.map((event) => event.id)).toEqual([12, 20]);
     expect(snapshot.logs.map((log) => log.id)).toEqual([13, 30]);
-    expect(snapshot.activities.map((activity) => activity.id)).toEqual(["log-30", "log-13"]);
+    expect(snapshot.activities.map((activity) => activity.id)).toEqual(["log-13", "log-30"]);
     expect(snapshot.devices[0]?.id).toBe("stack-001");
     expect(snapshot.devices.find((device) => device.id === "stack-001")?.firmwareVersion).toBe("1.1.0");
     expect(snapshot.devices.find((device) => device.id === "stack-002")?.firmwareVersion).toBe("1.0.0");

@@ -1,17 +1,14 @@
 import {
-  type BackfillBatchInput,
   type DeviceLogInput,
   formatZodError,
   type HeartbeatPayload,
   type IngestPayload,
-  parseBackfillBatch,
   parseDeviceLog,
   parseHeartbeatPayload,
   parseIngestPayload,
 } from "@core/contracts";
 
 import {
-  recordBackfillBatch,
   recordDeviceLog,
   recordHeartbeat,
   recordMotionEvent,
@@ -24,7 +21,6 @@ type DataIngestDeps = {
   recordMotion?: typeof recordMotionEvent;
   recordHeartbeat?: typeof recordHeartbeat;
   recordLog?: typeof recordDeviceLog;
-  recordBackfill?: typeof recordBackfillBatch;
 };
 
 type QueueKey = string;
@@ -55,12 +51,6 @@ export type ValidatedGatewayChildPersistMessage =
       type: "persist-device-log";
       deviceId: string;
       payload: DeviceLogInput;
-    }
-  | {
-      messageId: string;
-      type: "persist-device-backfill";
-      deviceId: string;
-      payload: BackfillBatchInput;
     };
 
 export function validateGatewayChildPersistMessage(
@@ -121,26 +111,6 @@ export function validateGatewayChildPersistMessage(
         payload: parsed.data,
       };
     }
-    case "persist-device-backfill": {
-      const parsed = parseBackfillBatch(message.payload);
-
-      if (!parsed.success) {
-        throw new Error(`persist-device-backfill: ${formatZodError(parsed.error)}`);
-      }
-
-      if (parsed.data.deviceId !== message.deviceId) {
-        throw new Error(
-          "persist-device-backfill: message deviceId did not match payload deviceId.",
-        );
-      }
-
-      return {
-        messageId: message.messageId,
-        type: message.type,
-        deviceId: message.deviceId,
-        payload: parsed.data,
-      };
-    }
   }
 }
 
@@ -149,7 +119,6 @@ export function createDataIngestController(deps: DataIngestDeps) {
   const persistMotion = deps.recordMotion ?? recordMotionEvent;
   const persistHeartbeat = deps.recordHeartbeat ?? recordHeartbeat;
   const persistLog = deps.recordLog ?? recordDeviceLog;
-  const persistBackfill = deps.recordBackfill ?? recordBackfillBatch;
 
   function enqueue(queueKey: QueueKey, work: () => Promise<void>) {
     const current = chains.get(queueKey) ?? Promise.resolve();
@@ -191,30 +160,6 @@ export function createDataIngestController(deps: DataIngestDeps) {
         });
         return;
       }
-      case "persist-device-backfill": {
-        logIngest("persisting backfill batch", {
-          messageId: message.messageId,
-          deviceId: message.deviceId,
-          ackSequence: message.payload.ackSequence,
-          recordCount: message.payload.records.length,
-        });
-        const payload = await persistBackfill(message.payload);
-        logIngest("persisted backfill batch", {
-          messageId: message.messageId,
-          deviceId: message.deviceId,
-          ackSequence: message.payload.ackSequence,
-          insertedEventCount: payload.insertedEvents.length,
-          insertedLogCount: payload.insertedLogs.length,
-          provenAckSequence:
-            payload.historySyncState?.lastAckedHistorySequence ?? payload.syncState.lastAckedSequence,
-        });
-        deps.applyDataEvent({
-          type: "backfill-recorded",
-          payload,
-          deviceId: message.payload.deviceId,
-          syncComplete: message.payload.syncComplete ?? false,
-        });
-      }
     }
   }
 
@@ -224,16 +169,12 @@ export function createDataIngestController(deps: DataIngestDeps) {
       const queueKey = queueKeyForMessage(validated);
       const queueBusy = chains.has(queueKey);
 
-      if (validated.type === "persist-device-backfill" || queueBusy) {
+      if (queueBusy) {
         logIngest("queued ingest message", {
           messageId: validated.messageId,
           type: validated.type,
           deviceId: validated.deviceId,
           queueBusy,
-          ackSequence:
-            validated.type === "persist-device-backfill"
-              ? validated.payload.ackSequence
-              : undefined,
         });
       }
 

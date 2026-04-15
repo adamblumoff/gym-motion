@@ -301,10 +301,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         parsedMessage.type === "gateway-state" ||
         parsedMessage.type === "adapters-updated" ||
         parsedMessage.type === "manual-scan-updated" ||
-        parsedMessage.type === "runtime-device-updated" ||
-        parsedMessage.type === "history_record" ||
-        parsedMessage.type === "history_sync_complete" ||
-        parsedMessage.type === "history_error"
+        parsedMessage.type === "runtime-device-updated"
       ) {
         deps.onChildRuntimeMessage(parsedMessage);
         return;

@@ -107,39 +107,3 @@ export const deviceLogSchema = z.object({
     .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
     .optional(),
 });
-
-export const backfillRecordSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("motion"),
-    sequence: z.number().int().nonnegative(),
-    state: motionStateSchema,
-    delta: z.number().int().nullable().optional(),
-    timestamp: z.number().int().positive(),
-    bootId: z.string().trim().min(1).max(120).optional(),
-    firmwareVersion: z.string().trim().min(1).max(120).optional(),
-    hardwareId: z.string().trim().min(1).max(120).optional(),
-  }),
-  z.object({
-    kind: z.literal("node-log"),
-    sequence: z.number().int().nonnegative(),
-    level: deviceLogLevelSchema,
-    code: z.string().trim().min(1).max(120),
-    message: z.string().trim().min(1).max(280),
-    timestamp: z.number().int().nonnegative().optional(),
-    bootId: z.string().trim().min(1).max(120).optional(),
-    firmwareVersion: z.string().trim().min(1).max(120).optional(),
-    hardwareId: z.string().trim().min(1).max(120).optional(),
-    metadata: z
-      .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
-      .optional(),
-  }),
-]);
-
-export const backfillBatchSchema = z.object({
-  deviceId: z.string().trim().min(1).max(120),
-  bootId: z.string().trim().min(1).max(120).optional(),
-  records: z.array(backfillRecordSchema).max(500),
-  ackSequence: z.number().int().nonnegative(),
-  overflowDetectedAt: z.string().datetime().optional(),
-  syncComplete: z.boolean().optional(),
-});

@@ -22,13 +22,6 @@ export type AnalyticsOverview = {
   busiestPeriodDurationLabel: string | null;
 };
 
-export type AnalyticsSyncDisplay = {
-  label: string;
-  detail: string | null;
-  tone: "neutral" | "warning" | "muted";
-  showAnimation: boolean;
-};
-
 const ANALYTICS_WINDOW_SECONDS: Record<AnalyticsWindow, number> = {
   "24h": 24 * 60 * 60,
   "7d": 7 * 24 * 60 * 60,
@@ -166,38 +159,3 @@ export function buildAnalyticsOverview(
   };
 }
 
-export function buildAnalyticsSyncDisplay(
-  analytics: DeviceAnalyticsSnapshot | null,
-): AnalyticsSyncDisplay | null {
-  if (!analytics) {
-    return null;
-  }
-
-  switch (analytics.sync.state) {
-    case "syncing":
-      return {
-        label: "Syncing history",
-        detail:
-          "Live updates stay current while analytics catches up in the background.",
-        tone: "muted",
-        showAnimation: true,
-      };
-    case "failed":
-      return {
-        label: "History sync failed",
-        detail:
-          analytics.sync.detail ??
-          "Waiting for the next successful history refresh.",
-        tone: "warning",
-        showAnimation: false,
-      };
-    case "idle":
-    default:
-      return {
-        label: "History up to date",
-        detail: null,
-        tone: "neutral",
-        showAnimation: false,
-      };
-  }
-}

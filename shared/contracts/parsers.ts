@@ -1,7 +1,6 @@
 import type { z } from "zod";
 
 import {
-  backfillBatchSchema,
   deviceAssignmentSchema,
   deviceLogSchema,
   deviceRegistrationSchema,
@@ -37,10 +36,6 @@ export function parseFirmwareReport(input: unknown) {
 
 export function parseDeviceLog(input: unknown) {
   return deviceLogSchema.safeParse(input);
-}
-
-export function parseBackfillBatch(input: unknown) {
-  return backfillBatchSchema.safeParse(input);
 }
 
 export function formatZodError(message: z.ZodError) {

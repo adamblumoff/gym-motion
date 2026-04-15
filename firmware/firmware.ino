@@ -26,10 +26,6 @@ const char* PREFS_BACKUP_FILE_PATH = "/prefs.bak";
 const char* PREF_DEVICE_ID = "device_id";
 const char* PREF_SITE_ID = "site_id";
 const char* PREF_MACHINE_LABEL = "machine_label";
-const char* PREF_NEXT_SEQUENCE = "next_seq";
-const char* PREF_ACKED_SEQUENCE = "acked_seq";
-const char* PREF_HISTORY_OVERFLOW = "hist_ovf";
-const char* PREF_HISTORY_DROPPED = "hist_drop";
 
 const char* PROVISIONING_SERVICE_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c201";
 const char* PROVISIONING_CONTROL_UUID = "8f7f5b70-7a1d-4c4a-a641-f7a6bcb7c202";
@@ -40,9 +36,6 @@ const char* RUNTIME_TELEMETRY_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7002";
 const char* RUNTIME_CONTROL_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7003";
 const char* RUNTIME_STATUS_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7004";
 const char* RUNTIME_OTA_DATA_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7005";
-const char* HISTORY_SERVICE_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7101";
-const char* HISTORY_CONTROL_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7102";
-const char* HISTORY_STATUS_UUID = "4b2f41d1-6f1b-4d3a-92e5-7db4891f7103";
 
 const uint8_t STHS34PF80_ADDR = 0x5A;
 const uint8_t STHS34PF80_REG_WHO_AM_I = 0x0F;
@@ -84,22 +77,13 @@ const unsigned long APP_SESSION_LEASE_DEFAULT_MS = 15000;
 const unsigned long CONNECTED_RUNTIME_DEBUG_INTERVAL_MS = 5000;
 const unsigned long DISCONNECTED_ADVERTISING_LOG_INTERVAL_MS = 10000;
 const uint8_t RUNTIME_NOTIFY_MASK_STATUS = 0x01;
-const uint8_t RUNTIME_NOTIFY_MASK_HISTORY = 0x02;
-const uint8_t RUNTIME_NOTIFY_MASK_TELEMETRY = 0x04;
+const uint8_t RUNTIME_NOTIFY_MASK_TELEMETRY = 0x02;
 const unsigned long SENSOR_DEBUG_INTERVAL_MS = 500;
-const unsigned long SENSOR_HISTORY_DEBUG_INTERVAL_MS = 2000;
 const bool DIAGNOSTIC_BYPASS_FILESYSTEM_STARTUP = false;
 const unsigned long PERSISTED_STATE_SAVE_DEBOUNCE_MS = 50;
-const size_t HISTORY_MAX_BYTES = 48 * 1024;
-const size_t HISTORY_RECLAIM_BYTES = 8 * 1024;
-const size_t HISTORY_SYNC_PAGE_SIZE = 80;
 const size_t STATUS_CHUNK_SIZE = 20;
 const size_t BLE_TX_QUEUE_CAPACITY = 96;
-const size_t BLE_TX_BURST_HISTORY_LIMIT = 1;
 const unsigned long BLE_TX_MIN_INTERVAL_MS = 30;
-const size_t HISTORY_WORKER_RECORDS_PER_SLICE = 4;
-const char* HISTORY_LOG_PATH = "/history.log";
-const char* HISTORY_TEMP_PATH = "/history.tmp";
 
 bool haveLastReading = false;
 unsigned long lastMotionTime = 0;
@@ -126,14 +110,10 @@ BLECharacteristic* runtimeTelemetryCharacteristic = nullptr;
 BLECharacteristic* runtimeControlCharacteristic = nullptr;
 BLECharacteristic* runtimeStatusCharacteristic = nullptr;
 BLECharacteristic* runtimeOtaDataCharacteristic = nullptr;
-BLECharacteristic* historyControlCharacteristic = nullptr;
-BLECharacteristic* historyStatusCharacteristic = nullptr;
 String provisioningCommandBuffer;
 String runtimeCommandBuffer;
-String historyCommandBuffer;
 bool provisioningCommandFramed = false;
 bool runtimeCommandFramed = false;
-bool historyCommandFramed = false;
 
 String hardwareId;
 String bootId;
@@ -153,7 +133,6 @@ bool runtimeBleConnIdKnown = false;
 uint8_t runtimeNotifyMask = 0;
 bool pendingMotionUpdate = false;
 bool pendingOtaDfuRestart = false;
-bool pendingHistorySyncRequest = false;
 unsigned long pendingRebootAt = 0;
 unsigned long runtimeConnectionEpoch = 0;
 unsigned long runtimeDisconnectCount = 0;
@@ -162,26 +141,12 @@ unsigned long lastAppSessionLeaseAt = 0;
 unsigned long lastDisconnectedAdvertisingLogAt = 0;
 unsigned long lastConnectedRuntimeDebugAt = 0;
 unsigned long lastMotionSensorDebugAt = 0;
-unsigned long lastMotionSensorHistoryLogAt = 0;
 unsigned long lastRuntimeControlAt = 0;
 unsigned long runtimeControlWriteCount = 0;
-unsigned long historyControlWriteCount = 0;
 unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
-unsigned long nextHistorySequence = 1;
-unsigned long ackedHistorySequence = 0;
-unsigned long lastJournaledSequence = 0;
-unsigned long historyDroppedCount = 0;
-bool historyOverflowed = false;
 uint16_t runtimeBleConnId = 0;
 String runtimeAppSessionId;
 String runtimeAppSessionNonce;
-firmware_runtime::HistoryControlCommand pendingHistorySyncCommand;
-bool pendingHistoryControlDebugPublish = false;
-String pendingHistoryControlDebugStage;
-String pendingHistoryControlDebugRequestId;
-unsigned long pendingHistoryControlDebugAfterSequence = 0;
-String publishedHistoryControlDebugPayload;
-bool runtimeHistoryChunkDirectNotified = false;
 struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
   bool* connectedFlag = nullptr;
@@ -195,33 +160,8 @@ struct BleTxQueue {
   size_t length = 0;
 };
 
-enum class HistoryWorkerPhase {
-  Idle,
-  Streaming,
-};
-
-struct HistoryWorkerState {
-  HistoryWorkerPhase phase = HistoryWorkerPhase::Idle;
-  String sessionId;
-  String requestId;
-  unsigned long requestedAfterSequence = 0;
-  size_t maxRecords = 0;
-  unsigned long highWaterSequence = 0;
-  unsigned long latestSequence = 0;
-  size_t sentCount = 0;
-  bool overflowed = false;
-  unsigned long droppedCount = 0;
-  bool pumpStartedLogged = false;
-  bool firstRecordLogged = false;
-};
-
 BleTxQueue runtimeTxQueue;
-BleTxQueue historyTxQueue;
-HistoryWorkerState historyWorkerState;
-File historyWorkerFile(SPIFFS);
 unsigned long lastBleTxAt = 0;
-String lastCompletedHistoryRequestId;
-String lastAutoHistoryDecisionMessage;
 
 struct OtaTransferState {
   bool active = false;
@@ -246,20 +186,6 @@ void enqueueBoardLogStatus(
   const String& message,
   const String& level = "info"
 );
-void sendHistoryDebugStatus(
-  const String& stage,
-  const String& requestId,
-  unsigned long afterSequence = 0,
-  size_t sentCount = 0,
-  const String& code = "",
-  const String& message = ""
-);
-void notePendingHistoryControlDebug(
-  const String& stage,
-  const String& requestId,
-  unsigned long afterSequence = 0
-);
-void publishPendingHistoryControlDebug();
 void sendTelemetry(
   int delta,
   unsigned long timestamp,
@@ -269,27 +195,7 @@ void sendTelemetry(
 bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
 bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
 bool enqueueRuntimeStatusPayload(const String& payload);
-bool enqueueHistoryNotification(BLECharacteristic* characteristic, const String& payload);
-bool enqueueHistoryNotificationChunked(BLECharacteristic* characteristic, const String& payload);
-bool enqueueHistoryStatusPayload(const String& payload);
 void processBleNotificationQueues();
-void maybeStartAutomaticHistorySync();
-void processPendingHistorySyncRequest();
-void pumpHistoryWorker();
-void cancelHistoryWorker();
-void scheduleHistorySyncRequest(const firmware_runtime::HistoryControlCommand& command);
-void beginHistorySyncRequest(
-  const firmware_runtime::HistoryControlCommand& command
-);
-void acknowledgeHistorySyncRequest(
-  const firmware_runtime::HistoryControlCommand& command
-);
-bool sendHistoryError(
-  const String& sessionId,
-  const String& requestId,
-  const String& code,
-  const String& message
-);
 
 String escapeJsonString(const String& value) {
   String escaped;
@@ -473,10 +379,6 @@ void setup() {
     configuredDeviceId = "";
     configuredSiteId = "";
     configuredMachineLabel = "";
-    nextHistorySequence = 1;
-    ackedHistorySequence = 0;
-    historyOverflowed = false;
-    historyDroppedCount = 0;
   } else {
     Serial.println("[boot] filesystem");
     ensureFilesystemReady();

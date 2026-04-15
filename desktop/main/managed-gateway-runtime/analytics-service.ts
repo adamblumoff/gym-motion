@@ -1,6 +1,5 @@
 import {
   findLatestDeviceMotionEventBeforeReceivedAt,
-  getDeviceSyncState,
   hasMotionRollupTables,
   listMotionRollupBuckets,
   listDeviceMotionEventsByReceivedAt,
@@ -10,21 +9,16 @@ import type {
   AnalyticsWindow,
   DeviceAnalyticsBucket,
   DeviceAnalyticsSnapshot,
-  DeviceAnalyticsSyncState,
   GatewayRuntimeDeviceSummary,
   GetDeviceAnalyticsInput,
   MotionEventSummary,
 } from "@core/contracts";
 import { getMotionEventTimelineTimestamp } from "@core/contracts";
 
-const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v1";
+const ANALYTICS_CACHE_KEY = "gym-motion.desktop.analytics-cache.v2";
 
 type CachedAnalyticsMap = Record<string, DeviceAnalyticsSnapshot>;
 type LiveMotionEventMap = Map<string, MotionEventSummary[]>;
-type RuntimeSyncOverride = {
-  state: DeviceAnalyticsSyncState["state"];
-  detail: string | null;
-};
 
 type AnalyticsServiceDeps = {
   store: PreferencesStore;
@@ -34,7 +28,6 @@ type AnalyticsServiceDeps = {
   listMotionRollupBuckets?: typeof listMotionRollupBuckets;
   listDeviceMotionEventsByReceivedAt?: typeof listDeviceMotionEventsByReceivedAt;
   findLatestDeviceMotionEventBeforeReceivedAt?: typeof findLatestDeviceMotionEventBeforeReceivedAt;
-  getDeviceSyncState?: typeof getDeviceSyncState;
 };
 
 type WindowDefinition = {
@@ -101,12 +94,11 @@ function isDeviceAnalyticsSnapshot(value: unknown): value is DeviceAnalyticsSnap
     typeof snapshot.deviceId === "string" &&
     isAnalyticsWindow(snapshot.window) &&
     typeof snapshot.generatedAt === "string" &&
+    (snapshot.source === "cache" || snapshot.source === "canonical") &&
     Array.isArray(snapshot.buckets) &&
     snapshot.buckets.every(isDeviceAnalyticsBucket) &&
     typeof snapshot.totalMovementCount === "number" &&
-    typeof snapshot.totalMovingSeconds === "number" &&
-    !!snapshot.sync &&
-    typeof snapshot.sync === "object"
+    typeof snapshot.totalMovingSeconds === "number"
   );
 }
 
@@ -287,132 +279,19 @@ export function summarizeMotionEventsInBuckets(args: {
   };
 }
 
-function baseWarningFlags(
-  warningFlags: DeviceAnalyticsSnapshot["warningFlags"],
-) {
-  return warningFlags.filter(
-    (warningFlag) =>
-      warningFlag !== "sync-delayed" &&
-      warningFlag !== "sync-failed" &&
-      warningFlag !== "stale-cache",
-  );
-}
-
-function buildCachedSnapshotFromSync(
-  cached: DeviceAnalyticsSnapshot,
-  sync: DeviceAnalyticsSyncState,
-  options?: { markStaleWhileSyncing?: boolean },
-) {
-  const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>(
-    baseWarningFlags(cached.warningFlags),
-  );
-
-  if (sync.state === "syncing") {
-    warningFlags.add("sync-delayed");
-    if (options?.markStaleWhileSyncing) {
-      warningFlags.add("stale-cache");
-    }
-  }
-  if (sync.state === "failed") {
-    warningFlags.add("sync-failed");
-    warningFlags.add("stale-cache");
-  }
-  if (sync.lastOverflowDetectedAt) {
-    warningFlags.add("history-overflow");
-  }
-
-  return {
-    ...cached,
-    source: sync.state === "idle" ? "canonical" : "cache",
-    sync,
-    warningFlags: [...warningFlags],
-  } satisfies DeviceAnalyticsSnapshot;
-}
-
-function hydrateSyncState(
-  deviceId: string,
-  runtimeDevice: GatewayRuntimeDeviceSummary | null,
-  lastCanonicalAt: string | null,
-  syncSummary: Awaited<ReturnType<typeof getDeviceSyncState>>,
-  failureDetail: string | null,
-  runtimeSyncOverride: RuntimeSyncOverride | null,
-): DeviceAnalyticsSyncState {
-  const lastConnectedAt =
-    runtimeDevice?.gatewayLastConnectedAt ??
-    runtimeDevice?.gatewayLastTelemetryAt ??
-    runtimeDevice?.updatedAt ??
-    null;
-  const lastSyncCompletedAt = syncSummary.lastSyncCompletedAt;
-  const shouldSync =
-    runtimeDevice?.gatewayConnectionState === "connected" &&
-    !!lastConnectedAt &&
-    !!lastSyncCompletedAt &&
-    Date.parse(lastSyncCompletedAt) < Date.parse(lastConnectedAt);
-  const inferredState: DeviceAnalyticsSyncState["state"] = failureDetail
-    ? "failed"
-    : shouldSync
-      ? "syncing"
-      : "idle";
-  const resolvedState = runtimeSyncOverride?.state ?? inferredState;
-  const resolvedDetail =
-    runtimeSyncOverride?.detail ??
-    (resolvedState === "failed" ? failureDetail : null);
-
-  return {
-    deviceId,
-    state: resolvedState,
-    detail: resolvedDetail,
-    lastCanonicalAt,
-    lastSyncCompletedAt,
-    lastAckedSequence: syncSummary.lastAckedSequence,
-    lastAckedBootId: syncSummary.lastAckedBootId,
-    lastOverflowDetectedAt: syncSummary.lastOverflowDetectedAt,
-  };
-}
-
-function buildFailedCachedSyncState(
-  cached: DeviceAnalyticsSnapshot,
-  detail: string,
-): DeviceAnalyticsSyncState {
-  return {
-    ...cached.sync,
-    state: "failed",
-    detail,
-    lastCanonicalAt: cached.generatedAt,
-  };
-}
-
 async function buildAnalyticsSnapshot(args: {
   deviceId: string;
   window: AnalyticsWindow;
-  runtimeDevice: GatewayRuntimeDeviceSummary | null;
-  failureDetail: string | null;
-  runtimeSyncOverride: RuntimeSyncOverride | null;
   hasMotionRollupTables: typeof hasMotionRollupTables;
   listMotionRollupBuckets: typeof listMotionRollupBuckets;
   listDeviceMotionEventsByReceivedAt: typeof listDeviceMotionEventsByReceivedAt;
   findLatestDeviceMotionEventBeforeReceivedAt: typeof findLatestDeviceMotionEventBeforeReceivedAt;
-  getDeviceSyncState: typeof getDeviceSyncState;
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
   const { start, end, buckets } = createBuckets(definition, Date.now());
   const windowStartAt = new Date(start).toISOString();
   const windowEndAt = new Date(end).toISOString();
-  const syncSummary = await args.getDeviceSyncState(
-    args.deviceId,
-    args.runtimeDevice?.bootId ?? null,
-  );
-  const provisionalSync = hydrateSyncState(
-    args.deviceId,
-    args.runtimeDevice,
-    null,
-    syncSummary,
-    args.failureDetail,
-    args.runtimeSyncOverride,
-  );
-  let summary:
-    | ReturnType<typeof summarizeMotionEventsInBuckets>
-    | ReturnType<typeof summarizeMotionRollupBuckets>;
+
   const loadRawMotionSummary = async () => {
     const [events, precedingEvent] = await Promise.all([
       args.listDeviceMotionEventsByReceivedAt({
@@ -440,7 +319,11 @@ async function buildAnalyticsSnapshot(args: {
     });
   };
 
-  if ((await args.hasMotionRollupTables()) && provisionalSync.state === "idle") {
+  let summary:
+    | ReturnType<typeof summarizeMotionEventsInBuckets>
+    | ReturnType<typeof summarizeMotionRollupBuckets>;
+
+  if (await args.hasMotionRollupTables()) {
     const rollupBuckets = await args.listMotionRollupBuckets({
       deviceId: args.deviceId,
       window: args.window,
@@ -448,64 +331,34 @@ async function buildAnalyticsSnapshot(args: {
       endBucketExclusive: end,
     });
     const rollupSummary = summarizeMotionRollupBuckets(buckets, rollupBuckets);
-    if (rollupSummary.totalMovementCount > 0 || rollupSummary.totalMovingSeconds > 0) {
-      summary = rollupSummary;
-    } else {
-      summary = await loadRawMotionSummary();
-    }
+    summary =
+      rollupSummary.totalMovementCount > 0 || rollupSummary.totalMovingSeconds > 0
+        ? rollupSummary
+        : await loadRawMotionSummary();
   } else {
     summary = await loadRawMotionSummary();
-  }
-
-  const totalMovementCount = summary.totalMovementCount;
-  const totalMovingSeconds = summary.totalMovingSeconds;
-
-  const generatedAt = new Date().toISOString();
-  const sync = {
-    ...provisionalSync,
-    lastCanonicalAt: generatedAt,
-  };
-  const warningFlags = new Set<DeviceAnalyticsSnapshot["warningFlags"][number]>();
-
-  if (sync.lastOverflowDetectedAt) {
-    warningFlags.add("history-overflow");
-  }
-  if (sync.state === "syncing") {
-    warningFlags.add("sync-delayed");
-  }
-  if (sync.state === "failed") {
-    warningFlags.add("sync-failed");
   }
 
   return {
     deviceId: args.deviceId,
     window: args.window,
-    generatedAt,
+    generatedAt: new Date().toISOString(),
     source: "canonical",
     buckets: summary.buckets,
-    totalMovementCount,
-    totalMovingSeconds,
-    warningFlags: [...warningFlags],
-    sync,
+    totalMovementCount: summary.totalMovementCount,
+    totalMovingSeconds: summary.totalMovingSeconds,
   };
 }
 
 export type AnalyticsService = {
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
   scheduleRefresh: (deviceId: string, delayMs?: number) => void;
-  refreshSyncStateOnly: (deviceId: string) => Promise<void>;
-  markSyncInProgress: (deviceId: string) => void;
-  markSyncComplete: (deviceId: string) => void;
-  markSyncFailure: (deviceId: string, detail: string) => void;
-  clearSyncFailure: (deviceId: string) => void;
   recordLiveMotion: (event: MotionEventSummary) => void;
 };
 
 export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsService {
   const refreshTimers = new Map<string, NodeJS.Timeout>();
-  const syncFailures = new Map<string, string>();
   const liveMotionEvents: LiveMotionEventMap = new Map();
-  const runtimeSyncOverrides = new Map<string, RuntimeSyncOverride>();
   const checkHasMotionRollups = deps.hasMotionRollupTables ?? hasMotionRollupTables;
   const loadMotionRollupBuckets = deps.listMotionRollupBuckets ?? listMotionRollupBuckets;
   const loadMotionEventsByReceivedAt =
@@ -513,7 +366,6 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
   const loadLatestMotionEventBeforeReceivedAt =
     deps.findLatestDeviceMotionEventBeforeReceivedAt ??
     findLatestDeviceMotionEventBeforeReceivedAt;
-  const loadDeviceSyncState = deps.getDeviceSyncState ?? getDeviceSyncState;
 
   function readCache(): CachedAnalyticsMap {
     const rawCache = deps.store.getJson<Record<string, unknown>>(ANALYTICS_CACHE_KEY) ?? {};
@@ -564,6 +416,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
         },
       };
     }
+
     const windowStart = Date.parse(snapshot.buckets[0]?.startAt ?? snapshot.generatedAt);
     const overlayStart = Math.max(windowStart, Date.parse(snapshot.generatedAt));
     const nowTimestamp = Date.now();
@@ -636,61 +489,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     }
   }
 
-  async function emitCachedSnapshots(deviceId: string) {
-    const cache = readCache();
-    const runtimeDevice = deps.getRuntimeDevice(deviceId);
-    const failureDetail = syncFailures.get(deviceId) ?? null;
-    let syncSummary: Awaited<ReturnType<typeof getDeviceSyncState>> | null = null;
-    let cachedSyncErrorDetail: string | null = null;
-
-    try {
-      syncSummary = await loadDeviceSyncState(deviceId);
-    } catch (error) {
-      cachedSyncErrorDetail =
-        failureDetail ??
-        (error instanceof Error ? error.message : "Analytics sync state refresh failed.");
-      console.error("[runtime] failed to refresh cached analytics sync state", error);
-    }
-
-    for (const window of Object.keys(WINDOW_DEFINITIONS) as AnalyticsWindow[]) {
-      const cached = cache[cacheKey(deviceId, window)];
-      if (!cached) {
-        continue;
-      }
-
-      if (syncSummary) {
-        const sync = hydrateSyncState(
-          deviceId,
-          runtimeDevice,
-          cached.generatedAt,
-          syncSummary,
-          failureDetail,
-          runtimeSyncOverrides.get(deviceId) ?? null,
-        );
-        deps.onUpdated(
-          mergeLiveOverlayIntoSnapshot(buildCachedSnapshotFromSync(cached, sync), deviceId),
-        );
-        continue;
-      }
-
-      deps.onUpdated(
-        mergeLiveOverlayIntoSnapshot(
-          buildCachedSnapshotFromSync(
-            cached,
-            buildFailedCachedSyncState(
-              cached,
-              cachedSyncErrorDetail ?? "Analytics sync state refresh failed.",
-            ),
-          ),
-          deviceId,
-        ),
-      );
-    }
-  }
-
   async function refreshDevice(deviceId: string) {
-    const runtimeDevice = deps.getRuntimeDevice(deviceId);
-    const failureDetail = syncFailures.get(deviceId) ?? null;
     const nextCache = {
       ...readCache(),
     };
@@ -699,15 +498,11 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
       const analytics = await buildAnalyticsSnapshot({
         deviceId,
         window,
-        runtimeDevice,
-        failureDetail,
-        runtimeSyncOverride: runtimeSyncOverrides.get(deviceId) ?? null,
         hasMotionRollupTables: checkHasMotionRollups,
         listMotionRollupBuckets: loadMotionRollupBuckets,
         listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
         findLatestDeviceMotionEventBeforeReceivedAt:
           loadLatestMotionEventBeforeReceivedAt,
-        getDeviceSyncState: loadDeviceSyncState,
       });
       nextCache[cacheKey(deviceId, window)] = analytics;
       deps.onUpdated(mergeLiveOverlayIntoSnapshot(analytics, deviceId));
@@ -725,9 +520,7 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
     const timer = setTimeout(() => {
       refreshTimers.delete(deviceId);
       void refreshDevice(deviceId).catch((error) => {
-        const detail = error instanceof Error ? error.message : "Analytics refresh failed.";
-        syncFailures.set(deviceId, detail);
-        void emitCachedSnapshots(deviceId);
+        console.error("[runtime] analytics refresh failed", error);
       });
     }, delayMs);
     timer.unref?.();
@@ -741,52 +534,23 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
       if (cached) {
         scheduleRefresh(input.deviceId);
-        try {
-          const syncSummary = await loadDeviceSyncState(
-            input.deviceId,
-            deps.getRuntimeDevice(input.deviceId)?.bootId ?? null,
-          );
-          const sync = hydrateSyncState(
-            input.deviceId,
-            deps.getRuntimeDevice(input.deviceId),
-            cached.generatedAt,
-            syncSummary,
-            syncFailures.get(input.deviceId) ?? null,
-            runtimeSyncOverrides.get(input.deviceId) ?? null,
-          );
-          return mergeLiveOverlayIntoSnapshot(
-            buildCachedSnapshotFromSync(cached, sync, {
-              markStaleWhileSyncing: true,
-            }),
-            input.deviceId,
-          );
-        } catch (error) {
-          const detail =
-            syncFailures.get(input.deviceId) ??
-            (error instanceof Error ? error.message : "Analytics sync state refresh failed.");
-          console.error("[runtime] failed to load cached analytics sync state", error);
-          return mergeLiveOverlayIntoSnapshot(
-            buildCachedSnapshotFromSync(
-              cached,
-              buildFailedCachedSyncState(cached, detail),
-            ),
-            input.deviceId,
-          );
-        }
+        return mergeLiveOverlayIntoSnapshot(
+          {
+            ...cached,
+            source: "cache",
+          },
+          input.deviceId,
+        );
       }
 
       const analytics = await buildAnalyticsSnapshot({
         deviceId: input.deviceId,
         window: input.window,
-        runtimeDevice: deps.getRuntimeDevice(input.deviceId),
-        failureDetail: syncFailures.get(input.deviceId) ?? null,
-        runtimeSyncOverride: runtimeSyncOverrides.get(input.deviceId) ?? null,
         hasMotionRollupTables: checkHasMotionRollups,
         listMotionRollupBuckets: loadMotionRollupBuckets,
         listDeviceMotionEventsByReceivedAt: loadMotionEventsByReceivedAt,
         findLatestDeviceMotionEventBeforeReceivedAt:
           loadLatestMotionEventBeforeReceivedAt,
-        getDeviceSyncState: loadDeviceSyncState,
       });
 
       writeCache({
@@ -799,58 +563,12 @@ export function createAnalyticsService(deps: AnalyticsServiceDeps): AnalyticsSer
 
     scheduleRefresh,
 
-    async refreshSyncStateOnly(deviceId: string) {
-      await emitCachedSnapshots(deviceId);
-    },
-
-    markSyncInProgress(deviceId) {
-      syncFailures.delete(deviceId);
-      runtimeSyncOverrides.set(deviceId, {
-        state: "syncing",
-        detail: null,
-      });
-      void emitCachedSnapshots(deviceId);
-    },
-
-    markSyncComplete(deviceId) {
-      syncFailures.delete(deviceId);
-      runtimeSyncOverrides.set(deviceId, {
-        state: "idle",
-        detail: null,
-      });
-      void emitCachedSnapshots(deviceId);
-    },
-
-    markSyncFailure(deviceId, detail) {
-      syncFailures.set(deviceId, detail);
-      runtimeSyncOverrides.set(deviceId, {
-        state: "failed",
-        detail,
-      });
-      void emitCachedSnapshots(deviceId);
-    },
-
-    clearSyncFailure(deviceId) {
-      const clearedFailure = syncFailures.delete(deviceId);
-      const override = runtimeSyncOverrides.get(deviceId);
-      if (override?.state === "failed") {
-        runtimeSyncOverrides.delete(deviceId);
-      }
-
-      if (!clearedFailure && override?.state !== "failed") {
-        return;
-      }
-
-      scheduleRefresh(deviceId);
-    },
-
     recordLiveMotion(event) {
-      const events = liveMotionEvents.get(event.deviceId) ?? [];
-      const nextEvents = [...events.filter((currentEvent) => currentEvent.id !== event.id), event]
-        .sort(
-          (left, right) =>
-            getMotionEventTimelineTimestamp(left) - getMotionEventTimelineTimestamp(right),
-        );
+      const current = liveMotionEvents.get(event.deviceId) ?? [];
+      const nextEvents = [...current, event].sort(
+        (left, right) =>
+          Date.parse(left.receivedAt) - Date.parse(right.receivedAt) || left.id - right.id,
+      );
       liveMotionEvents.set(event.deviceId, nextEvents);
       pruneLiveMotionEvents(event.deviceId, Date.now());
       emitMergedCachedSnapshots(event.deviceId);

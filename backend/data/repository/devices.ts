@@ -133,18 +133,6 @@ export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupRe
       [deviceId],
     );
 
-    await client.query(
-      `delete from device_sync_state
-       where device_id = $1`,
-      [deviceId],
-    );
-
-    await client.query(
-      `delete from firmware_history_sync_state
-       where device_id = $1`,
-      [deviceId],
-    );
-
     const deletedDevices = await client.query<{ count: string }>(
       `delete from devices
        where id = $1
