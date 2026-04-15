@@ -66,6 +66,7 @@ const uint8_t STHS34PF80_ODR_15_HZ = 0x07;
 
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 1000;
+const unsigned long SENSOR_SAMPLE_STALE_MS = 300;
 // Bench logs show the idle band sits roughly around 500-700 delta on this XIAO.
 // Use a higher start threshold so we only enter moving on clear spikes above idle,
 // while keeping a lower stop threshold for stable hysteresis back to still.
@@ -101,6 +102,9 @@ const char* HISTORY_TEMP_PATH = "/history.tmp";
 bool haveLastReading = false;
 unsigned long lastMotionTime = 0;
 bool motionSensorReady = false;
+const char* motionSensorIssue = "sensor_unavailable";
+unsigned long lastFreshSensorSampleAt = 0;
+int lastFreshSensorDelta = 0;
 bool blePeripheralReady = false;
 
 void ensureFilesystemReady();
@@ -482,14 +486,9 @@ void setup() {
     clearProvisioningConfig();
   }
 
-  Serial.println("[boot] wire");
   Wire.begin();
   Wire.setClock(400000);
-  Serial.println("[boot] motion");
-  setupMotionSensor();
-  Serial.println("[boot] ble");
   setupBle();
-  Serial.println("[boot] finalize");
   finalizePendingRollback(true);
   Serial.print("Hardware ID: ");
   Serial.println(hardwareId);

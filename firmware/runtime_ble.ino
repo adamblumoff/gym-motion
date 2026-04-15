@@ -861,6 +861,26 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
   pendingMotionUpdate = false;
 }
 
+void sendSensorIssueTelemetry(const char* sensorIssue, unsigned long timestamp) {
+  if (!runtimeBleConnected) {
+    return;
+  }
+
+  const String payload =
+    "{\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
+    "\",\"state\":\"" + String(currentDetectedState) +
+    "\",\"delta\":null" +
+    ",\"timestamp\":" + String(timestamp) +
+    ",\"sensorIssue\":\"" + escapeJsonString(sensorIssue) +
+    "\",\"snapshot\":true}";
+
+  writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
+  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, payload);
+  lastReportedState = currentDetectedState;
+  lastTelemetryAt = timestamp;
+  pendingMotionUpdate = false;
+}
+
 void handleProvisioningCommand(const String& payload) {
   const String type = extractJsonString(payload, "type");
 
@@ -997,7 +1017,14 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
 
   if (command.type == firmware_runtime::ControlCommandType::SyncNow) {
     disarmRuntimeBootstrapWatchdog();
-    sendTelemetry(lastReportedDelta, millis(), true, false);
+    if (motionSensorReady) {
+      sendTelemetry(lastReportedDelta, millis(), true, false);
+    } else {
+      sendSensorIssueTelemetry(
+        motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable",
+        millis()
+      );
+    }
     return;
   }
 
@@ -1457,7 +1484,14 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
   writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
-  sendTelemetry(lastReportedDelta, millis(), true, false);
+  if (motionSensorReady) {
+    sendTelemetry(lastReportedDelta, millis(), true, false);
+  } else {
+    sendSensorIssueTelemetry(
+      motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable",
+      millis()
+    );
+  }
 }
 
 void ensureRuntimeConnectionInitialized(uint16_t conn_handle, const char* source) {

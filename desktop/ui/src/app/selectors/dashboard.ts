@@ -25,8 +25,11 @@ export function buildBluetoothNodes(
       isConnected: device.gatewayConnectionState === "connected",
       connectionState: device.gatewayConnectionState,
       isMoving:
-        device.gatewayConnectionState === "connected" && device.lastState === "moving",
+        device.gatewayConnectionState === "connected" &&
+        device.lastState === "moving" &&
+        !device.sensorIssue,
       lastState: device.lastState,
+      sensorIssue: device.sensorIssue ?? null,
       lastDelta: device.lastDelta,
       lastTelemetryAt: device.gatewayLastTelemetryAt,
       signalStrength: rssiToPercent(device.lastRssi),

@@ -250,6 +250,7 @@ export function createRuntimeDeviceEventController({
         advertisedName: peripheralInfo.localName ?? null,
         lastRssi: peripheralInfo.rssi ?? null,
         lastState: payload.state,
+        sensorIssue: payload.sensorIssue ?? null,
         lastSeenAt: payload.timestamp,
         lastDelta: payload.delta ?? null,
         firmwareVersion: payload.firmwareVersion ?? "unknown",

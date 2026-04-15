@@ -151,6 +151,7 @@ export function createE2eRuntimeStore() {
       lastState: payload.state,
       lastSeenAt: payload.timestamp,
       lastDelta: payload.delta ?? null,
+      sensorIssue: (payload as typeof payload & { sensorIssue?: string | null }).sensorIssue ?? null,
       updatedAt: now,
       hardwareId: payload.hardwareId ?? null,
       bootId: payload.bootId ?? null,

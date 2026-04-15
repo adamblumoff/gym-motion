@@ -45,6 +45,7 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     telemetryFreshness: hasNewerTelemetry
       ? "fresh"
       : existing?.telemetryFreshness ?? (inferredTelemetryTimestamp ? "fresh" : "missing"),
+    sensorIssue: existing?.sensorIssue ?? null,
     peripheralId: existing?.peripheralId ?? null,
     address: existing?.address ?? null,
     gatewayLastAdvertisementAt: existing?.gatewayLastAdvertisementAt ?? null,
@@ -113,6 +114,7 @@ export function mergeRuntimeDeviceIntoGatewaySnapshot(
     gatewayDisconnectReason: runtimeDevice.gatewayDisconnectReason,
     advertisedName: runtimeDevice.advertisedName,
     lastRssi: runtimeDevice.lastRssi,
+    sensorIssue: runtimeDevice.sensorIssue ?? existing?.sensorIssue ?? null,
     otaStatus: runtimeDevice.otaStatus,
     otaTargetVersion: runtimeDevice.otaTargetVersion,
     otaProgressBytesSent: runtimeDevice.otaProgressBytesSent,

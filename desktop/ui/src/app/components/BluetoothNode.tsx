@@ -30,7 +30,13 @@ export function BluetoothNode({
     node.connectionState === 'disconnected' &&
     node.reconnectAwaitingDecision;
   const lastTelemetryLabel = formatTelemetryLabel(node.lastTelemetryAt);
-  const deltaLabel = node.lastDelta === null ? '--' : String(node.lastDelta);
+  const deltaLabel = node.sensorIssue || node.lastDelta === null ? '--' : String(node.lastDelta);
+  const stateLabel = node.sensorIssue ? 'sensor fault' : node.lastState;
+  const stateClassName = node.sensorIssue
+    ? 'text-amber-300'
+    : node.lastState === 'moving'
+      ? 'text-blue-400'
+      : 'text-zinc-300';
 
   useEffect(() => {
     if (node.isMoving) {
@@ -66,8 +72,8 @@ export function BluetoothNode({
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
                 <span>
                   State:{' '}
-                  <span className={node.lastState === 'moving' ? 'text-blue-400' : 'text-zinc-300'}>
-                    {node.lastState}
+                  <span className={stateClassName}>
+                    {stateLabel}
                   </span>
                 </span>
                 <span>
@@ -76,6 +82,11 @@ export function BluetoothNode({
                 <span>
                   Telemetry: <span className="text-zinc-300">{lastTelemetryLabel}</span>
                 </span>
+                {node.sensorIssue ? (
+                  <span>
+                    Fault: <span className="text-amber-300">{formatSensorIssue(node.sensorIssue)}</span>
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -200,4 +211,60 @@ function formatTelemetryLabel(lastTelemetryAt: string | null) {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function formatSensorIssue(sensorIssue: string) {
+  if (sensorIssue === 'sensor_no_data') {
+    return 'IR sample missing';
+  }
+
+  if (sensorIssue === 'sensor_unavailable') {
+    return 'IR sensor unavailable';
+  }
+
+  if (sensorIssue === 'sensor_whoami_read') {
+    return 'IR WHO_AM_I read failed';
+  }
+
+  if (sensorIssue === 'sensor_whoami_value') {
+    return 'IR WHO_AM_I mismatch';
+  }
+
+  if (sensorIssue === 'sensor_ctrl2_reset') {
+    return 'IR reset write failed';
+  }
+
+  if (sensorIssue === 'sensor_algo_reset') {
+    return 'IR algorithm reset failed';
+  }
+
+  if (sensorIssue === 'sensor_ctrl1_power_down') {
+    return 'IR power-down config failed';
+  }
+
+  if (sensorIssue === 'sensor_avg_trim') {
+    return 'IR average trim config failed';
+  }
+
+  if (sensorIssue === 'sensor_ctrl1_bdu') {
+    return 'IR BDU config failed';
+  }
+
+  if (sensorIssue === 'sensor_ctrl1_odr') {
+    return 'IR ODR config failed';
+  }
+
+  if (sensorIssue === 'sensor_bus_recovery') {
+    return 'IR bus recovery active';
+  }
+
+  if (sensorIssue === 'sensor_bus_sda_low') {
+    return 'IR SDA line stuck low';
+  }
+
+  if (sensorIssue === 'sensor_bus_scl_low') {
+    return 'IR SCL line stuck low';
+  }
+
+  return sensorIssue.replaceAll('_', ' ');
 }

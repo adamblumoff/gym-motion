@@ -34,6 +34,7 @@ export type GatewayChildRuntimeDeviceMessage = {
     advertisedName: string | null;
     lastRssi: number | null;
     lastState: "moving" | "still";
+    sensorIssue?: string | null;
     lastSeenAt: number;
     lastDelta: number | null;
     firmwareVersion: string;

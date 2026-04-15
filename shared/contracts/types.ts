@@ -145,6 +145,7 @@ export type DesktopSetupState = {
 export type GatewayRuntimeDeviceSummary = DeviceSummary & {
   gatewayConnectionState: GatewayConnectionState;
   telemetryFreshness: TelemetryFreshness;
+  sensorIssue?: string | null;
   peripheralId: string | null;
   address?: string | null;
   gatewayLastAdvertisementAt: string | null;

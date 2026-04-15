@@ -46,6 +46,7 @@ export const ingestPayloadSchema = z.object({
   state: motionStateSchema,
   timestamp: z.number().int().positive(),
   delta: z.number().int().nullable().optional(),
+  sensorIssue: z.string().trim().min(1).max(120).nullable().optional(),
   sequence: z.number().int().nonnegative().optional(),
   bootId: z.string().trim().min(1).max(120).optional(),
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
