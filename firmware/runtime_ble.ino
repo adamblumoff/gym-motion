@@ -868,12 +868,21 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
 
   if (command.type == firmware_runtime::ControlCommandType::SyncNow) {
     disarmRuntimeBootstrapWatchdog();
-    if (motionSensorReady) {
-      sendTelemetry(lastReportedDelta, millis(), true, false);
+    const unsigned long now = millis();
+    const bool recentFreshSample =
+      motionSensorReady &&
+      haveLastReading &&
+      lastFreshSensorSampleAt > 0 &&
+      now - lastFreshSensorSampleAt <= SENSOR_SAMPLE_STALE_MS;
+
+    if (recentFreshSample) {
+      sendTelemetry(lastFreshSensorDelta, now, true, false);
     } else {
       sendSensorIssueTelemetry(
-        motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable",
-        millis()
+        motionSensorReady
+          ? "sensor_no_data"
+          : (motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable"),
+        now
       );
     }
     return;
@@ -1086,12 +1095,21 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
   } else {
     writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
   }
-  if (motionSensorReady) {
-    sendTelemetry(lastReportedDelta, millis(), true, false);
+  const unsigned long now = millis();
+  const bool recentFreshSample =
+    motionSensorReady &&
+    haveLastReading &&
+    lastFreshSensorSampleAt > 0 &&
+    now - lastFreshSensorSampleAt <= SENSOR_SAMPLE_STALE_MS;
+
+  if (recentFreshSample) {
+    sendTelemetry(lastFreshSensorDelta, now, true, false);
   } else {
     sendSensorIssueTelemetry(
-      motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable",
-      millis()
+      motionSensorReady
+        ? "sensor_no_data"
+        : (motionSensorIssue != nullptr ? motionSensorIssue : "sensor_unavailable"),
+      now
     );
   }
 }
