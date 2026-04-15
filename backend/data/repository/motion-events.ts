@@ -22,6 +22,8 @@ function sequenceConflictClause() {
 
 export async function recordMotionEvent(payload: IngestPayload): Promise<MotionStreamPayload> {
   const delta = payload.delta ?? null;
+  const sequence =
+    typeof payload.sequence === "number" && payload.sequence > 0 ? payload.sequence : null;
   const client = await getDb().connect();
 
   try {
@@ -94,7 +96,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          hardware_id`,
       [
         payload.deviceId,
-        payload.sequence ?? null,
+        sequence,
         payload.state,
         delta,
         payload.timestamp,
@@ -106,7 +108,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
 
     const storedEvent = insertedEvent.rows[0]
       ? insertedEvent.rows[0]
-      : payload.sequence === undefined
+      : sequence === null
         ? null
         : (
             await client.query<MotionEventRow>(
@@ -126,7 +128,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
                  and coalesce(boot_id, '') = coalesce($2, '')
                  and sequence = $3
                limit 1`,
-              [payload.deviceId, payload.bootId ?? null, payload.sequence],
+              [payload.deviceId, payload.bootId ?? null, sequence],
             )
           ).rows[0];
 

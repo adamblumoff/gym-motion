@@ -263,7 +263,7 @@ describeDb("motion event repository", () => {
     });
   });
 
-  it("rebuilds rollups from raw motion history", async () => {
+  it("rebuilds rollups from recorded motion events", async () => {
     await recordMotionEvent({
       deviceId: "stack-001",
       state: "moving",
