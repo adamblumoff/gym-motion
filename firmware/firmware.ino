@@ -66,8 +66,11 @@ const uint8_t STHS34PF80_ODR_15_HZ = 0x07;
 
 const unsigned long LOOP_DELAY_MS = 25;
 const unsigned long KEEPALIVE_INTERVAL_MS = 1000;
-const int MOTION_DELTA_START_THRESHOLD = 180;
-const int MOTION_DELTA_STOP_THRESHOLD = 90;
+// Bench logs show the idle band sits roughly around 500-700 delta on this XIAO.
+// Use a higher start threshold so we only enter moving on clear spikes above idle,
+// while keeping a lower stop threshold for stable hysteresis back to still.
+const int MOTION_DELTA_START_THRESHOLD = 1000;
+const int MOTION_DELTA_STOP_THRESHOLD = 700;
 const unsigned long MOTION_DELTA_STOP_HOLD_MS = 900;
 const unsigned long OTA_DFU_HANDOFF_DELAY_MS = 750;
 // The current desktop runtime talks to this node through the Windows WinRT
