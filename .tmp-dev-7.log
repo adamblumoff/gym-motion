@@ -1,0 +1,236 @@
+$ bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite dev
+$ tsc -p tsconfig.runtime.json
+   Compiling gym-motion-windows-ble-sidecar v0.1.0 (C:\Users\adamb\Code\gym-motion\native\windows-ble-sidecar)
+warning: function `spawn_lease_task` is never used
+  --> src\windows\session_lease.rs:14:15
+   |
+14 | pub(super) fn spawn_lease_task(
+   |               ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `history_control_characteristic` is never read
+  --> src\windows\session_transport_setup.rs:27:16
+   |
+22 | pub(super) struct PreparedSession {
+   |                   --------------- field in this struct
+...
+27 |     pub(super) history_control_characteristic: Characteristic,
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `gym-motion-windows-ble-sidecar` (bin "gym-motion-ble-winrt") generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 8.15s
+vite v6.4.1 building SSR bundle for development...
+transforming...
+✓ 52 modules transformed.
+rendering chunks...
+out/main/index.js  210.72 kB
+✓ built in 279ms
+
+build the electron main process successfully
+
+-----
+
+vite v6.4.1 building SSR bundle for development...
+transforming...
+✓ 2 modules transformed.
+rendering chunks...
+out/preload/index.js  3.97 kB
+✓ built in 11ms
+
+build the electron preload files successfully
+
+-----
+
+dev server running for the electron renderer process at:
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose
+
+start electron app...
+
+
+[env] loaded 1 env file
+(node:18640) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `electron --trace-warnings ...` to show where the warning was created)
+[gateway] 
+[gateway] (node:20404) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `electron --trace-warnings ...` to show where the warning was created)
+[gateway] [gateway-winrt] Windows BLE sidecar is ready.
+[gateway] [gateway-winrt] received 1 adapter from sidecar [
+  {
+    id: 'winrt:0',
+    label: 'Bluetooth',
+    transport: 'winrt',
+    runtimeDeviceId: null,
+    isAvailable: true,
+    issue: null,
+    details: [ 'state:PoweredOn', 'state:RadioState(1)', 'radio_index:1' ]
+  }
+]
+[gateway] [gateway-winrt] Starting approved-node reconnect scan; 1 approved node(s) are still missing. {
+  approvedCount: 1,
+  approvedPending: true,
+  connectedApprovedCount: 0,
+  manualScanActive: false
+}
+[gateway] [gateway-winrt] Approved node rediscovered; starting reconnect attempt for nrf52-61f477409dac12c0. {
+  address: 'DC:F8:57:F9:FE:A7',
+  approvedIdentityMatched: true,
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  manualRecovery: false,
+  namePrefixMatched: false,
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  reconnectAttempt: 1,
+  runtimeServiceMatched: true,
+  sightingsInEpoch: 1
+}
+[gateway-winrt] Pausing BLE scan while reconnect handshake is in flight. {
+  address: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  reconnectAttempt: 1
+}
+[gateway-winrt] received node connection state {
+  state: 'connecting',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  bootId: null
+}
+[gateway] [gateway-winrt] Session health ack did not arrive yet; retrying app-session begin on the same connection. {
+  address: 'DC:F8:57:F9:FE:A7',
+  expectedSessionId: '08efd87627e84abe',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  retryCount: 1,
+  retryLimit: 1,
+  timeoutMs: 3000
+}
+[gateway] [gateway-winrt] Adopting the node's existing runtime app session during reconnect bootstrap. {
+  address: 'DC:F8:57:F9:FE:A7',
+  bootId: 'nrf52-61f477409dac12c0-5a40ac4e',
+  expectedSessionId: '08efd87627e84abe',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  observedSessionId: '56e869b16ed54d50',
+  peripheralId: 'DC:F8:57:F9:FE:A7'
+}
+[gateway] [gateway-winrt] Sent first app-session lease after reconnect. {
+  address: 'DC:F8:57:F9:FE:A7',
+  historyStatusValue: '{"type":"history-debug","deviceId":"nrf52-61f477409dac12c0","stage":"runtime-end","requestId":"app-session-begin"}',
+  knownDeviceId: null,
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  runtimeStatusValue: '{"type":"app-session-online","deviceId":"nrf52-61f477409dac12c0","bootId":"nrf52-61f477409dac12c0-5a40ac4e","sessionId":"56e869b16ed54d50","sessionNonce":"e708f259d77f4526","notifyMask":7}',
+  sessionId: '56e869b16ed54d50'
+}
+[gateway] [gateway-winrt] received node connection state {
+  state: 'connected',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  bootId: 'nrf52-61f477409dac12c0-5a40ac4e'
+}
+[gateway] [runtime] awaiting firmware-owned history sync {
+  deviceId: 'nrf52-61f477409dac12c0',
+  bootId: 'nrf52-61f477409dac12c0-5a40ac4e'
+}
+[gateway] [gateway-winrt] Reconnect completed for nrf52-61f477409dac12c0. {
+  address: 'DC:F8:57:F9:FE:A7',
+  bootId: 'nrf52-61f477409dac12c0-5a40ac4e',
+  gattMs: 3103,
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  reconnect: {
+    attempt: 1,
+    attempt_limit: 20,
+    awaiting_user_decision: false,
+    retry_exhausted: false
+  },
+  sessionMs: 12630,
+  transportMs: 2461,
+  usedTelemetryFallback: false
+}
+[gateway] [gateway-winrt] Read back runtime status characteristic immediately after reconnect. {
+  address: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  runtimeStatusValue: '{"type":"app-session-online","deviceId":"nrf52-61f477409dac12c0","bootId":"nrf52-61f477409dac12c0-5a40ac4e","sessionId":"56e869b16ed54d50","sessionNonce":"e708f259d77f4526","notifyMask":7}'
+}
+[gateway] [gateway-winrt] Read back status characteristics four seconds after first reconnect lease. {
+  address: 'DC:F8:57:F9:FE:A7',
+  historyStatusValue: '{"type":"history-debug","deviceId":"nrf52-61f477409dac12c0","stage":"runtime-end","requestId":"app-session-begin"}',
+  knownDeviceId: null,
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  runtimeStatusValue: '{"type":"app-session-online","deviceId":"nrf52-61f477409dac12c0","bootId":"nrf52-61f477409dac12c0-5a40ac4e","sessionId":"56e869b16ed54d50","sessionNonce":"e708f259d77f4526","notifyMask":7}'
+}
+[gateway] [gateway-winrt] received node connection state {
+  state: 'disconnected',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  bootId: null
+}
+[gateway] [gateway-winrt] BLE transport ended for nrf52-61f477409dac12c0. {
+  address: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7'
+}
+[gateway] [gateway-winrt] Approved-node disconnect for nrf52-61f477409dac12c0; resuming silent reconnect scan. {
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  reason: 'BLE transport ended for nrf52-61f477409dac12c0.',
+  reconnect: {
+    attempt: 0,
+    attempt_limit: 20,
+    awaiting_user_decision: false,
+    retry_exhausted: false
+  }
+}
+[gateway-winrt] received node connection state {
+  state: 'disconnected',
+  peripheralId: 'DC:F8:57:F9:FE:A7',
+  knownDeviceId: 'nrf52-61f477409dac12c0',
+  bootId: null
+}
+[gateway] [gateway-winrt] Starting approved-node reconnect scan; 1 approved node(s) are still missing. {
+  approvedCount: 1,
+  approvedPending: true,
+  connectedApprovedCount: 0,
+  manualScanActive: false
+}
+[gateway] [gateway-winrt] Restarting approved-node reconnect scan burst. {
+  activeConnectionCount: 0,
+  advertisementsSeen: 126,
+  classifiedCandidates: 1,
+  connectedApprovedCount: 0,
+  lastAdvertisementAt: '2026-04-13T22:27:04.099Z',
+  rejectedCandidates: 125,
+  scanBurst: 0
+}
+[gateway] [gateway-winrt] Approved-node reconnect scan burst restarted. {
+  activeConnectionCount: 0,
+  cacheResetApplied: false,
+  cacheResetAttempted: false,
+  scanBurst: 1
+}
+[gateway] [gateway-winrt] Restarting approved-node reconnect scan burst. {
+  activeConnectionCount: 0,
+  advertisementsSeen: 195,
+  classifiedCandidates: 0,
+  connectedApprovedCount: 0,
+  lastAdvertisementAt: '2026-04-13T22:27:04.099Z',
+  rejectedCandidates: 195,
+  scanBurst: 1
+}
+[gateway] [gateway-winrt] Approved-node reconnect scan burst restarted. {
+  activeConnectionCount: 0,
+  cacheResetApplied: false,
+  cacheResetAttempted: false,
+  scanBurst: 2
+}
+[gateway] [gateway-winrt] Restarting approved-node reconnect scan burst. {
+  activeConnectionCount: 0,
+  advertisementsSeen: 344,
+  classifiedCandidates: 0,
+  connectedApprovedCount: 0,
+  lastAdvertisementAt: '2026-04-13T22:27:04.099Z',
+  rejectedCandidates: 344,
+  scanBurst: 2
+}

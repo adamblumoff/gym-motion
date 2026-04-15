@@ -524,6 +524,46 @@ void cancelHistoryWorker() {
   historyWorkerState = HistoryWorkerState();
 }
 
+void finishOrContinueHistorySync() {
+  const String sessionId = historyWorkerState.sessionId;
+  const String requestId = historyWorkerState.requestId;
+  const size_t maxRecords = historyWorkerState.maxRecords;
+  const unsigned long latestSequence = historyWorkerState.latestSequence;
+  const unsigned long highWaterSequence = historyWorkerState.highWaterSequence;
+  const size_t sentCount = historyWorkerState.sentCount;
+  const bool hasMore = latestSequence < highWaterSequence;
+
+  if (!sendHistorySyncComplete(
+        requestId,
+        latestSequence,
+        highWaterSequence,
+        sentCount
+      )) {
+    return;
+  }
+
+  if (!hasMore) {
+    lastCompletedHistoryRequestId = requestId;
+    cancelHistoryWorker();
+    return;
+  }
+
+  firmware_runtime::HistoryControlCommand nextCommand;
+  nextCommand.type = firmware_runtime::HistoryControlCommandType::HistoryPageRequest;
+  nextCommand.sessionId = sessionId.c_str();
+  nextCommand.requestId = requestId.c_str();
+  nextCommand.afterSequence = latestSequence;
+  nextCommand.maxRecords = maxRecords;
+
+  logRuntimeHistoryEvent(
+    "Continuing firmware-owned history sync requestId=" + requestId +
+    " afterSequence=" + String(latestSequence) +
+    " highWaterSequence=" + String(highWaterSequence)
+  );
+  cancelHistoryWorker();
+  scheduleHistorySyncRequest(nextCommand);
+}
+
 void maybeStartAutomaticHistorySync() {
   auto publishAutoHistoryDecision = [&](const String& message) {
     if (message == lastAutoHistoryDecisionMessage) {
@@ -735,6 +775,14 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
     String(request.requestId.c_str()) == historyWorkerState.requestId;
 
   if (!matchesActive) {
+    if (String(request.requestId.c_str()) == lastCompletedHistoryRequestId) {
+      logRuntimeHistoryEvent(
+        "Ignored legacy history ack for completed requestId=" + String(request.requestId.c_str()) +
+        " sequence=" + String(request.sequence)
+      );
+      return;
+    }
+
     sendHistoryError(
       request.sessionId.c_str(),
       request.requestId.c_str(),
@@ -745,35 +793,6 @@ void acknowledgeHistorySyncRequest(const firmware_runtime::HistoryControlCommand
   }
 
   acknowledgeHistoryThrough(request.sequence);
-
-  if (historyWorkerState.phase == HistoryWorkerPhase::AwaitingAck) {
-    const String nextSessionId = historyWorkerState.sessionId;
-    const String nextRequestId = historyWorkerState.requestId;
-    const size_t nextMaxRecords = historyWorkerState.maxRecords;
-    const unsigned long nextHighWaterSequence = historyWorkerState.highWaterSequence;
-    const unsigned long nextLatestSequence = historyWorkerState.latestSequence;
-    lastCompletedHistoryRequestId = request.requestId.c_str();
-    cancelHistoryWorker();
-    if (request.sequence < nextHighWaterSequence) {
-      firmware_runtime::HistoryControlCommand nextCommand;
-      nextCommand.type = firmware_runtime::HistoryControlCommandType::HistoryPageRequest;
-      nextCommand.sessionId = nextSessionId.c_str();
-      nextCommand.requestId = nextRequestId.c_str();
-      nextCommand.afterSequence = request.sequence;
-      nextCommand.maxRecords = nextMaxRecords;
-
-      logRuntimeHistoryEvent(
-        "Continuing firmware-owned history sync requestId=" + nextRequestId +
-        " afterSequence=" + String(request.sequence) +
-        " highWaterSequence=" + String(nextHighWaterSequence) +
-        " latestSequence=" + String(nextLatestSequence)
-      );
-      scheduleHistorySyncRequest(nextCommand);
-    }
-
-    return;
-  }
-
   cancelHistoryWorker();
 }
 
@@ -783,20 +802,7 @@ void pumpHistoryWorker() {
   }
 
   if (!historyWorkerFile) {
-    if (sendHistorySyncComplete(
-          historyWorkerState.requestId,
-          historyWorkerState.latestSequence,
-          historyWorkerState.highWaterSequence,
-          historyWorkerState.sentCount
-        )) {
-      if (historyWorkerState.sentCount == 0 &&
-          historyWorkerState.latestSequence >= historyWorkerState.highWaterSequence) {
-        lastCompletedHistoryRequestId = historyWorkerState.requestId;
-        cancelHistoryWorker();
-      } else {
-        historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
-      }
-    }
+    finishOrContinueHistorySync();
     return;
   }
 
@@ -898,13 +904,6 @@ void pumpHistoryWorker() {
       historyWorkerState.highWaterSequence = historyWorkerState.latestSequence;
     }
     historyWorkerFile.close();
-    if (sendHistorySyncComplete(
-          historyWorkerState.requestId,
-          historyWorkerState.latestSequence,
-          historyWorkerState.highWaterSequence,
-          historyWorkerState.sentCount
-        )) {
-      historyWorkerState.phase = HistoryWorkerPhase::AwaitingAck;
-    }
+    finishOrContinueHistorySync();
   }
 }

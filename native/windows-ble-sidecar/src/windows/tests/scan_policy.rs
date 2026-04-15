@@ -146,11 +146,11 @@ fn healthy_connections_clear_pending_reconnect_even_without_device_connected_eve
 }
 
 #[test]
-fn reconnect_scan_does_not_clear_peripherals_during_silent_retry_bursts() {
+fn reconnect_scan_clears_peripherals_only_when_no_connections_are_active() {
     let connected = HashMap::new();
 
     assert!(!should_clear_reconnect_peripherals(&connected, 1));
-    assert!(!should_clear_reconnect_peripherals(&connected, 0));
+    assert!(should_clear_reconnect_peripherals(&connected, 0));
 }
 
 #[test]

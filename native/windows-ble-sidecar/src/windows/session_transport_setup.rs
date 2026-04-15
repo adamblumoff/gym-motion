@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{future::Future, time::{Duration, Instant}};
 
 use anyhow::{anyhow, Context, Result};
 use btleplug::{
@@ -18,6 +18,20 @@ use super::{
     session_util::{format_error_chain, is_retryable_pre_session_setup_error},
     writer::EventWriter,
 };
+
+const WINRT_STEP_TIMEOUT_MS: u64 = 8_000;
+
+async fn run_winrt_step<T>(
+    node_label: &str,
+    step_name: &str,
+    future: impl Future<Output = std::result::Result<T, impl Into<anyhow::Error>>>,
+) -> Result<T> {
+    tokio::time::timeout(Duration::from_millis(WINRT_STEP_TIMEOUT_MS), future)
+        .await
+        .map_err(|_| anyhow!("{step_name} timed out for {node_label}"))?
+        .map_err(Into::into)
+        .with_context(|| format!("{step_name} failed for {node_label}"))
+}
 
 pub(super) struct PreparedSession {
     pub(super) peripheral: Peripheral,
@@ -75,7 +89,7 @@ pub(super) async fn prepare_session_stream(
                 "calling peripheral.connect()",
             )
             .await?;
-            if let Err(error) = peripheral.connect().await {
+            if let Err(error) = run_winrt_step(&node.label, "connect step", peripheral.connect()).await {
                 let formatted_error = error.to_string();
                 writer
                     .send(&Event::Log {
@@ -190,7 +204,13 @@ pub(super) async fn prepare_session_stream(
                 "discovering services",
             )
             .await?;
-            match peripheral.discover_services().await {
+            match run_winrt_step(
+                &node.label,
+                "discover_services step",
+                peripheral.discover_services(),
+            )
+            .await
+            {
                 Ok(()) => {
                     gatt_ready = true;
                     gatt_ready_at.get_or_insert_with(Instant::now);
@@ -275,7 +295,10 @@ pub(super) async fn prepare_session_stream(
     .await;
     let mut setup_result = Err(anyhow!("pre-session setup did not run"));
     for setup_attempt in 1..=prepare_config.pre_session_setup_attempts {
-        setup_result = async {
+        setup_result = run_winrt_step(
+            &node.label,
+            "runtime pre-session setup",
+            async {
             prepare_runtime_session_io(
                 &peripheral,
                 node,
@@ -288,7 +311,8 @@ pub(super) async fn prepare_session_stream(
                 },
             )
             .await
-        }
+            },
+        )
         .await;
 
         let Err(error) = &setup_result else {
@@ -321,10 +345,12 @@ pub(super) async fn prepare_session_stream(
             prepare_config.pre_session_setup_retry_delay_ms,
         ))
         .await;
-        peripheral
-            .discover_services()
-            .await
-            .with_context(|| format!("refresh services before retry failed for {}", node.label))?;
+        run_winrt_step(
+            &node.label,
+            "refresh services before retry",
+            peripheral.discover_services(),
+        )
+        .await?;
     }
 
     match setup_result {

@@ -20,7 +20,7 @@ use crate::{
 
 use log::{debug, trace};
 use std::{collections::HashMap, future::IntoFuture, time::Duration};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 use windows::core::Ref;
 use windows::{
@@ -39,6 +39,7 @@ pub type NotifiyEventHandler = Box<dyn Fn(Vec<u8>) + Send>;
 
 const SUBSCRIBE_ATTEMPTS: u32 = 3;
 const SUBSCRIBE_RETRY_DELAY: Duration = Duration::from_millis(250);
+const GATT_CHARACTERISTIC_OPERATION_TIMEOUT: Duration = Duration::from_secs(4);
 impl From<WriteType> for GattWriteOption {
     fn from(val: WriteType) -> Self {
         match val {
@@ -75,7 +76,9 @@ impl BLECharacteristic {
             self.characteristic
                 .WriteValueWithResultAndOptionAsync(&buffer, write_type.into())?
         };
-        let result = operation.into_future().await?;
+        let result = timeout(GATT_CHARACTERISTIC_OPERATION_TIMEOUT, operation.into_future())
+            .await
+            .map_err(|_| Error::TimedOut(GATT_CHARACTERISTIC_OPERATION_TIMEOUT))??;
         let status = result.Status()?;
         if status == GattCommunicationStatus::Success {
             Ok(())
@@ -91,11 +94,12 @@ impl BLECharacteristic {
     }
 
     pub async fn read_value(&self) -> Result<Vec<u8>> {
-        let result = self
+        let operation = self
             .characteristic
-            .ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?
-            .into_future()
-            .await?;
+            .ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)?;
+        let result = timeout(GATT_CHARACTERISTIC_OPERATION_TIMEOUT, operation.into_future())
+            .await
+            .map_err(|_| Error::TimedOut(GATT_CHARACTERISTIC_OPERATION_TIMEOUT))??;
         if result.Status()? == GattCommunicationStatus::Success {
             let value = result.Value()?;
             let reader = DataReader::FromBuffer(&value)?;
@@ -135,13 +139,12 @@ impl BLECharacteristic {
         }
 
         for attempt in 1..=SUBSCRIBE_ATTEMPTS {
-            match self
+            let operation = self
                 .characteristic
-                .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(config)?
-                .into_future()
-                .await
+                .WriteClientCharacteristicConfigurationDescriptorWithResultAsync(config)?;
+            match timeout(GATT_CHARACTERISTIC_OPERATION_TIMEOUT, operation.into_future()).await
             {
-                Ok(result) if result.Status()? == GattCommunicationStatus::Success => {
+                Ok(Ok(result)) if result.Status()? == GattCommunicationStatus::Success => {
                     trace!(
                         "subscribe {}",
                         utils::format_gatt_result_details(
@@ -151,7 +154,7 @@ impl BLECharacteristic {
                     );
                     return Ok(());
                 }
-                Ok(result) => {
+                Ok(Ok(result)) => {
                     let details = utils::format_gatt_result_details(
                         result.Status()?,
                         result.ProtocolError().ok(),
@@ -166,12 +169,20 @@ impl BLECharacteristic {
                         ));
                     }
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     if attempt == SUBSCRIBE_ATTEMPTS {
                         if let Some(token) = self.notify_token.take() {
                             let _ = self.characteristic.RemoveValueChanged(token);
                         }
                         return Err(error.into());
+                    }
+                }
+                Err(_) => {
+                    if attempt == SUBSCRIBE_ATTEMPTS {
+                        if let Some(token) = self.notify_token.take() {
+                            let _ = self.characteristic.RemoveValueChanged(token);
+                        }
+                        return Err(Error::TimedOut(GATT_CHARACTERISTIC_OPERATION_TIMEOUT));
                     }
                 }
             }
@@ -188,11 +199,12 @@ impl BLECharacteristic {
         }
         self.notify_token = None;
         let config = GattClientCharacteristicConfigurationDescriptorValue::None;
-        let status = self
+        let operation = self
             .characteristic
-            .WriteClientCharacteristicConfigurationDescriptorAsync(config)?
-            .into_future()
-            .await?;
+            .WriteClientCharacteristicConfigurationDescriptorAsync(config)?;
+        let status = timeout(GATT_CHARACTERISTIC_OPERATION_TIMEOUT, operation.into_future())
+            .await
+            .map_err(|_| Error::TimedOut(GATT_CHARACTERISTIC_OPERATION_TIMEOUT))??;
         trace!("unsubscribe {:?}", status);
         if status == GattCommunicationStatus::Success {
             Ok(())

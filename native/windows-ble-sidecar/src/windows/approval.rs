@@ -93,13 +93,11 @@ pub(crate) fn should_clear_reconnect_peripherals(
     connected_nodes: &HashMap<String, DiscoveredNode>,
     active_connection_count: usize,
 ) -> bool {
-    // WinRT reconnect scans can keep emitting discovery events whose peripheral ids
-    // become unreadable if we aggressively clear the adapter cache between bursts.
-    // Keep the cache intact during silent reconnect loops and let explicit shutdown
-    // or adapter resets own cache invalidation instead.
-    let _ = connected_nodes;
-    let _ = active_connection_count;
-    false
+    // When no approved nodes are connected and no reconnect is currently in flight,
+    // a stalled WinRT peripheral shell is more harmful than a cache miss. Clearing the
+    // adapter cache between reconnect bursts forces the next discovery to build a fresh
+    // Peripheral instance instead of reusing one whose GATT service list is stale.
+    connected_nodes.is_empty() && active_connection_count == 0
 }
 
 pub(crate) fn classify_discovery_candidate(

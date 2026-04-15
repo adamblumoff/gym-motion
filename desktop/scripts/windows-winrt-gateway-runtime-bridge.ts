@@ -348,8 +348,7 @@ export function createRuntimeBridge({
     if (
       state.status === "waiting_to_request" ||
       state.status === "buffering_page" ||
-      state.status === "persisting_page" ||
-      state.status === "acking_page"
+      state.status === "persisting_page"
     ) {
       if (!pendingHistorySyncTimers.has(state.deviceId) && state.status === "waiting_to_request") {
         scheduleHistorySyncRequest(context, state);
@@ -487,34 +486,14 @@ export function createRuntimeBridge({
         }),
       });
 
-      const provenAckSequence = result?.historySyncState?.lastAckedHistorySequence ?? 0;
+      const durableAckSequence = result?.historySyncState?.lastAckedHistorySequence ?? 0;
 
       logBackfill("persisted backfill batch", {
         deviceId,
         bootId: state.bootId,
         ackSequence: payload.latest_sequence ?? 0,
         recordCount: records.length,
-        provenAckSequence,
-      });
-
-      setBackfillStatus(context, state, "acking_page", {
-        records: [],
-        recordSequences: new Set(),
-        pausedReason: null,
-      });
-
-      await sendSidecarCommand({
-        type: "acknowledge_history_sync",
-        deviceId,
-        sequence: provenAckSequence,
-        requestId: payload.request_id ?? state.requestId ?? null,
-      });
-
-      logBackfill("acked persisted history batch", {
-        deviceId,
-        bootId: state.bootId,
-        ackSequence: provenAckSequence,
-        requestId: payload.request_id ?? state.requestId ?? null,
+        durableAckSequence,
       });
 
       if (payload.has_more !== true) {
@@ -523,17 +502,18 @@ export function createRuntimeBridge({
       }
 
       setBackfillStatus(context, state, "buffering_page", {
-        requestedAfterSequence: provenAckSequence,
+        requestedAfterSequence: payload.latest_sequence ?? state.latestSequence ?? 0,
         requestId: payload.request_id ?? state.requestId ?? null,
         records: [],
         recordSequences: new Set(),
         pausedReason: null,
       });
 
-      logBackfill("awaiting next history page", {
+      logBackfill("awaiting next firmware-owned history page", {
         deviceId,
         bootId: state.bootId,
-        afterSequence: provenAckSequence,
+        afterSequence: payload.latest_sequence ?? state.latestSequence ?? 0,
+        durableAckSequence,
         highWaterSequence: payload.high_water_sequence ?? 0,
         hasMore: payload.has_more ?? false,
       });

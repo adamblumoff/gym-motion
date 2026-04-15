@@ -134,11 +134,11 @@ LeaseEnforcementResult evaluateAppSessionLease(
   unsigned long now,
   unsigned long bootstrapTimeoutMs
 ) {
-  if (!state.runtimeBleConnected) {
-    return {};
-  }
-
   if (state.runtimeBootstrapLeasePending) {
+    if (!state.runtimeBleConnected) {
+      return {};
+    }
+
     if (state.runtimeBleConnectedAt > 0 &&
         now - state.runtimeBleConnectedAt >= bootstrapTimeoutMs) {
       LeaseEnforcementResult result;
@@ -162,7 +162,7 @@ LeaseEnforcementResult evaluateAppSessionLease(
 
   LeaseEnforcementResult result;
   result.kind = LeaseEnforcementResultKind::LeaseExpired;
-  result.shouldDisconnect = true;
+  result.shouldDisconnect = state.runtimeBleConnected;
   result.shouldRestartAdvertising = true;
   return result;
 }

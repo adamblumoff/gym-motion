@@ -1,4 +1,5 @@
 use super::*;
+use crate::windows::discovery::{service_uuid_session_token, split_local_name_and_session};
 
 fn test_config() -> Config {
     Config {
@@ -253,4 +254,35 @@ fn duplicate_name_only_rules_do_not_bind_one_connected_node_to_multiple_approval
         &connected,
         &reconnect_states
     ));
+}
+
+#[test]
+fn extracts_short_session_token_from_service_uuid_family() {
+    let service_uuid = Uuid::parse_str("deadbeef-f2a7-e592-3a4d-1b6fd1412f4b")
+        .expect("token uuid should parse");
+
+    assert_eq!(
+        service_uuid_session_token(&service_uuid),
+        Some("deadbeef".to_string())
+    );
+}
+
+#[test]
+fn extracts_short_session_token_from_little_endian_service_uuid_family() {
+    let service_uuid = Uuid::parse_str("efbeadde-a7f2-92e5-3a4d-1b6fd1412f4b")
+        .expect("little-endian token uuid should parse");
+
+    assert_eq!(
+        service_uuid_session_token(&service_uuid),
+        Some("efbeadde".to_string())
+    );
+}
+
+#[test]
+fn strips_short_session_token_suffix_from_local_name() {
+    let (local_name, advertised_session_id) =
+        split_local_name_and_session(Some("GymMotion-ac12c0-sdeadbeef".to_string()));
+
+    assert_eq!(local_name, Some("GymMotion-ac12c0".to_string()));
+    assert_eq!(advertised_session_id, Some("deadbeef".to_string()));
 }

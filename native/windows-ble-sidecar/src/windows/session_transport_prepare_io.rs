@@ -99,6 +99,14 @@ fn required_service(
         .ok_or_else(|| anyhow!(missing_message.to_string()))
 }
 
+fn discovered_service_uuids(peripheral: &Peripheral) -> Vec<String> {
+    peripheral
+        .services()
+        .iter()
+        .map(|service| service.uuid.to_string())
+        .collect()
+}
+
 pub(super) async fn prepare_runtime_session_io(
     peripheral: &Peripheral,
     node: &DiscoveredNode,
@@ -122,7 +130,23 @@ pub(super) async fn prepare_runtime_session_io(
         "verifying runtime service",
     )
     .await?;
-    required_service(peripheral, config.service_uuid, "runtime service not found")?;
+    if let Err(error) = required_service(peripheral, config.service_uuid, "runtime service not found")
+    {
+        writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: "Pre-session setup could not find the runtime service in the discovered GATT cache.".to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "expectedRuntimeServiceUuid": config.service_uuid.to_string(),
+                    "discoveredServiceUuids": discovered_service_uuids(peripheral),
+                })),
+            })
+            .await?;
+        return Err(error);
+    }
     emit_handshake_step(
         writer,
         config.verbose_logging,
@@ -131,11 +155,26 @@ pub(super) async fn prepare_runtime_session_io(
         "verifying history service",
     )
     .await?;
-    required_service(
+    if let Err(error) = required_service(
         peripheral,
         config.history_service_uuid,
         "history service not found",
-    )?;
+    ) {
+        writer
+            .send(&Event::Log {
+                level: "warn".to_string(),
+                message: "Pre-session setup could not find the history service in the discovered GATT cache.".to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "expectedHistoryServiceUuid": config.history_service_uuid.to_string(),
+                    "discoveredServiceUuids": discovered_service_uuids(peripheral),
+                })),
+            })
+            .await?;
+        return Err(error);
+    }
     emit_handshake_step(
         writer,
         config.verbose_logging,

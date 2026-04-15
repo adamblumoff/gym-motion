@@ -5,12 +5,12 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use btleplug::api::Peripheral as _;
+use btleplug::api::{Characteristic, Peripheral as _};
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{
     sync::{mpsc, watch, Mutex, RwLock},
-    time::sleep,
+    time::{sleep, timeout},
 };
 
 use crate::{
@@ -250,7 +250,7 @@ enum RuntimeSessionStatusDisposition {
 fn classify_runtime_session_status(
     status: &RuntimeStatusPayload,
     requested_session_id: &str,
-    requested_session_nonce: &str,
+    _requested_session_nonce: &str,
 ) -> RuntimeSessionStatusDisposition {
     if status.status_type != "app-session-online" {
         return RuntimeSessionStatusDisposition::Ignore;
@@ -263,13 +263,39 @@ fn classify_runtime_session_status(
         return RuntimeSessionStatusDisposition::Ignore;
     };
 
-    if session_id == requested_session_id && session_nonce == requested_session_nonce {
+    if session_id == requested_session_id {
         return RuntimeSessionStatusDisposition::MatchRequested;
     }
 
     RuntimeSessionStatusDisposition::ObservedDifferent {
         session_id,
         session_nonce,
+    }
+}
+
+const STATUS_READ_TIMEOUT_MS: u64 = 1_000;
+
+fn normalize_characteristic_json(raw: &str) -> Option<String> {
+    let trimmed = raw.trim_matches(char::from(0)).trim();
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    (start <= end).then(|| trimmed[start..=end].to_string())
+}
+
+async fn read_characteristic_utf8(
+    peripheral: &btleplug::platform::Peripheral,
+    characteristic: &Characteristic,
+) -> Option<String> {
+    match timeout(
+        Duration::from_millis(STATUS_READ_TIMEOUT_MS),
+        peripheral.read(characteristic),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => String::from_utf8(bytes)
+            .ok()
+            .and_then(|raw| normalize_characteristic_json(&raw)),
+        Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -286,6 +312,7 @@ pub(super) async fn monitor_active_session(
     command_sender: mpsc::UnboundedSender<SessionCommand>,
     app_session_id: String,
     app_session_nonce: String,
+    advertised_session_id: Option<String>,
     reconnect_started_at: Instant,
     monitor_config: MonitorSessionConfig,
 ) -> Result<Option<String>> {
@@ -381,18 +408,30 @@ pub(super) async fn monitor_active_session(
             .await?;
 
         sleep(Duration::from_millis(400)).await;
-        let runtime_status_readback = live_control
-            .peripheral
-            .read(&live_control.status_characteristic)
-            .await
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok());
-        let history_status_readback = live_control
-            .peripheral
-            .read(&live_control.history_status_characteristic)
-            .await
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let runtime_status_readback =
+            read_characteristic_utf8(&live_control.peripheral, &live_control.status_characteristic)
+                .await;
+        let history_status_readback = read_characteristic_utf8(
+            &live_control.peripheral,
+            &live_control.history_status_characteristic,
+        )
+        .await;
+        let refreshed_status_readback = if live_control.peripheral.discover_services().await.is_ok() {
+            read_characteristic_utf8(&live_control.peripheral, &live_control.status_characteristic)
+                .await
+        } else {
+            None
+        };
+        let refreshed_history_status_readback =
+            if live_control.peripheral.discover_services().await.is_ok() {
+                read_characteristic_utf8(
+                    &live_control.peripheral,
+                    &live_control.history_status_characteristic,
+                )
+                .await
+            } else {
+                None
+            };
         writer
             .send(&Event::Log {
                 level: "info".to_string(),
@@ -407,6 +446,8 @@ pub(super) async fn monitor_active_session(
                     "sessionId": session_id,
                     "runtimeStatusValue": runtime_status_readback,
                     "historyStatusValue": history_status_readback,
+                    "runtimeStatusValueAfterServiceRefresh": refreshed_status_readback,
+                    "historyStatusValueAfterServiceRefresh": refreshed_history_status_readback,
                 })),
             })
             .await?;
@@ -485,11 +526,13 @@ pub(super) async fn monitor_active_session(
     let session_health_sleep = tokio::time::sleep_until(session_health_deadline.into());
     tokio::pin!(session_health_sleep);
     let mut session_begin_retry_count = 0_u32;
-    let mut handshake_control_path_recovered = false;
     let mut current_session_device_id: Option<String> = None;
     let current_app_session_id = app_session_id;
     let current_app_session_nonce = app_session_nonce;
     let mut active_app_session_id = current_app_session_id.to_string();
+    let reconnect_advertised_session_id = reconnect
+        .as_ref()
+        .and(advertised_session_id.clone());
     let (active_session_command_sender, mut active_session_commands) =
         mpsc::unbounded_channel::<ActiveSessionCommand>();
     let mut current_live_control = ActiveLiveControl {
@@ -506,7 +549,6 @@ pub(super) async fn monitor_active_session(
     lease_heartbeat.tick().await;
     let mut lease_heartbeat_enabled = false;
     let mut first_lease_logged = false;
-    let mut telemetry_subscribed = false;
     let mut status_poll = tokio::time::interval(Duration::from_millis(500));
     status_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     status_poll.tick().await;
@@ -520,24 +562,93 @@ pub(super) async fn monitor_active_session(
         .await;
     }
 
-    emit_handshake_step(
-        &writer,
-        config.verbose_logging,
-        &node,
-        &reconnect,
-        "sending app-session begin",
-    )
-    .await?;
-    let write_guard = current_live_control.write_lock.lock().await;
-    let begin_result = send_app_session_begin(
-        &current_live_control.peripheral,
-        &current_live_control.characteristic,
-        &current_app_session_nonce,
-        &current_app_session_id,
-    )
-    .await;
-    drop(write_guard);
-    begin_result.with_context(|| format!("initial app-session begin failed for {}", node.label))?;
+    if let Some(advertised_session_id) = reconnect_advertised_session_id.as_ref() {
+        emit_handshake_step(
+            &writer,
+            config.verbose_logging,
+            &node,
+            &reconnect,
+            "adopting advertised reconnect session",
+        )
+        .await?;
+        writer
+            .send(&Event::Log {
+                level: "info".to_string(),
+                message:
+                    "Using the advertised board session token as reconnect truth instead of polling runtime status."
+                        .to_string(),
+                details: Some(json!({
+                    "peripheralId": node.peripheral_id,
+                    "knownDeviceId": node.known_device_id,
+                    "address": node.address,
+                    "advertisedSessionId": advertised_session_id,
+                })),
+            })
+            .await?;
+        let write_guard = current_live_control.write_lock.lock().await;
+        let lease_result = super::handshake::send_app_session_lease(
+            &current_live_control.peripheral,
+            &current_live_control.characteristic,
+            advertised_session_id,
+        )
+        .await;
+        drop(write_guard);
+        match lease_result {
+            Ok(()) => {
+                active_app_session_id = advertised_session_id.clone();
+                session_healthy_reported = true;
+                lease_heartbeat_enabled = true;
+                report_reconnect_completed(
+                    &writer,
+                    &command_sender,
+                    &node,
+                    &reconnect,
+                    None,
+                    prepared.transport_ready_at,
+                    prepared.gatt_ready_at,
+                    reconnect_started_at,
+                    "advertisement-session-id",
+                )
+                .await?;
+            }
+            Err(error) => {
+                writer
+                    .send(&Event::Log {
+                        level: "warn".to_string(),
+                        message: "Advertised reconnect session token could not be adopted from the first lease write; falling back to a fresh app-session begin.".to_string(),
+                        details: Some(json!({
+                            "peripheralId": node.peripheral_id,
+                            "knownDeviceId": node.known_device_id,
+                            "address": node.address,
+                            "advertisedSessionId": advertised_session_id,
+                            "error": format!("{:#}", error),
+                        })),
+                    })
+                    .await?;
+            }
+        }
+    }
+
+    if !session_healthy_reported {
+        emit_handshake_step(
+            &writer,
+            config.verbose_logging,
+            &node,
+            &reconnect,
+            "sending app-session begin",
+        )
+        .await?;
+        let write_guard = current_live_control.write_lock.lock().await;
+        let begin_result = send_app_session_begin(
+            &current_live_control.peripheral,
+            &current_live_control.characteristic,
+            &current_app_session_nonce,
+            &current_app_session_id,
+        )
+        .await;
+        drop(write_guard);
+        begin_result.with_context(|| format!("initial app-session begin failed for {}", node.label))?;
+    }
 
     loop {
         tokio::select! {
@@ -575,19 +686,18 @@ pub(super) async fn monitor_active_session(
                 .await?;
             }
             _ = status_poll.tick() => {
-                let runtime_status_readback = current_live_control
-                    .peripheral
-                    .read(&current_live_control.status_characteristic)
-                    .await
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
-                if runtime_status_readback != last_polled_runtime_status {
-                    last_polled_runtime_status = runtime_status_readback.clone();
-                    if let Some(raw) = runtime_status_readback {
-                        if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
-                            let polled_runtime_status =
-                                serde_json::from_value::<RuntimeStatusPayload>(payload.clone()).ok();
-                            if !session_healthy_reported {
+                if !session_healthy_reported {
+                    let runtime_status_readback = read_characteristic_utf8(
+                        &current_live_control.peripheral,
+                        &current_live_control.status_characteristic,
+                    )
+                    .await;
+                    if runtime_status_readback != last_polled_runtime_status {
+                        last_polled_runtime_status = runtime_status_readback.clone();
+                        if let Some(raw) = runtime_status_readback {
+                            if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+                                let polled_runtime_status =
+                                    serde_json::from_value::<RuntimeStatusPayload>(payload.clone()).ok();
                                 if let Some(status) = polled_runtime_status.as_ref() {
                                     match classify_runtime_session_status(
                                         status,
@@ -642,27 +752,20 @@ pub(super) async fn monitor_active_session(
                                                 &active_session_command_sender,
                                             )
                                             .await?;
-                                            if !telemetry_subscribed {
-                                                emit_handshake_step(
-                                                    &writer,
-                                                    config.verbose_logging,
-                                                    &node,
-                                                    &reconnect,
-                                                    "subscribing to telemetry after status poll verification",
-                                                )
+                                            writer
+                                                .send(&Event::Log {
+                                                    level: "info".to_string(),
+                                                    message: "Runtime status token verification established the requested app session without requiring a post-bootstrap control write probe.".to_string(),
+                                                    details: Some(json!({
+                                                        "peripheralId": node.peripheral_id,
+                                                        "knownDeviceId": node.known_device_id,
+                                                        "address": node.address,
+                                                        "verifiedSessionId": current_app_session_id,
+                                                        "rawStatusValue": raw,
+                                                        "bootId": status.boot_id,
+                                                    })),
+                                                })
                                                 .await?;
-                                                prepared
-                                                    .peripheral
-                                                    .subscribe(&prepared.telemetry_characteristic)
-                                                    .await
-                                                    .with_context(|| {
-                                                        format!(
-                                                            "telemetry subscribe after status poll verification failed for {}",
-                                                            node.label
-                                                        )
-                                                    })?;
-                                                telemetry_subscribed = true;
-                                            }
                                             session_healthy_reported = true;
                                             lease_heartbeat_enabled = true;
                                             report_reconnect_completed(
@@ -703,70 +806,71 @@ pub(super) async fn monitor_active_session(
                                         }
                                     }
                                 }
-                            }
-                            let handled = emit_aux_status_payload(
-                                &writer,
-                                "runtime-status-poll",
-                                &node,
-                                payload,
-                                &known_device_ids,
-                                &active_session_controls,
-                                &mut current_session_device_id,
-                                &active_session_command_sender,
-                            )
-                            .await?;
-                            if !handled {
-                                writer
-                                    .send(&Event::Log {
-                                        level: "info".to_string(),
-                                        message: "Polled runtime status characteristic changed.".to_string(),
-                                        details: Some(json!({
-                                            "peripheralId": node.peripheral_id,
-                                            "knownDeviceId": node.known_device_id,
-                                            "address": node.address,
-                                            "rawValue": raw,
-                                        })),
-                                    })
-                                    .await?;
+                                let handled = emit_aux_status_payload(
+                                    &writer,
+                                    "runtime-status-poll",
+                                    &node,
+                                    payload,
+                                    &known_device_ids,
+                                    &active_session_controls,
+                                    &mut current_session_device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await?;
+                                if !handled {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "info".to_string(),
+                                            message: "Polled runtime status characteristic changed.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": node.known_device_id,
+                                                "address": node.address,
+                                                "rawValue": raw,
+                                            })),
+                                        })
+                                        .await?;
+                                }
                             }
                         }
                     }
                 }
 
-                let history_status_readback = current_live_control
-                    .peripheral
-                    .read(&current_live_control.history_status_characteristic)
-                    .await
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
-                if history_status_readback != last_polled_history_status {
-                    last_polled_history_status = history_status_readback.clone();
-                    if let Some(raw) = history_status_readback {
-                        if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
-                            let handled = emit_aux_status_payload(
-                                &writer,
-                                "history-status-poll",
-                                &node,
-                                payload,
-                                &known_device_ids,
-                                &active_session_controls,
-                                &mut current_session_device_id,
-                                &active_session_command_sender,
-                            )
-                            .await?;
-                            if !handled {
-                                writer
-                                    .send(&Event::Log {
-                                        level: "info".to_string(),
-                                        message: "Polled history status characteristic changed.".to_string(),
-                                        details: Some(json!({
-                                            "peripheralId": node.peripheral_id,
-                                            "knownDeviceId": node.known_device_id,
-                                            "address": node.address,
-                                            "rawValue": raw,
-                                        })),
-                                    })
-                                    .await?;
+                if session_healthy_reported {
+                    let history_status_readback = read_characteristic_utf8(
+                        &current_live_control.peripheral,
+                        &current_live_control.history_status_characteristic,
+                    )
+                    .await;
+                    if history_status_readback != last_polled_history_status {
+                        last_polled_history_status = history_status_readback.clone();
+                        if let Some(raw) = history_status_readback {
+                            if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+                                let handled = emit_aux_status_payload(
+                                    &writer,
+                                    "history-status-poll",
+                                    &node,
+                                    payload,
+                                    &known_device_ids,
+                                    &active_session_controls,
+                                    &mut current_session_device_id,
+                                    &active_session_command_sender,
+                                )
+                                .await?;
+                                if !handled {
+                                    writer
+                                        .send(&Event::Log {
+                                            level: "info".to_string(),
+                                            message: "Polled history status characteristic changed.".to_string(),
+                                            details: Some(json!({
+                                                "peripheralId": node.peripheral_id,
+                                                "knownDeviceId": node.known_device_id,
+                                                "address": node.address,
+                                                "rawValue": raw,
+                                            })),
+                                        })
+                                        .await?;
+                                }
                             }
                         }
                     }
@@ -928,12 +1032,11 @@ pub(super) async fn monitor_active_session(
                     continue;
                 }
 
-                let raw_status_value = prepared
-                    .peripheral
-                    .read(&current_live_control.status_characteristic)
-                    .await
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                let raw_status_value = read_characteristic_utf8(
+                    &prepared.peripheral,
+                    &current_live_control.status_characteristic,
+                )
+                .await;
                 let raw_status_payload = raw_status_value
                     .as_deref()
                     .and_then(|raw| serde_json::from_str::<RuntimeStatusPayload>(raw).ok());
@@ -991,27 +1094,20 @@ pub(super) async fn monitor_active_session(
                                 &active_session_command_sender,
                             )
                             .await?;
-                            if !telemetry_subscribed {
-                                emit_handshake_step(
-                                    &writer,
-                                    config.verbose_logging,
-                                    &node,
-                                    &reconnect,
-                                    "subscribing to telemetry after direct runtime status verification",
-                                )
+                            writer
+                                .send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: "Runtime status token verification established the requested app session without requiring a post-bootstrap control write probe.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "verifiedSessionId": current_app_session_id,
+                                        "rawStatusValue": raw_status_value,
+                                        "bootId": status.boot_id,
+                                    })),
+                                })
                                 .await?;
-                                prepared
-                                    .peripheral
-                                    .subscribe(&prepared.telemetry_characteristic)
-                                    .await
-                                    .with_context(|| {
-                                        format!(
-                                            "telemetry subscribe after direct runtime status verification failed for {}",
-                                            node.label
-                                        )
-                                    })?;
-                                telemetry_subscribed = true;
-                            }
                             session_healthy_reported = true;
                             lease_heartbeat_enabled = true;
                             report_reconnect_completed(
@@ -1080,27 +1176,20 @@ pub(super) async fn monitor_active_session(
                                 &active_session_command_sender,
                             )
                             .await?;
-                            if !telemetry_subscribed {
-                                emit_handshake_step(
-                                    &writer,
-                                    config.verbose_logging,
-                                    &node,
-                                    &reconnect,
-                                    "subscribing to telemetry after adopting the existing board session",
-                                )
+                            writer
+                                .send(&Event::Log {
+                                    level: "info".to_string(),
+                                    message: "Runtime status token verification adopted the board's live app session without requiring a post-bootstrap control write probe.".to_string(),
+                                    details: Some(json!({
+                                        "peripheralId": node.peripheral_id,
+                                        "knownDeviceId": node.known_device_id,
+                                        "address": node.address,
+                                        "adoptedSessionId": session_id,
+                                        "rawStatusValue": raw_status_value,
+                                        "bootId": status.boot_id,
+                                    })),
+                                })
                                 .await?;
-                                prepared
-                                    .peripheral
-                                    .subscribe(&prepared.telemetry_characteristic)
-                                    .await
-                                    .with_context(|| {
-                                        format!(
-                                            "telemetry subscribe after adopting the existing board session failed for {}",
-                                            node.label
-                                        )
-                                    })?;
-                                telemetry_subscribed = true;
-                            }
                             active_app_session_id = session_id;
                             let _ = session_nonce;
                             session_healthy_reported = true;
@@ -1121,62 +1210,6 @@ pub(super) async fn monitor_active_session(
                         }
                         RuntimeSessionStatusDisposition::Ignore => {}
                     }
-                }
-
-                if !handshake_control_path_recovered
-                    && prepared.peripheral.is_connected().await.unwrap_or(false)
-                {
-                    writer
-                        .send(&Event::Log {
-                            level: "warn".to_string(),
-                            message: "The requested app session is still not visible after retry; refreshing the active control path and replaying app-session begin once before failing.".to_string(),
-                            details: Some(json!({
-                                "peripheralId": node.peripheral_id,
-                                "knownDeviceId": node.known_device_id,
-                                "address": node.address,
-                                "expectedSessionId": current_app_session_id,
-                                "rawStatusValue": raw_status_value,
-                            })),
-                        })
-                        .await?;
-                    promote_active_session_control_path(
-                        &writer,
-                        &node,
-                        &reconnect,
-                        &config,
-                        &prepared.peripheral,
-                        &mut current_live_control,
-                        &current_app_session_id,
-                        &current_app_session_nonce,
-                        &active_session_controls,
-                        &current_session_device_id,
-                        &active_session_command_sender,
-                    )
-                    .await?;
-                    let write_guard = current_live_control.write_lock.lock().await;
-                    let replay_begin_result = send_app_session_begin(
-                        &current_live_control.peripheral,
-                        &current_live_control.characteristic,
-                        &current_app_session_nonce,
-                        &current_app_session_id,
-                    )
-                    .await;
-                    drop(write_guard);
-                    replay_begin_result.with_context(|| {
-                        format!(
-                            "app-session begin replay after active control-path refresh failed for {}",
-                            node.label
-                        )
-                    })?;
-                    handshake_control_path_recovered = true;
-                    session_begin_retry_count = 0;
-                    last_polled_runtime_status = None;
-                    session_health_sleep.as_mut().reset(
-                        (Instant::now()
-                            + Duration::from_millis(monitor_config.session_health_ack_timeout_ms))
-                        .into(),
-                    );
-                    continue;
                 }
 
                 writer
@@ -1258,18 +1291,36 @@ pub(super) async fn monitor_active_session(
                 if !first_lease_logged {
                     first_lease_logged = true;
                     sleep(Duration::from_millis(1200)).await;
-                    let runtime_status_readback = current_live_control
-                        .peripheral
-                        .read(&current_live_control.status_characteristic)
-                        .await
-                        .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok());
-                    let history_status_readback = current_live_control
-                        .peripheral
-                        .read(&current_live_control.history_status_characteristic)
-                        .await
-                        .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                    let runtime_status_readback = read_characteristic_utf8(
+                        &current_live_control.peripheral,
+                        &current_live_control.status_characteristic,
+                    )
+                    .await;
+                    let history_status_readback = read_characteristic_utf8(
+                        &current_live_control.peripheral,
+                        &current_live_control.history_status_characteristic,
+                    )
+                    .await;
+                    let refreshed_runtime_status_readback =
+                        if current_live_control.peripheral.discover_services().await.is_ok() {
+                            read_characteristic_utf8(
+                                &current_live_control.peripheral,
+                                &current_live_control.status_characteristic,
+                            )
+                            .await
+                        } else {
+                            None
+                        };
+                    let refreshed_history_status_readback =
+                        if current_live_control.peripheral.discover_services().await.is_ok() {
+                            read_characteristic_utf8(
+                                &current_live_control.peripheral,
+                                &current_live_control.history_status_characteristic,
+                            )
+                            .await
+                        } else {
+                            None
+                        };
                     writer
                         .send(&Event::Log {
                             level: "info".to_string(),
@@ -1281,6 +1332,8 @@ pub(super) async fn monitor_active_session(
                                 "sessionId": active_app_session_id,
                                 "runtimeStatusValue": runtime_status_readback,
                                 "historyStatusValue": history_status_readback,
+                                "runtimeStatusValueAfterServiceRefresh": refreshed_runtime_status_readback,
+                                "historyStatusValueAfterServiceRefresh": refreshed_history_status_readback,
                             })),
                         })
                         .await?;
@@ -1294,16 +1347,34 @@ pub(super) async fn monitor_active_session(
                     let delayed_known_device_id = current_session_device_id.clone();
                     tokio::spawn(async move {
                         sleep(Duration::from_millis(4000)).await;
-                        let runtime_status_readback = delayed_peripheral
-                            .read(&delayed_status_characteristic)
-                            .await
-                            .ok()
-                            .and_then(|bytes| String::from_utf8(bytes).ok());
-                        let history_status_readback = delayed_peripheral
-                            .read(&delayed_history_status_characteristic)
-                            .await
-                            .ok()
-                            .and_then(|bytes| String::from_utf8(bytes).ok());
+                        let runtime_status_readback =
+                            read_characteristic_utf8(&delayed_peripheral, &delayed_status_characteristic)
+                                .await;
+                        let history_status_readback = read_characteristic_utf8(
+                            &delayed_peripheral,
+                            &delayed_history_status_characteristic,
+                        )
+                        .await;
+                        let refreshed_runtime_status_readback =
+                            if delayed_peripheral.discover_services().await.is_ok() {
+                                read_characteristic_utf8(
+                                    &delayed_peripheral,
+                                    &delayed_status_characteristic,
+                                )
+                                .await
+                            } else {
+                                None
+                            };
+                        let refreshed_history_status_readback =
+                            if delayed_peripheral.discover_services().await.is_ok() {
+                                read_characteristic_utf8(
+                                    &delayed_peripheral,
+                                    &delayed_history_status_characteristic,
+                                )
+                                .await
+                            } else {
+                                None
+                            };
                         let _ = delayed_writer
                             .send(&Event::Log {
                                 level: "info".to_string(),
@@ -1316,6 +1387,8 @@ pub(super) async fn monitor_active_session(
                                     "address": delayed_node.address,
                                     "runtimeStatusValue": runtime_status_readback,
                                     "historyStatusValue": history_status_readback,
+                                    "runtimeStatusValueAfterServiceRefresh": refreshed_runtime_status_readback,
+                                    "historyStatusValueAfterServiceRefresh": refreshed_history_status_readback,
                                 })),
                             })
                             .await;
@@ -1352,7 +1425,10 @@ pub(super) async fn monitor_active_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_runtime_session_status, RuntimeSessionStatusDisposition};
+    use super::{
+        classify_runtime_session_status, normalize_characteristic_json,
+        RuntimeSessionStatusDisposition,
+    };
     use crate::protocol::RuntimeStatusPayload;
 
     fn app_session_online_status(
@@ -1397,5 +1473,45 @@ mod tests {
                 session_nonce: "nonce-live".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn bench_runtime_status_payload_classifies_as_observed_different() {
+        let raw = r#"{"type":"app-session-online","deviceId":"nrf52-61f477409dac12c0","bootId":"nrf52-61f477409dac12c0-5a40ac4e","deviceName":"GymMotion-ac12c0-s440a5ec0","sessionId":"440a5ec000664999","sessionNonce":"757668f885ea49c5","hm":3,"hp":0,"ph":0,"ha":731}"#;
+        let status: RuntimeStatusPayload =
+            serde_json::from_str(raw).expect("bench runtime status should parse");
+
+        assert_eq!(
+            classify_runtime_session_status(&status, "95897ba76e494eb0", "ignored-nonce"),
+            RuntimeSessionStatusDisposition::ObservedDifferent {
+                session_id: "440a5ec000664999".to_string(),
+                session_nonce: "757668f885ea49c5".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalizes_characteristic_json_with_trailing_nuls() {
+        let raw =
+            "{\"type\":\"app-session-online\",\"sessionId\":\"session-live\",\"sessionNonce\":\"nonce-live\"}\0\0";
+        let normalized =
+            normalize_characteristic_json(raw).expect("characteristic json should normalize");
+        let status: RuntimeStatusPayload =
+            serde_json::from_str(&normalized).expect("trimmed runtime status should parse");
+
+        assert_eq!(status.session_id.as_deref(), Some("session-live"));
+        assert_eq!(status.session_nonce.as_deref(), Some("nonce-live"));
+    }
+
+    #[test]
+    fn normalizes_characteristic_json_with_prefix_and_suffix_noise() {
+        let raw = "noise:{\"type\":\"app-session-online\",\"sessionId\":\"session-live\",\"sessionNonce\":\"nonce-live\"}\0tail";
+        let normalized =
+            normalize_characteristic_json(raw).expect("characteristic json should normalize");
+        let status: RuntimeStatusPayload =
+            serde_json::from_str(&normalized).expect("normalized runtime status should parse");
+
+        assert_eq!(status.session_id.as_deref(), Some("session-live"));
+        assert_eq!(status.session_nonce.as_deref(), Some("nonce-live"));
     }
 }

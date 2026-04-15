@@ -151,13 +151,10 @@ impl Peripheral {
                 let mut adv_name_guard = self.shared.advertisement_name.write().unwrap();
                 *adv_name_guard = Some(name_str.clone());
                 drop(adv_name_guard);
-                // Also use as local_name fallback if we don't have one yet
-                let local_name_guard = self.shared.local_name.read().unwrap();
-                if local_name_guard.is_none() {
-                    drop(local_name_guard);
-                    let mut local_name_guard = self.shared.local_name.write().unwrap();
-                    *local_name_guard = Some(name_str);
-                }
+                // Keep local_name aligned with the latest advertisement identity so reconnect
+                // classification does not inherit an older cached GAP/device name.
+                let mut local_name_guard = self.shared.local_name.write().unwrap();
+                *local_name_guard = Some(name_str);
             }
         }
         if let Ok(manufacturer_data) = advertisement.ManufacturerData() {
@@ -315,6 +312,18 @@ impl Peripheral {
         }
     }
 
+    fn clear_advertised_state(&self) {
+        *self.shared.address_type.write().unwrap() = None;
+        *self.shared.local_name.write().unwrap() = None;
+        *self.shared.advertisement_name.write().unwrap() = None;
+        *self.shared.last_tx_power_level.write().unwrap() = None;
+        *self.shared.last_rssi.write().unwrap() = None;
+        self.shared.latest_manufacturer_data.write().unwrap().clear();
+        self.shared.latest_service_data.write().unwrap().clear();
+        self.shared.services.write().unwrap().clear();
+        *self.shared.class.write().unwrap() = None;
+    }
+
     fn is_closed_handle_error(error: &Error) -> bool {
         error.to_string().contains("The object has been closed.")
     }
@@ -450,10 +459,12 @@ impl ApiPeripheral for Peripheral {
         .await?;
 
         device.connect().await?;
-        // Query the system-cached device name (GAP name) and update local_name
+        // Query the system-cached device name (GAP name) only as a fallback. Reconnect identity
+        // should come from advertisements rather than a stale cached device name.
         if let Ok(name) = device.name() {
             let name_str = name.to_string();
-            if !name_str.is_empty() {
+            let has_advertisement_name = self.shared.advertisement_name.read().unwrap().is_some();
+            if !name_str.is_empty() && !has_advertisement_name {
                 let mut local_name_guard = self.shared.local_name.write().unwrap();
                 *local_name_guard = Some(name_str);
             }
@@ -470,6 +481,7 @@ impl ApiPeripheral for Peripheral {
         // We need to clear the services because if this device is re-connected,
         // the cached service objects will no longer be valid (they must be refreshed).
         self.shared.ble_services.clear();
+        self.clear_advertised_state();
         let mut device = self.shared.device.lock().await;
         if let Some(existing_device) = device.take() {
             if let Err(error) = existing_device.disconnect().await {
@@ -493,6 +505,7 @@ impl ApiPeripheral for Peripheral {
             // fresh handles on every discovery pass.
             self.shared.ble_services.clear();
             let gatt_services = device.discover_services().await?;
+            let mut characteristic_discovery_error: Option<Error> = None;
             for service in gatt_services {
                 let uuid = utils::to_uuid(&service.Uuid().unwrap());
                 match BLEDevice::get_characteristics(service).await {
@@ -548,8 +561,22 @@ impl ApiPeripheral for Peripheral {
                     }
                     Err(e) => {
                         warn!("get_characteristics_async {:?}", e);
+                        if characteristic_discovery_error.is_none() {
+                            characteristic_discovery_error = Some(Error::RuntimeError(format!(
+                                "characteristic discovery failed for service {uuid}: {e}"
+                            )));
+                        }
                     }
                 }
+            }
+            if let Some(error) = characteristic_discovery_error {
+                self.shared.ble_services.clear();
+                return Err(error);
+            }
+            if self.shared.ble_services.is_empty() {
+                return Err(Error::RuntimeError(
+                    "discover_services completed without any usable GATT services".into(),
+                ));
             }
             return Ok(());
         }

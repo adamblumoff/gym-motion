@@ -197,6 +197,7 @@ pub(super) async fn handle_central_event(
                         shutdown,
                         peripheral,
                         node.clone(),
+                        candidate.advertised_session_id.clone(),
                         rule_id,
                         next_attempt,
                         format!(
@@ -211,6 +212,7 @@ pub(super) async fn handle_central_event(
                             "runtimeServiceMatched": candidate.classification.runtime_service_matched,
                             "approvedIdentityMatched": candidate.classification.approved_identity_matched,
                             "namePrefixMatched": candidate.classification.name_prefix_matched,
+                            "advertisedSessionId": candidate.advertised_session_id,
                             "sightingsInEpoch": device_record
                                 .as_ref()
                                 .map(|record| record.sightings_in_epoch),

@@ -292,6 +292,8 @@ String createRuntimeReadyPayload() {
     "\",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"bootUptimeMs\":" + String(millis()) +
     ",\"notifyMask\":" + String(runtimeNotifyMask) +
+    ",\"rcw\":" + String(runtimeControlWriteCount) +
+    ",\"hcw\":" + String(historyControlWriteCount) +
     ",\"connectionEpoch\":" + String(runtimeConnectionEpoch) +
     ",\"disconnectCount\":" + String(runtimeDisconnectCount) + "}";
 }
@@ -428,6 +430,25 @@ void notifyCurrentRuntimeStatus() {
   notifyRuntimeCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
 }
 
+void writeCurrentStatusSnapshots() {
+  if (runtimeStatusCharacteristic != nullptr) {
+    if (runtimeAppSessionConnected &&
+        runtimeAppSessionId.length() > 0 &&
+        runtimeAppSessionNonce.length() > 0) {
+      writeCharacteristicValue(
+        runtimeStatusCharacteristic,
+        createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce)
+      );
+    } else {
+      writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+    }
+  }
+
+  if (historyStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
+  }
+}
+
 String createRuntimeAppSessionOnlinePayload(
   const String& sessionId,
   const String& sessionNonce
@@ -436,13 +457,16 @@ String createRuntimeAppSessionOnlinePayload(
   return
     "{\"type\":\"app-session-online\",\"deviceId\":\"" + escapeJsonString(activeDeviceId()) +
     "\",\"bootId\":\"" + escapeJsonString(bootId) +
+    "\",\"deviceName\":\"" + escapeJsonString(createBleDeviceName()) +
     "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
     "\",\"hm\":" + String(runtimeNotifyMask) +
     ",\"hp\":" + String(pendingHistorySyncRequest ? 1 : 0) +
     ",\"ph\":" + String(static_cast<int>(historyWorkerState.phase)) +
     ",\"ha\":" + String(ackedHistorySequence) +
-    ",\"hh\":" + String(highWaterSequence) + "}";
+    ",\"hh\":" + String(highWaterSequence) +
+    ",\"rcw\":" + String(runtimeControlWriteCount) +
+    ",\"hcw\":" + String(historyControlWriteCount) + "}";
 }
 
 void sendRuntimeAppSessionOnline(
@@ -450,18 +474,10 @@ void sendRuntimeAppSessionOnline(
   const String& sessionNonce,
   int32_t notifyConnHandle
 ) {
+  (void)notifyConnHandle;
   String payload = createRuntimeAppSessionOnlinePayload(sessionId, sessionNonce);
   writeCharacteristicValue(runtimeStatusCharacteristic, payload);
-  if (notifyConnHandle >= 0) {
-    notifyCharacteristicValueForConnection(
-      runtimeStatusCharacteristic,
-      static_cast<uint16_t>(notifyConnHandle),
-      payload
-    );
-    return;
-  }
-
-  notifyRuntimeCharacteristic(runtimeStatusCharacteristic, payload);
+  enqueueRuntimeStatusPayload(payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
@@ -544,23 +560,16 @@ void configureRuntimeAdvertisingPayload() {
   Bluefruit.Advertising.stop();
   Bluefruit.Advertising.clearData();
   Bluefruit.ScanResponse.clearData();
+  Bluefruit.setName(createBleDeviceName().c_str());
 
   if (!Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE)) {
     logAdvertisingSetupFailure("flags");
   }
 
-  if (!Bluefruit.Advertising.addTxPower()) {
-    logAdvertisingSetupFailure("tx_power");
-  }
-
-  // Bluefruit can only encode a single 128-bit service UUID per advertising field.
-  // Reconnect depends on the runtime service being visible during rediscovery, so
-  // keep that UUID in the primary advertising packet and leave the name in scan response.
-  if (!Bluefruit.Advertising.addService(runtimeService)) {
-    logAdvertisingSetupFailure("runtime service");
-  }
-
-  if (!Bluefruit.ScanResponse.addName()) {
+  // Put the reconnect token directly into the primary advertisement local name. On Windows this
+  // is the most dependable identity surface during reconnect scans, and it fits in the 31-byte
+  // payload budget without auxiliary fields.
+  if (!Bluefruit.Advertising.addName()) {
     logAdvertisingSetupFailure("device name");
   }
 
@@ -627,6 +636,16 @@ void resetRuntimeAppSessionState() {
   lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
+  resetRuntimeTransportBuffers();
+  if (runtimeStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  }
+  if (historyStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
+  }
+}
+
+void resetRuntimeTransportBuffers() {
   runtimeCommandBuffer = "";
   historyCommandBuffer = "";
   runtimeCommandFramed = false;
@@ -642,12 +661,6 @@ void resetRuntimeAppSessionState() {
   cancelHistoryWorker();
   lastCompletedHistoryRequestId = "";
   lastAutoHistoryDecisionMessage = "";
-  if (runtimeStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
-  }
-  if (historyStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
-  }
 }
 
 void armRuntimeBootstrapWatchdog(const String& message) {
@@ -756,12 +769,13 @@ void noteRuntimeAppSessionExpired(unsigned long timestamp) {
 void noteRuntimeTransportDisconnected(unsigned long timestamp) {
   const bool hadSession = runtimeAppSessionConnected || runtimeAppSessionId.length() > 0;
   runtimeDisconnectCount += 1;
-  resetRuntimeAppSessionState();
   runtimeBleConnIdKnown = false;
   runtimeBleConnId = 0;
 
   logRuntimeTransportEvent(
-    "BLE runtime transport disconnected from the Windows app."
+    hadSession
+      ? "BLE runtime transport disconnected from the Windows app; keeping the app session alive until the lease expires."
+      : "BLE runtime transport disconnected from the Windows app."
   );
 
   if (!hadSession) {
@@ -771,7 +785,7 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
   journalNodeLog(
     "warn",
     "runtime.app_session.offline",
-    "BLE runtime transport disconnected from the Windows app.",
+    "BLE runtime transport disconnected from the Windows app; keeping the app session alive until the lease expires.",
     timestamp
   );
 }
@@ -961,7 +975,12 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       return;
     }
 
-    if (runtimeAppSessionId != sessionId) {
+    const bool shortReconnectToken = sessionId.length() == 8;
+    const bool sessionMatches = shortReconnectToken
+      ? runtimeAppSessionId.startsWith(sessionId)
+      : runtimeAppSessionId == sessionId;
+
+    if (!sessionMatches) {
       journalNodeLog(
         "warn",
         "runtime.app_session.invalid",
@@ -977,7 +996,7 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     }
 
     markRuntimeAppSessionOnline(
-      sessionId,
+      runtimeAppSessionId,
       runtimeAppSessionNonce,
       expiresInMs,
       millis(),
@@ -1163,6 +1182,7 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   }
 
   runtimeControlWriteCount += 1;
+  writeCurrentStatusSnapshots();
 
   if (controlType.length() > 0) {
     sendRuntimeControlDebugStatus("write-callback", controlType);
@@ -1268,6 +1288,7 @@ void handleHistoryControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
   }
 
   historyControlWriteCount += 1;
+  writeCurrentStatusSnapshots();
   enqueueBoardLogStatus(
     "history-control",
     "History control write callback entered len=" + String(value.length())
@@ -1364,13 +1385,13 @@ void handleRuntimeTelemetryCccd(uint16_t conn_hdl, BLECharacteristic* characteri
 
 void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
   ensureRuntimeConnectionInitialized(conn_hdl, "runtime status cccd");
-  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
-  if (notificationsEnabled) {
+  const bool deliveryEnabled = (cccd_value & 0x0003) != 0;
+  if (deliveryEnabled) {
     runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_STATUS;
   } else {
     runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_STATUS);
   }
-  if (!notificationsEnabled) {
+  if (!deliveryEnabled) {
     return;
   }
 
@@ -1379,31 +1400,38 @@ void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristi
       runtimeAppSessionNonce.length() > 0) {
     const String payload =
       createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce);
-    notifyCharacteristicValueForConnection(characteristic, conn_hdl, payload);
+    writeCharacteristicValue(characteristic, payload);
+    enqueueRuntimeStatusPayload(payload);
     return;
   }
 
-  notifyCharacteristicValueForConnection(characteristic, conn_hdl, createRuntimeReadyPayload());
+  const String payload = createRuntimeReadyPayload();
+  writeCharacteristicValue(characteristic, payload);
+  enqueueRuntimeStatusPayload(payload);
 }
 
 void handleHistoryStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristic, uint16_t cccd_value) {
   ensureRuntimeConnectionInitialized(conn_hdl, "history status cccd");
-  const bool notificationsEnabled = (cccd_value & 0x0001) != 0;
-  if (notificationsEnabled) {
+  const bool deliveryEnabled = (cccd_value & 0x0003) != 0;
+  if (deliveryEnabled) {
     runtimeNotifyMask |= RUNTIME_NOTIFY_MASK_HISTORY;
   } else {
     runtimeNotifyMask &= static_cast<uint8_t>(~RUNTIME_NOTIFY_MASK_HISTORY);
   }
 
   writeCharacteristicValue(characteristic, createRuntimeReadyPayload());
-  if (!notificationsEnabled) {
+  if (!deliveryEnabled) {
     return;
   }
 
-  notifyCharacteristicValueForConnection(characteristic, conn_hdl, createRuntimeReadyPayload());
+  enqueueHistoryStatusPayload(createRuntimeReadyPayload());
 }
 
 void initializeRuntimeConnection(uint16_t conn_handle) {
+  const bool hasActiveSession =
+    runtimeAppSessionConnected &&
+    runtimeAppSessionId.length() > 0 &&
+    runtimeAppSessionNonce.length() > 0;
   markNodeConnected();
   runtimeConnectionEpoch += 1;
   provisioningBleConnected = true;
@@ -1414,10 +1442,14 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
   runtimeBleConnIdKnown = true;
   runtimeBleConnId = conn_handle;
   runtimeNotifyMask = 0;
-  resetRuntimeAppSessionState();
-  armRuntimeBootstrapWatchdog(
-    "BLE client connected; waiting for runtime or provisioning traffic."
-  );
+  resetRuntimeTransportBuffers();
+  if (hasActiveSession) {
+    disarmRuntimeBootstrapWatchdog();
+  } else {
+    armRuntimeBootstrapWatchdog(
+      "BLE client connected; waiting for runtime or provisioning traffic."
+    );
+  }
 
   BLEConnection* connection = Bluefruit.Connection(conn_handle);
   if (connection != nullptr) {
@@ -1427,7 +1459,14 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
   }
 
   sendProvisioningReady();
-  writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  if (hasActiveSession) {
+    writeCharacteristicValue(
+      runtimeStatusCharacteristic,
+      createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce)
+    );
+  } else {
+    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  }
   writeCharacteristicValue(historyStatusCharacteristic, createRuntimeReadyPayload());
   sendTelemetry(lastReportedDelta, millis(), true, false);
 }
@@ -1547,7 +1586,7 @@ void setupBle() {
 
   if (!setupBleCharacteristic(
     runtimeStatusCharacteristicImpl,
-    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY | CHR_PROPS_INDICATE,
     SECMODE_OPEN,
     SECMODE_NO_ACCESS,
     244
@@ -1582,7 +1621,7 @@ void setupBle() {
 
   if (!setupBleCharacteristic(
     historyStatusCharacteristicImpl,
-    CHR_PROPS_READ | CHR_PROPS_NOTIFY,
+    CHR_PROPS_READ | CHR_PROPS_NOTIFY | CHR_PROPS_INDICATE,
     SECMODE_OPEN,
     SECMODE_NO_ACCESS,
     244

@@ -38,6 +38,7 @@ fn short_session_token() -> String {
 pub(super) async fn connect_and_stream(
     peripheral: Peripheral,
     node: DiscoveredNode,
+    advertised_session_id: Option<String>,
     writer: EventWriter,
     config: Config,
     allowed_nodes: Arc<RwLock<Vec<ApprovedNodeRule>>>,
@@ -53,6 +54,16 @@ pub(super) async fn connect_and_stream(
     let app_session_id = short_session_token();
     let app_session_nonce = short_session_token();
     let reconnect_started_at = Instant::now();
+    let prepare_config = PrepareSessionConfig {
+        gatt_setup_retry_attempts: GATT_SETUP_RETRY_ATTEMPTS,
+        gatt_setup_retry_delay_ms: GATT_SETUP_RETRY_DELAY_MS,
+        service_discovery_retry_attempts: SERVICE_DISCOVERY_RETRY_ATTEMPTS,
+        post_gatt_ready_settle_ms: POST_GATT_READY_SETTLE_MS,
+        pre_session_setup_attempts: PRE_SESSION_SETUP_ATTEMPTS,
+        pre_session_setup_retry_delay_ms: PRE_SESSION_SETUP_RETRY_DELAY_MS,
+        cold_boot_ready_uptime_ms: COLD_BOOT_READY_UPTIME_MS,
+        cold_boot_ready_max_wait_ms: COLD_BOOT_READY_MAX_WAIT_MS,
+    };
 
     if !is_approved(&node, &allowed_nodes.read().await) {
         return Ok(None);
@@ -74,16 +85,7 @@ pub(super) async fn connect_and_stream(
         &writer,
         &config,
         &reconnect,
-        PrepareSessionConfig {
-            gatt_setup_retry_attempts: GATT_SETUP_RETRY_ATTEMPTS,
-            gatt_setup_retry_delay_ms: GATT_SETUP_RETRY_DELAY_MS,
-            service_discovery_retry_attempts: SERVICE_DISCOVERY_RETRY_ATTEMPTS,
-            post_gatt_ready_settle_ms: POST_GATT_READY_SETTLE_MS,
-            pre_session_setup_attempts: PRE_SESSION_SETUP_ATTEMPTS,
-            pre_session_setup_retry_delay_ms: PRE_SESSION_SETUP_RETRY_DELAY_MS,
-            cold_boot_ready_uptime_ms: COLD_BOOT_READY_UPTIME_MS,
-            cold_boot_ready_max_wait_ms: COLD_BOOT_READY_MAX_WAIT_MS,
-        },
+        prepare_config,
     )
     .await?;
 
@@ -100,6 +102,7 @@ pub(super) async fn connect_and_stream(
         command_sender,
         app_session_id,
         app_session_nonce,
+        advertised_session_id,
         reconnect_started_at,
         MonitorSessionConfig {
             connection_health_poll_ms: CONNECTION_HEALTH_POLL_MS,

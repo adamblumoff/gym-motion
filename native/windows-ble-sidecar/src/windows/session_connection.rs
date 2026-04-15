@@ -146,6 +146,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
     shutdown: &watch::Receiver<bool>,
     peripheral: Peripheral,
     node: DiscoveredNode,
+    advertised_session_id: Option<String>,
     rule_id: String,
     next_attempt: u32,
     reconnect_log_message: String,
@@ -219,6 +220,7 @@ pub(super) async fn spawn_reconnect_for_discovered_node(
         let result = connect_and_stream(
             peripheral,
             node_for_task.clone(),
+            advertised_session_id,
             writer_clone.clone(),
             config_clone,
             allowed_nodes_clone,
@@ -362,6 +364,7 @@ pub(super) async fn spawn_manual_pair_for_candidate(
         let result = connect_and_stream(
             peripheral,
             node_for_task.clone(),
+            None,
             writer_clone.clone(),
             config_clone,
             allowed_nodes_clone,
@@ -475,6 +478,7 @@ pub(super) async fn recover_visible_approved_node(
             shutdown,
             peripheral,
             candidate.node.clone(),
+            candidate.advertised_session_id.clone(),
             rule_id.to_string(),
             next_attempt,
             format!(
@@ -489,6 +493,7 @@ pub(super) async fn recover_visible_approved_node(
                 "runtimeServiceMatched": candidate.classification.runtime_service_matched,
                 "approvedIdentityMatched": candidate.classification.approved_identity_matched,
                 "namePrefixMatched": candidate.classification.name_prefix_matched,
+                "advertisedSessionId": candidate.advertised_session_id,
                 "manualRecovery": manual_recovery,
                 "operatorVisibleDirectConnect": allow_name_prefix_connect,
                 "immediateVisibleMatch": true,

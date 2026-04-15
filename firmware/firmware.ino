@@ -187,7 +187,6 @@ struct BleTxQueue {
 enum class HistoryWorkerPhase {
   Idle,
   Streaming,
-  AwaitingAck,
 };
 
 struct HistoryWorkerState {
@@ -401,7 +400,11 @@ String createBleDeviceName() {
   const int suffixStart = hardwareId.length() > 6
     ? static_cast<int>(hardwareId.length() - 6)
     : 0;
-  return "GymMotion-" + hardwareId.substring(suffixStart);
+  String name = "GymMotion-" + hardwareId.substring(suffixStart);
+  if (runtimeAppSessionId.length() >= 8 && runtimeAppSessionNonce.length() > 0) {
+    name += "-s" + runtimeAppSessionId.substring(0, 8);
+  }
+  return name;
 }
 
 String firmwareVersionString() {
