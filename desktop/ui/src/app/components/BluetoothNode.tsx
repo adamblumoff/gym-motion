@@ -29,6 +29,8 @@ export function BluetoothNode({
   const showReconnectPrompt =
     node.connectionState === 'disconnected' &&
     node.reconnectAwaitingDecision;
+  const lastTelemetryLabel = formatTelemetryLabel(node.lastTelemetryAt);
+  const deltaLabel = node.lastDelta === null ? '--' : String(node.lastDelta);
 
   useEffect(() => {
     if (node.isMoving) {
@@ -61,6 +63,20 @@ export function BluetoothNode({
                 )}
               </div>
               <div className="text-xs text-zinc-500 font-mono">{node.macAddress ?? 'Unknown address'}</div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                <span>
+                  State:{' '}
+                  <span className={node.lastState === 'moving' ? 'text-blue-400' : 'text-zinc-300'}>
+                    {node.lastState}
+                  </span>
+                </span>
+                <span>
+                  Delta: <span className="text-zinc-300">{deltaLabel}</span>
+                </span>
+                <span>
+                  Telemetry: <span className="text-zinc-300">{lastTelemetryLabel}</span>
+                </span>
+              </div>
             </div>
           </div>
           <div className="flex flex-col items-end gap-2">
@@ -166,4 +182,22 @@ export function BluetoothNode({
       </div>
     </Card>
   );
+}
+
+function formatTelemetryLabel(lastTelemetryAt: string | null) {
+  if (!lastTelemetryAt) {
+    return 'none';
+  }
+
+  const parsed = new Date(lastTelemetryAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'invalid';
+  }
+
+  return parsed.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }

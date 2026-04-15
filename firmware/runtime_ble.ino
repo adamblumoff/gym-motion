@@ -446,7 +446,10 @@ String createRuntimeAppSessionOnlinePayload(
     "{\"type\":\"app-session-online\",\"bootId\":\"" + escapeJsonString(bootId) +
     "\",\"sessionId\":\"" + escapeJsonString(sessionId) +
     "\",\"sessionNonce\":\"" + escapeJsonString(sessionNonce) +
-    "\"}";
+    "\",\"bootUptimeMs\":" + String(millis()) +
+    ",\"notifyMask\":" + String(runtimeNotifyMask) +
+    ",\"rcw\":" + String(runtimeControlWriteCount) +
+    ",\"hcw\":" + String(historyControlWriteCount) + "}";
 }
 
 void sendRuntimeAppSessionOnline(
@@ -461,9 +464,7 @@ void sendRuntimeAppSessionOnline(
 }
 
 void logRuntimeTransportEvent(const String& message) {
-  Serial.print("[runtime] ");
-  Serial.println(message);
-  enqueueBoardLogStatus("runtime", message);
+  (void)message;
 }
 
 void logRuntimeControlFrame(const String& stage, const String& payload) {
@@ -742,14 +743,7 @@ void markRuntimeAppSessionOnline(
   }
   sendRuntimeAppSessionOnline(sessionId, sessionNonce, notifyConnHandle);
 
-  journalNodeLog(
-    "info",
-    "runtime.app_session.online",
-    "Windows app session lease is active.",
-    timestamp
-  );
-
-  maybeStartAutomaticHistorySync();
+  (void)timestamp;
 }
 
 void noteRuntimeAppSessionExpired(unsigned long timestamp) {
@@ -764,12 +758,7 @@ void noteRuntimeAppSessionExpired(unsigned long timestamp) {
     "Windows app session lease expired; dropping BLE client and resuming advertising."
   );
 
-  journalNodeLog(
-    "warn",
-    "runtime.app_session.expired",
-    "Windows app session lease expired; resetting BLE advertising.",
-    timestamp
-  );
+  (void)timestamp;
 }
 
 void noteRuntimeTransportDisconnected(unsigned long timestamp) {
@@ -788,12 +777,7 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
     return;
   }
 
-  journalNodeLog(
-    "warn",
-    "runtime.app_session.offline",
-    "BLE runtime transport disconnected from the Windows app; keeping the app session alive until the lease expires.",
-    timestamp
-  );
+  (void)timestamp;
 }
 
 void enforceRuntimeAppSessionLease() {
@@ -822,12 +806,6 @@ void enforceRuntimeAppSessionLease() {
 
   if (result.kind == firmware_runtime::LeaseEnforcementResultKind::BootstrapTimedOut) {
     logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
-    journalNodeLog(
-      "warn",
-      "runtime.app_session.missing",
-      "BLE client connected without runtime control traffic; dropping stale client.",
-      now
-    );
     logRuntimeTransportEvent(
       "BLE client never started a runtime session; dropping stale client."
     );
@@ -932,12 +910,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0 || sessionNonce.length() == 0) {
-      journalNodeLog(
-        "warn",
-        "runtime.app_session.invalid",
-        "Ignored combined app session begin command with missing session data.",
-        millis()
-      );
       return;
     }
 
@@ -961,24 +933,12 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     const unsigned long expiresInMs = command.expiresInMs;
 
     if (sessionId.length() == 0) {
-      journalNodeLog(
-        "warn",
-        "runtime.app_session.invalid",
-        "Ignored app session lease without a session id.",
-        millis()
-      );
       return;
     }
 
     if (!runtimeAppSessionConnected ||
         runtimeAppSessionId.length() == 0 ||
         runtimeAppSessionNonce.length() == 0) {
-      journalNodeLog(
-        "warn",
-        "runtime.app_session.invalid",
-        "Ignored app session lease without an active app session.",
-        millis()
-      );
       return;
     }
 
@@ -988,12 +948,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       : runtimeAppSessionId == sessionId;
 
     if (!sessionMatches) {
-      journalNodeLog(
-        "warn",
-        "runtime.app_session.invalid",
-        "Ignored app session lease for a different active session id.",
-        millis()
-      );
       logRuntimeTransportEvent(
         "Rejected app-session-lease for session " + sessionId +
         " because active session is " +
@@ -1025,21 +979,8 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     if (!runtimeAppSessionConnected ||
         runtimeAppSessionId.length() == 0 ||
         !sessionMatches) {
-      journalNodeLog(
-        "warn",
-        "runtime.app_session.end_ignored",
-        "Ignored app-session-end for a non-active session.",
-        millis()
-      );
       return;
     }
-
-    journalNodeLog(
-      "info",
-      "runtime.app_session.ended",
-      "Windows app session ended by client request.",
-      millis()
-    );
     logRuntimeTransportEvent(
       "Windows app requested runtime session teardown; disconnecting BLE transport."
     );

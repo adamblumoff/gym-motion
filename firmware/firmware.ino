@@ -64,9 +64,11 @@ const uint8_t STHS34PF80_MOT_FLAG = 0x02;
 const uint8_t STHS34PF80_ODR_POWER_DOWN = 0x00;
 const uint8_t STHS34PF80_ODR_15_HZ = 0x07;
 
-const unsigned long STOP_TIMEOUT_MS = 600;
 const unsigned long LOOP_DELAY_MS = 25;
-const unsigned long KEEPALIVE_INTERVAL_MS = 15000;
+const unsigned long KEEPALIVE_INTERVAL_MS = 1000;
+const int MOTION_DELTA_START_THRESHOLD = 180;
+const int MOTION_DELTA_STOP_THRESHOLD = 90;
+const unsigned long MOTION_DELTA_STOP_HOLD_MS = 900;
 const unsigned long OTA_DFU_HANDOFF_DELAY_MS = 750;
 // The current desktop runtime talks to this node through the Windows WinRT
 // sidecar handshake. Allow a little extra time for service discovery and the
@@ -486,9 +488,6 @@ void setup() {
   setupBle();
   Serial.println("[boot] finalize");
   finalizePendingRollback(true);
-  journalNodeLog("info", "device.boot", "BLE node booted.", millis());
-  journalMotionState(currentDetectedState, 0, millis());
-
   Serial.print("Hardware ID: ");
   Serial.println(hardwareId);
   Serial.print("Boot ID: ");
@@ -503,16 +502,10 @@ void setup() {
 void loop() {
   finishPendingRestart();
   enforceRuntimeAppSessionLease();
-  maybeStartAutomaticHistorySync();
-  processPendingHistorySyncRequest();
-  pumpHistoryWorker();
-  publishPendingHistoryControlDebug();
-  flushPersistedStateIfNeeded();
   processBleNotificationQueues();
   logConnectedRuntimeHeartbeat();
   logDisconnectedAdvertisingHeartbeat();
   updateMotionState();
-  flushPersistedStateIfNeeded();
   processBleNotificationQueues();
   delay(LOOP_DELAY_MS);
 }

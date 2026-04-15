@@ -14,6 +14,9 @@ export type BluetoothNodeData = {
   isConnected: boolean;
   connectionState: GatewayConnectionState;
   isMoving: boolean;
+  lastState: "moving" | "still";
+  lastDelta: number | null;
+  lastTelemetryAt: string | null;
   signalStrength: number | null;
   reconnectAttempt: number;
   reconnectAttemptLimit: number;

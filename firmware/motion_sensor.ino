@@ -1,8 +1,139 @@
+namespace {
+constexpr unsigned long SENSOR_I2C_TIMEOUT_US = 4000;
+constexpr unsigned long MOTION_SENSOR_RECOVERY_RETRY_MS = 1000;
+unsigned long nextMotionSensorRecoveryAt = 0;
+
+bool waitForTwimEvent(volatile uint32_t* eventRegister, volatile uint32_t* errorRegister) {
+  const unsigned long startedAt = micros();
+
+  while (*eventRegister == 0 && *errorRegister == 0) {
+    if (static_cast<unsigned long>(micros() - startedAt) >= SENSOR_I2C_TIMEOUT_US) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void recoverMotionSensorBus(const char* stage) {
+  Serial.print("STHS34PF80 bus recovery: ");
+  Serial.println(stage);
+  Wire.end();
+  delay(1);
+  Wire.begin();
+  Wire.setClock(100000);
+  motionSensorReady = false;
+  nextMotionSensorRecoveryAt = millis() + MOTION_SENSOR_RECOVERY_RETRY_MS;
+}
+
+bool twimWriteBytes(const uint8_t* data, size_t length, bool stopBit) {
+  NRF_TWIM0->EVENTS_ERROR = 0;
+  NRF_TWIM0->EVENTS_STOPPED = 0;
+  NRF_TWIM0->EVENTS_TXSTARTED = 0;
+  NRF_TWIM0->EVENTS_LASTTX = 0;
+  NRF_TWIM0->EVENTS_SUSPENDED = 0;
+  NRF_TWIM0->ADDRESS = STHS34PF80_ADDR;
+  NRF_TWIM0->TASKS_RESUME = 1;
+  NRF_TWIM0->TXD.PTR = reinterpret_cast<uint32_t>(data);
+  NRF_TWIM0->TXD.MAXCNT = length;
+  NRF_TWIM0->TASKS_STARTTX = 1;
+
+  if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_TXSTARTED, &NRF_TWIM0->EVENTS_ERROR)) {
+    return false;
+  }
+  NRF_TWIM0->EVENTS_TXSTARTED = 0;
+
+  if (length > 0) {
+    if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_LASTTX, &NRF_TWIM0->EVENTS_ERROR)) {
+      return false;
+    }
+  }
+  NRF_TWIM0->EVENTS_LASTTX = 0;
+
+  if (stopBit || NRF_TWIM0->EVENTS_ERROR) {
+    NRF_TWIM0->TASKS_STOP = 1;
+    if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_STOPPED, &NRF_TWIM0->EVENTS_ERROR)) {
+      return false;
+    }
+    NRF_TWIM0->EVENTS_STOPPED = 0;
+  } else {
+    NRF_TWIM0->TASKS_SUSPEND = 1;
+    if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_SUSPENDED, &NRF_TWIM0->EVENTS_ERROR)) {
+      return false;
+    }
+    NRF_TWIM0->EVENTS_SUSPENDED = 0;
+  }
+
+  if (NRF_TWIM0->EVENTS_ERROR) {
+    const uint32_t error = NRF_TWIM0->ERRORSRC;
+    NRF_TWIM0->EVENTS_ERROR = 0;
+    NRF_TWIM0->ERRORSRC = error;
+    return false;
+  }
+
+  return true;
+}
+
+bool twimReadBytes(uint8_t* data, size_t length) {
+  NRF_TWIM0->EVENTS_ERROR = 0;
+  NRF_TWIM0->EVENTS_STOPPED = 0;
+  NRF_TWIM0->EVENTS_RXSTARTED = 0;
+  NRF_TWIM0->EVENTS_LASTRX = 0;
+  NRF_TWIM0->ADDRESS = STHS34PF80_ADDR;
+  NRF_TWIM0->TASKS_RESUME = 1;
+  NRF_TWIM0->RXD.PTR = reinterpret_cast<uint32_t>(data);
+  NRF_TWIM0->RXD.MAXCNT = length;
+  NRF_TWIM0->TASKS_STARTRX = 1;
+
+  if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_RXSTARTED, &NRF_TWIM0->EVENTS_ERROR)) {
+    return false;
+  }
+  NRF_TWIM0->EVENTS_RXSTARTED = 0;
+
+  if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_LASTRX, &NRF_TWIM0->EVENTS_ERROR)) {
+    return false;
+  }
+  NRF_TWIM0->EVENTS_LASTRX = 0;
+
+  NRF_TWIM0->TASKS_STOP = 1;
+  if (!waitForTwimEvent(&NRF_TWIM0->EVENTS_STOPPED, &NRF_TWIM0->EVENTS_ERROR)) {
+    return false;
+  }
+  NRF_TWIM0->EVENTS_STOPPED = 0;
+
+  if (NRF_TWIM0->EVENTS_ERROR) {
+    const uint32_t error = NRF_TWIM0->ERRORSRC;
+    NRF_TWIM0->EVENTS_ERROR = 0;
+    NRF_TWIM0->ERRORSRC = error;
+    return false;
+  }
+
+  return true;
+}
+
+bool readSensorRegisterBytes(uint8_t reg, uint8_t* data, size_t length) {
+  if (!twimWriteBytes(&reg, 1, false)) {
+    recoverMotionSensorBus("register-address-write");
+    return false;
+  }
+
+  if (!twimReadBytes(data, length)) {
+    recoverMotionSensorBus("register-read");
+    return false;
+  }
+
+  return true;
+}
+}
+
 bool writeSensorRegister(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(STHS34PF80_ADDR);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  const uint8_t payload[] = { reg, value };
+  if (!twimWriteBytes(payload, sizeof(payload), true)) {
+    recoverMotionSensorBus("register-write");
+    return false;
+  }
+
+  return true;
 }
 
 bool writeSensorRegisterMasked(uint8_t reg, uint8_t mask, uint8_t value) {
@@ -12,32 +143,22 @@ bool writeSensorRegisterMasked(uint8_t reg, uint8_t mask, uint8_t value) {
 }
 
 uint8_t readSensorRegister8(uint8_t reg) {
-  Wire.beginTransmission(STHS34PF80_ADDR);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
+  uint8_t value = 0;
+  if (!readSensorRegisterBytes(reg, &value, 1)) {
     return 0;
   }
 
-  if (Wire.requestFrom(STHS34PF80_ADDR, static_cast<uint8_t>(1)) != 1) {
-    return 0;
-  }
-
-  return Wire.read();
+  return value;
 }
 
 int16_t readSensorRegister16(uint8_t reg) {
-  Wire.beginTransmission(STHS34PF80_ADDR);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
+  uint8_t value[2] = { 0, 0 };
+  if (!readSensorRegisterBytes(reg, value, sizeof(value))) {
     return 0;
   }
 
-  if (Wire.requestFrom(STHS34PF80_ADDR, static_cast<uint8_t>(2)) != 2) {
-    return 0;
-  }
-
-  const uint8_t low = Wire.read();
-  const uint8_t high = Wire.read();
+  const uint8_t low = value[0];
+  const uint8_t high = value[1];
   return static_cast<int16_t>((high << 8) | low);
 }
 
@@ -108,34 +229,16 @@ void logMotionSensorSample(
   unsigned long now,
   bool force = false
 ) {
-  const String message = createMotionSensorDebugMessage(
-    status,
-    dataReady,
-    funcStatus,
-    motionDetected,
-    presenceDetected,
-    motionValue,
-    presenceValue,
-    delta
-  );
-
-  if (!force &&
-      lastMotionSensorDebugAt > 0 &&
-      now - lastMotionSensorDebugAt < SENSOR_DEBUG_INTERVAL_MS) {
-  } else {
-    lastMotionSensorDebugAt = now;
-    Serial.print("[motion] ");
-    Serial.println(message);
-  }
-
-  if (!force &&
-      lastMotionSensorHistoryLogAt > 0 &&
-      now - lastMotionSensorHistoryLogAt < SENSOR_HISTORY_DEBUG_INTERVAL_MS) {
-    return;
-  }
-
-  lastMotionSensorHistoryLogAt = now;
-  journalNodeLog("debug", "sensor.motion.sample", message, now);
+  (void)status;
+  (void)dataReady;
+  (void)funcStatus;
+  (void)motionDetected;
+  (void)presenceDetected;
+  (void)motionValue;
+  (void)presenceValue;
+  (void)delta;
+  (void)now;
+  (void)force;
 }
 
 void setupMotionSensor() {
@@ -164,13 +267,20 @@ void setupMotionSensor() {
 }
 
 void updateMotionState() {
-  if (!motionSensorReady) {
-    return;
-  }
-
   const unsigned long now = millis();
-  if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
-    sendTelemetry(lastReportedDelta, now, false, false);
+  const bool keepaliveDue = now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS;
+
+  if (!motionSensorReady) {
+    if (pendingMotionUpdate || keepaliveDue) {
+      sendTelemetry(lastReportedDelta, now, pendingMotionUpdate, false);
+    }
+
+    if (nextMotionSensorRecoveryAt == 0 || now >= nextMotionSensorRecoveryAt) {
+      nextMotionSensorRecoveryAt = now + MOTION_SENSOR_RECOVERY_RETRY_MS;
+      setupMotionSensor();
+    }
+
+    return;
   }
 
   const uint8_t status = readSensorRegister8(STHS34PF80_REG_STATUS);
@@ -185,7 +295,6 @@ void updateMotionState() {
   if (!haveLastReading) {
     haveLastReading = true;
     lastMotionTime = now;
-    Serial.println("Calibrating STHS34PF80...");
     logMotionSensorSample(
       status,
       dataReady,
@@ -213,17 +322,23 @@ void updateMotionState() {
       delta,
       now
     );
+
+    if (pendingMotionUpdate || keepaliveDue) {
+      sendTelemetry(lastReportedDelta, now, pendingMotionUpdate, false);
+    }
+
     return;
   }
 
-  if (motionDetected || presenceDetected) {
+  const bool deltaCrossedStart = delta >= MOTION_DELTA_START_THRESHOLD;
+  const bool deltaClearedStop = delta <= MOTION_DELTA_STOP_THRESHOLD;
+
+  if (deltaCrossedStart) {
     lastMotionTime = now;
 
     if (strcmp(currentDetectedState, "moving") != 0) {
       currentDetectedState = "moving";
       pendingMotionUpdate = true;
-      journalMotionState(currentDetectedState, delta, now);
-      Serial.println("Detected -> MOVING");
       logMotionSensorSample(
         status,
         dataReady,
@@ -239,12 +354,11 @@ void updateMotionState() {
     }
   } else if (
     strcmp(currentDetectedState, "moving") == 0 &&
-    now - lastMotionTime > STOP_TIMEOUT_MS
+    deltaClearedStop &&
+    now - lastMotionTime > MOTION_DELTA_STOP_HOLD_MS
   ) {
     currentDetectedState = "still";
     pendingMotionUpdate = true;
-    journalMotionState(currentDetectedState, delta, now);
-    Serial.println("Detected -> STILL");
     logMotionSensorSample(
       status,
       dataReady,
@@ -271,7 +385,7 @@ void updateMotionState() {
     now
   );
 
-  if (pendingMotionUpdate || now - lastTelemetryAt >= KEEPALIVE_INTERVAL_MS) {
+  if (pendingMotionUpdate || keepaliveDue) {
     sendTelemetry(delta, now, pendingMotionUpdate, pendingMotionUpdate);
   }
 }
