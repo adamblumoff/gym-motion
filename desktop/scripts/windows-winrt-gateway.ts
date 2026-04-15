@@ -28,9 +28,10 @@ const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
+let latestDevicesMetadata = [];
 
 const runtimeServer = createGatewayRuntimeServer({
-  loadDevicesMetadata: async () => [],
+  loadDevicesMetadata: async () => latestDevicesMetadata,
   runtimeHost: config.runtimeHost,
   runtimePort: config.runtimePort,
   onControlCommand: handleDesktopControlCommand,
@@ -340,6 +341,23 @@ function normalizeAdapterState(adapterState) {
 async function handleDesktopControlCommand(command) {
   if (!command || typeof command !== "object") {
     throw new Error("Invalid control command.");
+  }
+
+  if (command.type === "set_devices_metadata") {
+    latestDevicesMetadata = Array.isArray(command.devices)
+      ? command.devices.filter(
+          (device) => device && typeof device === "object" && typeof device.id === "string",
+        )
+      : [];
+
+    for (const device of latestDevicesMetadata) {
+      emitRuntimeDeviceUpdated(device.id);
+    }
+    emitGatewayState();
+
+    return {
+      deviceCount: latestDevicesMetadata.length,
+    };
   }
 
   if (command.type !== "set_allowed_nodes" || !Array.isArray(command.nodes)) {
