@@ -194,6 +194,21 @@ bool enqueueRuntimeStatusPayload(const String& payload) {
   );
 }
 
+void publishRuntimeStatusPayload(const String& payload) {
+  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
+  enqueueRuntimeStatusPayload(payload);
+}
+
+void publishRuntimeTelemetryPayload(const String& payload) {
+  writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
+  enqueueBleTxMessage(
+    runtimeTxQueue,
+    runtimeTelemetryCharacteristic,
+    &runtimeBleConnected,
+    payload
+  );
+}
+
 bool processBleTxMessage(BleTxQueue& queue) {
   if (queue.length == 0) {
     return false;
@@ -341,8 +356,7 @@ void sendRuntimeAppSessionOnline(
 ) {
   (void)notifyConnHandle;
   String payload = createRuntimeAppSessionOnlinePayload(sessionId, sessionNonce);
-  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
-  enqueueRuntimeStatusPayload(payload);
+  publishRuntimeStatusPayload(payload);
 }
 
 void logRuntimeTransportEvent(const String& message) {
@@ -386,8 +400,7 @@ void sendRuntimeControlDebugStatus(const String& stage, const String& controlTyp
   }
 
   payload += "}";
-  writeCharacteristicValue(runtimeStatusCharacteristic, payload);
-  enqueueRuntimeStatusPayload(payload);
+  publishRuntimeStatusPayload(payload);
 }
 void logAdvertisingSetupFailure(const char* field) {
   markNodeBleFailure();
@@ -695,13 +708,7 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"hardwareId\":\"" + escapeJsonString(hardwareId) +
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
-  writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
-  enqueueBleTxMessage(
-    runtimeTxQueue,
-    runtimeTelemetryCharacteristic,
-    &runtimeBleConnected,
-    payload
-  );
+  publishRuntimeTelemetryPayload(payload);
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;
@@ -721,13 +728,7 @@ void sendSensorIssueTelemetry(const char* sensorIssue, unsigned long timestamp) 
     ",\"sensorIssue\":\"" + escapeJsonString(sensorIssue) +
     "\",\"snapshot\":true}";
 
-  writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
-  enqueueBleTxMessage(
-    runtimeTxQueue,
-    runtimeTelemetryCharacteristic,
-    &runtimeBleConnected,
-    payload
-  );
+  publishRuntimeTelemetryPayload(payload);
   lastReportedState = currentDetectedState;
   lastTelemetryAt = timestamp;
   pendingMotionUpdate = false;
@@ -1030,14 +1031,12 @@ void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristi
       runtimeAppSessionNonce.length() > 0) {
     const String payload =
       createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce);
-    writeCharacteristicValue(characteristic, payload);
-    enqueueRuntimeStatusPayload(payload);
+    publishRuntimeStatusPayload(payload);
     return;
   }
 
   const String payload = createRuntimeReadyPayload();
-  writeCharacteristicValue(characteristic, payload);
-  enqueueRuntimeStatusPayload(payload);
+  publishRuntimeStatusPayload(payload);
 }
 
 void initializeRuntimeConnection(uint16_t conn_handle) {
