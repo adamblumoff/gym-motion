@@ -8,7 +8,13 @@ import {
   rssiToPercent,
   shouldDisplayDashboardDevice,
 } from "./shared";
-import { canonicalNodeStatus } from "./node-status";
+import {
+  connectionStatusForNode,
+  isActivelyMoving,
+  motionStatusForNode,
+  nodeVisualTone,
+  sensorStatusForNode,
+} from "./node-status";
 import type { BluetoothNodeData } from "./types";
 
 export function buildBluetoothNodes(
@@ -21,10 +27,14 @@ export function buildBluetoothNodes(
     .filter((device) => shouldDisplayDashboardDevice(device, approvedNodes))
     .map((device) => {
       const sensorIssue = device.sensorIssue ?? null;
-      const status = canonicalNodeStatus({
+      const connectionStatus = connectionStatusForNode({
         connectionState: device.gatewayConnectionState,
-        lastState: device.lastState,
+      });
+      const sensorStatus = sensorStatusForNode({
         sensorIssue,
+      });
+      const motionStatus = motionStatusForNode({
+        lastState: device.lastState,
       });
 
       return {
@@ -32,8 +42,19 @@ export function buildBluetoothNodes(
         name: displayNodeName(device),
         macAddress: displayNodeAddress(device),
         connectionState: device.gatewayConnectionState,
-        canonicalStatus: status,
-        isMoving: status === "moving",
+        connectionStatus,
+        sensorStatus,
+        motionStatus,
+        visualTone: nodeVisualTone({
+          connectionState: device.gatewayConnectionState,
+          lastState: device.lastState,
+          sensorIssue,
+        }),
+        isMoving: isActivelyMoving({
+          connectionState: device.gatewayConnectionState,
+          lastState: device.lastState,
+          sensorIssue,
+        }),
         lastState: device.lastState,
         sensorIssue,
         lastDelta: device.lastDelta,

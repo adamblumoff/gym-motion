@@ -1,13 +1,20 @@
 import { Bluetooth, Trash2 } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../selectors/types';
-import { canonicalNodeStatusLabel, isBlockingSensorIssue } from '../selectors/node-status';
 import {
+  connectionStatusLabel,
+  isBlockingSensorIssue,
+  motionStatusLabel,
+  sensorStatusLabel,
+} from '../selectors/node-status';
+import {
+  connectionToneClassName,
   formatSensorIssue,
   formatTelemetryLabel,
+  motionToneClassName,
+  sensorToneClassName,
   statusIconClassName,
   statusIconTextClassName,
-  statusToneClassName,
 } from './node-display';
 import { SignalStrengthMeter } from './SignalStrengthMeter';
 import { Button } from './ui/button';
@@ -37,9 +44,7 @@ export function BluetoothNode({
     node.reconnectAwaitingDecision;
   const hasBlockingSensorIssue = isBlockingSensorIssue(node.sensorIssue);
   const lastTelemetryLabel = formatTelemetryLabel(node.lastTelemetryAt);
-  const deltaLabel = hasBlockingSensorIssue || node.lastDelta === null ? '--' : String(node.lastDelta);
-  const statusLabel = canonicalNodeStatusLabel(node.canonicalStatus);
-  const statusClassName = statusToneClassName(node.canonicalStatus);
+  const deltaLabel = node.lastDelta === null ? '--' : String(node.lastDelta);
   const secondaryText = buildSecondaryText(node);
 
   return (
@@ -51,22 +56,37 @@ export function BluetoothNode({
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3 flex-1 min-w-0">
             <div
-              className={cn('p-2 rounded-lg bg-zinc-800', statusIconClassName(node.canonicalStatus))}
+              className={cn('p-2 rounded-lg bg-zinc-800', statusIconClassName(node.visualTone))}
             >
-              <Bluetooth className={cn('size-5', statusIconTextClassName(node.canonicalStatus))} />
+              <Bluetooth className={cn('size-5', statusIconTextClassName(node.visualTone))} />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-medium text-zinc-100 truncate text-balance">{node.name}</h3>
               <div className="text-xs text-zinc-500 font-mono">{node.macAddress ?? 'Unknown address'}</div>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
                 <span>
-                  Status: <span className={statusClassName}>{statusLabel}</span>
+                  Connection:{' '}
+                  <span className={connectionToneClassName(node.connectionStatus)}>
+                    {connectionStatusLabel(node.connectionStatus)}
+                  </span>
                 </span>
                 <span>
-                  Delta: <span className="text-zinc-300">{deltaLabel}</span>
+                  Sensor:{' '}
+                  <span className={sensorToneClassName(node.sensorStatus)}>
+                    {sensorStatusLabel(node.sensorStatus)}
+                  </span>
                 </span>
                 <span>
-                  Telemetry: <span className="text-zinc-300">{lastTelemetryLabel}</span>
+                  Motion:{' '}
+                  <span className={motionToneClassName(node.motionStatus)}>
+                    {motionStatusLabel(node.motionStatus)}
+                  </span>
+                </span>
+                <span>
+                  Last delta: <span className="text-zinc-300">{deltaLabel}</span>
+                </span>
+                <span>
+                  Last telemetry: <span className="text-zinc-300">{lastTelemetryLabel}</span>
                 </span>
                 {node.sensorIssue && hasBlockingSensorIssue ? (
                   <span>
@@ -184,23 +204,23 @@ export function BluetoothNode({
 }
 
 function buildSecondaryText(node: BluetoothNodeData) {
-  if (isBlockingSensorIssue(node.sensorIssue)) {
-    return 'The sensor is connected, but the board is reporting a live sensor fault.';
-  }
-
-  if (node.sensorIssue === 'sensor_no_data') {
-    return 'Waiting for a fresh sample from the sensor.';
-  }
-
-  if (node.connectionState === 'connecting' || node.connectionState === 'reconnecting') {
-    return 'The gateway is trying to re-establish the Bluetooth connection.';
-  }
-
-  if (node.connectionState !== 'connected') {
+  if (node.connectionStatus === 'disconnected') {
     return node.lastDisconnectReason ?? 'This sensor is not currently reachable.';
   }
 
-  if (node.canonicalStatus === 'moving') {
+  if (node.connectionStatus === 'reconnecting') {
+    return 'The gateway is trying to re-establish the Bluetooth connection.';
+  }
+
+  if (isBlockingSensorIssue(node.sensorIssue)) {
+    return 'The board is connected, but the sensor is reporting a live fault.';
+  }
+
+  if (node.sensorStatus === 'waiting_for_sample') {
+    return 'Connected and waiting for a fresh sample from the board.';
+  }
+
+  if (node.motionStatus === 'moving') {
     return 'Live motion is being detected right now.';
   }
 

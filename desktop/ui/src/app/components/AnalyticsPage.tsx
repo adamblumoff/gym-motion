@@ -23,6 +23,11 @@ import {
   sortAnalyticsNodes,
 } from "../selectors/analytics";
 import { buildBluetoothNodes as buildDashboardNodes } from "../selectors/dashboard";
+import {
+  motionStatusLabel,
+  connectionStatusLabel,
+  sensorStatusLabel,
+} from "../selectors/node-status";
 import { useDesktopRuntime } from "../runtime-context";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -77,10 +82,6 @@ function signalLabel(signalStrength: number | null) {
   }
 
   return `Signal ${signalStrength}%`;
-}
-
-function motionLabel(isMoving: boolean) {
-  return isMoving ? "Moving now" : "Still";
 }
 
 type SummaryMetricCardProps = {
@@ -421,7 +422,19 @@ export function AnalyticsPage() {
                   variant="outline"
                   className="border-zinc-800 bg-zinc-950 text-zinc-300"
                 >
-                  {motionLabel(selectedNode.isMoving)}
+                  Connection: {connectionStatusLabel(selectedNode.connectionStatus)}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
+                >
+                  Motion: {motionStatusLabel(selectedNode.motionStatus)}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
+                >
+                  Sensor: {sensorStatusLabel(selectedNode.sensorStatus)}
                 </Badge>
                 <Badge
                   variant="outline"

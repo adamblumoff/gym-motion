@@ -75,7 +75,9 @@ describe("buildBluetoothNodes", () => {
     const [node] = buildBluetoothNodes(snapshot);
 
     expect(node?.connectionState).toBe("reconnecting");
-    expect(node?.canonicalStatus).toBe("reconnecting");
+    expect(node?.connectionStatus).toBe("reconnecting");
+    expect(node?.sensorStatus).toBe("healthy");
+    expect(node?.motionStatus).toBe("moving");
     expect(node?.isMoving).toBe(false);
   });
 
@@ -149,7 +151,8 @@ describe("buildBluetoothNodes", () => {
     const [node] = buildBluetoothNodes(snapshot);
 
     expect(node?.connectionState).toBe("disconnected");
-    expect(node?.canonicalStatus).toBe("disconnected");
+    expect(node?.connectionStatus).toBe("disconnected");
+    expect(node?.motionStatus).toBe("moving");
     expect(node?.isMoving).toBe(false);
   });
 

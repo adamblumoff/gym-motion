@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router';
 import { BarChart3, Bluetooth, LayoutDashboard, Settings, Zap } from 'lucide-react';
 
 import type { BluetoothNodeData } from '../selectors/types';
-import { canonicalNodeStatusLabel } from '../selectors/node-status';
+import {
+  connectionStatusLabel,
+  motionStatusLabel,
+  sensorStatusLabel,
+} from '../selectors/node-status';
 import { statusIconTextClassName, statusToneClassName } from './node-display';
 import {
   CommandDialog,
@@ -81,10 +85,14 @@ export function CommandPalette({ nodes, onSelectNode, onScan }: CommandPalettePr
                 setOpen(false);
               }}
             >
-              <Bluetooth className={`mr-2 size-4 ${statusIconTextClassName(node.canonicalStatus)}`} />
+              <Bluetooth className={`mr-2 size-4 ${statusIconTextClassName(node.visualTone)}`} />
               <span className="flex-1">{node.name}</span>
-              <span className={`text-[11px] ${statusToneClassName(node.canonicalStatus)}`}>
-                {canonicalNodeStatusLabel(node.canonicalStatus)}
+              <span className={`text-[11px] ${statusToneClassName(node.visualTone)}`}>
+                {connectionStatusLabel(node.connectionStatus)}
+                {" · "}
+                {sensorStatusLabel(node.sensorStatus)}
+                {" · "}
+                {motionStatusLabel(node.motionStatus)}
               </span>
               <span className="text-xs text-zinc-500 font-mono">{node.macAddress ?? '--'}</span>
             </CommandItem>

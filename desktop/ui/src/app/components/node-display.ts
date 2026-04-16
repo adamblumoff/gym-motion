@@ -1,4 +1,9 @@
-import type { CanonicalNodeStatus } from '../selectors/node-status';
+import type {
+  NodeConnectionStatus,
+  NodeMotionStatus,
+  NodeSensorStatus,
+  NodeVisualTone,
+} from '../selectors/node-status';
 
 export function formatTelemetryLabel(lastTelemetryAt: string | null) {
   if (!lastTelemetryAt) {
@@ -74,12 +79,37 @@ export function formatSensorIssue(sensorIssue: string) {
   return sensorIssue.replaceAll('_', ' ');
 }
 
-export function statusToneClassName(status: CanonicalNodeStatus) {
+export function connectionToneClassName(status: NodeConnectionStatus) {
   switch (status) {
-    case 'sensor_fault':
+    case 'connected':
+      return 'text-zinc-300';
     case 'reconnecting':
       return 'text-amber-300';
-    case 'disconnected':
+    default:
+      return 'text-red-300';
+  }
+}
+
+export function sensorToneClassName(status: NodeSensorStatus) {
+  switch (status) {
+    case 'healthy':
+      return 'text-zinc-300';
+    case 'waiting_for_sample':
+      return 'text-amber-200';
+    default:
+      return 'text-amber-300';
+  }
+}
+
+export function motionToneClassName(status: NodeMotionStatus) {
+  return status === 'moving' ? 'text-blue-400' : 'text-zinc-300';
+}
+
+export function statusToneClassName(status: NodeVisualTone) {
+  switch (status) {
+    case 'warning':
+      return 'text-amber-300';
+    case 'offline':
       return 'text-red-300';
     case 'moving':
       return 'text-blue-400';
@@ -88,12 +118,11 @@ export function statusToneClassName(status: CanonicalNodeStatus) {
   }
 }
 
-export function statusIconClassName(status: CanonicalNodeStatus) {
+export function statusIconClassName(status: NodeVisualTone) {
   switch (status) {
-    case 'sensor_fault':
-    case 'reconnecting':
+    case 'warning':
       return 'bg-amber-500/10';
-    case 'disconnected':
+    case 'offline':
       return 'bg-red-500/10';
     case 'moving':
       return 'bg-blue-500/10';
@@ -102,12 +131,11 @@ export function statusIconClassName(status: CanonicalNodeStatus) {
   }
 }
 
-export function statusIconTextClassName(status: CanonicalNodeStatus) {
+export function statusIconTextClassName(status: NodeVisualTone) {
   switch (status) {
-    case 'sensor_fault':
-    case 'reconnecting':
+    case 'warning':
       return 'text-amber-300';
-    case 'disconnected':
+    case 'offline':
       return 'text-red-300';
     case 'moving':
       return 'text-blue-400';

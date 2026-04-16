@@ -1,5 +1,10 @@
 import type { GatewayConnectionState } from "@core/contracts";
-import type { CanonicalNodeStatus } from "./node-status";
+import type {
+  NodeConnectionStatus,
+  NodeMotionStatus,
+  NodeSensorStatus,
+  NodeVisualTone,
+} from "./node-status";
 
 export type NodeLog = {
   id: string;
@@ -13,7 +18,10 @@ export type BluetoothNodeData = {
   name: string;
   macAddress: string | null;
   connectionState: GatewayConnectionState;
-  canonicalStatus: CanonicalNodeStatus;
+  connectionStatus: NodeConnectionStatus;
+  sensorStatus: NodeSensorStatus;
+  motionStatus: NodeMotionStatus;
+  visualTone: NodeVisualTone;
   isMoving: boolean;
   lastState: "moving" | "still";
   sensorIssue: string | null;
