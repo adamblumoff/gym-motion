@@ -8,13 +8,12 @@ import type {
 import {
   mergeActivityUpdate,
   mergeEventUpdate,
-  mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
 import type { DesktopDataEvent } from "../desktop-api-server";
-import { mergeRepositoryDeviceIntoGatewaySnapshot } from "../gateway-snapshot";
+import { applyRepositoryDeviceToGatewaySnapshot } from "../gateway-snapshot";
 
 type DataEventHandlerDeps = {
   getSnapshot: () => DesktopSnapshot;
@@ -40,13 +39,13 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
           ? deps.clearOptimisticMessage(event.sourceMessageId)
           : null;
         const snapshot = deps.getSnapshot();
-        const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+        const { device, devices } = applyRepositoryDeviceToGatewaySnapshot(
           snapshot.devices,
           payload.device,
         );
         const nextSnapshot = deps.pruneSnapshot({
           ...snapshot,
-          devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
+          devices,
         });
         deps.setSnapshot(nextSnapshot);
 
@@ -146,13 +145,13 @@ export function createDataEventHandler(deps: DataEventHandlerDeps) {
         {
           const payload = event.payload as DeviceSummary;
           const snapshot = deps.getSnapshot();
-          const device = mergeRepositoryDeviceIntoGatewaySnapshot(
+          const { device, devices } = applyRepositoryDeviceToGatewaySnapshot(
             snapshot.devices,
             payload,
           );
           const nextSnapshot = deps.pruneSnapshot({
             ...snapshot,
-            devices: mergeGatewayDeviceUpdate(snapshot.devices, device),
+            devices,
           });
           deps.setSnapshot(nextSnapshot);
           deps.emit({

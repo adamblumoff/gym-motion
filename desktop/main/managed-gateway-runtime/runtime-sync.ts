@@ -12,10 +12,9 @@ import {
 import {
   mergeActivityUpdate,
   mergeEventUpdate,
-  mergeGatewayDeviceUpdate,
   mergeLogUpdate,
 } from "@core/contracts";
-import { mergeRepositoryDeviceIntoGatewaySnapshot } from "../gateway-snapshot";
+import { applyRepositoryDeviceToGatewaySnapshot } from "../gateway-snapshot";
 
 type RuntimeSyncDeps = {
   getSnapshot: () => DesktopSnapshot;
@@ -67,10 +66,7 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
     let devices = snapshot.devices;
 
     for (const device of snapshotData.repositoryDevices) {
-      devices = mergeGatewayDeviceUpdate(
-        devices,
-        mergeRepositoryDeviceIntoGatewaySnapshot(devices, device),
-      );
+      devices = applyRepositoryDeviceToGatewaySnapshot(devices, device).devices;
     }
 
     deps.setSnapshot({
@@ -93,10 +89,7 @@ export function createRuntimeSync(deps: RuntimeSyncDeps): RuntimeSync {
     let devices = snapshot.devices;
 
     if (repositoryDevice) {
-      devices = mergeGatewayDeviceUpdate(
-        devices,
-        mergeRepositoryDeviceIntoGatewaySnapshot(devices, repositoryDevice),
-      );
+      devices = applyRepositoryDeviceToGatewaySnapshot(devices, repositoryDevice).devices;
     }
 
     let events = snapshot.events.filter((event) => event.deviceId !== deviceId);

@@ -1,4 +1,7 @@
-import type { GatewayRuntimeDeviceSummary } from "@core/contracts";
+import {
+  mergeGatewayDeviceUpdate,
+  type GatewayRuntimeDeviceSummary,
+} from "@core/contracts";
 
 type PartialRepositoryDevice = {
   id: string;
@@ -68,5 +71,16 @@ export function mergeRepositoryDeviceIntoGatewaySnapshot(
     reconnectAttemptLimit: existing?.reconnectAttemptLimit ?? 20,
     reconnectRetryExhausted: existing?.reconnectRetryExhausted ?? false,
     ...partialDevice,
+  };
+}
+
+export function applyRepositoryDeviceToGatewaySnapshot(
+  currentDevices: GatewayRuntimeDeviceSummary[],
+  partialDevice: PartialRepositoryDevice,
+) {
+  const device = mergeRepositoryDeviceIntoGatewaySnapshot(currentDevices, partialDevice);
+  return {
+    device,
+    devices: mergeGatewayDeviceUpdate(currentDevices, device),
   };
 }
