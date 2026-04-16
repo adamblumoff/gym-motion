@@ -32,6 +32,7 @@ import { createManualScanManager } from "./manual-scan.js";
 import { createMetadataManager } from "./metadata-manager.js";
 import { createRuntimeDeviceEventController } from "./runtime-events.js";
 import { createGatewayServerHost } from "./server-host.js";
+import { createGatewayStatusStore } from "./gateway-status-store.js";
 import type { DiscoveryLocator, KnownNode, RuntimeDeviceMetadata, RuntimeNode } from "./runtime-types.js";
 
 type ManualScanPayload = {
@@ -76,23 +77,6 @@ export function createGatewayRuntimeServer({
   const manualScanManager = createManualScanManager();
   const getManualScanPayload = manualScanManager.getPayload;
 
-  let availableAdapters: BleAdapterSummary[] = [];
-  let runtimeIssue: string | null = null;
-  const gatewayState: GatewayStatusSummary = {
-    hostname: os.hostname(),
-    mode: "reference-ble-node-gateway",
-    sessionId,
-    adapterState: "unknown",
-    scanState: "idle",
-    scanReason: null,
-    connectedNodeCount: 0,
-    reconnectingNodeCount: 0,
-    knownNodeCount: 0,
-    startedAt: nowIso(),
-    updatedAt: nowIso(),
-    lastAdvertisementAt: null,
-  };
-
   function debug(message: string, details?: unknown) {
     if (!verbose) {
       return;
@@ -106,17 +90,18 @@ export function createGatewayRuntimeServer({
     console.log(`[gateway-runtime] ${message}`);
   }
 
-  function touchGatewayState(patch: Partial<GatewayStatusSummary> = {}) {
-    Object.assign(gatewayState, patch, { updatedAt: nowIso() });
-    gatewayState.knownNodeCount = knownNodesByDeviceId.size;
-    gatewayState.connectedNodeCount = Array.from(runtimeByDeviceId.values()).filter(
-      (node) => node.gatewayConnectionState === "connected",
-    ).length;
-    gatewayState.reconnectingNodeCount = Array.from(runtimeByDeviceId.values()).filter(
-      (node) =>
-        node.gatewayConnectionState === "reconnecting" ||
-        node.gatewayConnectionState === "connecting",
-    ).length;
+  function getGatewayCounts() {
+    return {
+      knownNodeCount: knownNodesByDeviceId.size,
+      connectedNodeCount: Array.from(runtimeByDeviceId.values()).filter(
+        (node) => node.gatewayConnectionState === "connected",
+      ).length,
+      reconnectingNodeCount: Array.from(runtimeByDeviceId.values()).filter(
+        (node) =>
+          node.gatewayConnectionState === "reconnecting" ||
+          node.gatewayConnectionState === "connecting",
+      ).length,
+    };
   }
 
   const knownNodeStore = createKnownNodeStore({
@@ -138,13 +123,22 @@ export function createGatewayRuntimeServer({
     }
   }
 
+  const gatewayStatusStore = createGatewayStatusStore({
+    sessionId,
+    hostname: os.hostname(),
+    mode: "reference-ble-node-gateway",
+    nowIso,
+    broadcast,
+  });
+  const { gatewayState } = gatewayStatusStore;
+
+  function touchGatewayState(patch: Partial<GatewayStatusSummary> = {}) {
+    gatewayStatusStore.touchGatewayState(getGatewayCounts(), patch);
+  }
+
   function broadcastGatewayStatus() {
     touchGatewayState();
-    broadcast("gateway-status", {
-      ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
-      gateway: gatewayState,
-      error: runtimeIssue ?? undefined,
-    });
+    gatewayStatusStore.broadcastGatewayStatus();
   }
 
   const metadataManager = createMetadataManager({
@@ -213,9 +207,9 @@ export function createGatewayRuntimeServer({
     ]);
 
     return {
-      ok: gatewayState.adapterState === "poweredOn" && runtimeIssue === null,
+      ok: gatewayStatusStore.getGatewayStatusPayload().ok,
       gateway: gatewayState,
-      error: runtimeIssue ?? undefined,
+      error: gatewayStatusStore.getRuntimeIssue() ?? undefined,
       devices: sortDevices(
         Array.from(deviceIds)
           .filter((deviceId) => !suppressedDeviceIds.has(deviceId))
@@ -226,8 +220,8 @@ export function createGatewayRuntimeServer({
 
   const handleRequest = createRequestHandler({
     gatewayState,
-    getRuntimeIssue: () => runtimeIssue,
-    getAvailableAdapters: () => availableAdapters,
+    getRuntimeIssue: gatewayStatusStore.getRuntimeIssue,
+    getAvailableAdapters: gatewayStatusStore.getAvailableAdapters,
     streamClients,
     getDevicesPayload,
     getManualScanPayload,
@@ -314,13 +308,13 @@ export function createGatewayRuntimeServer({
     },
 
     setGatewayIssue(issue: string | null) {
-      runtimeIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
+      gatewayStatusStore.setRuntimeIssue(issue);
       broadcastGatewayStatus();
     },
 
     setAvailableAdapters(adapters: BleAdapterSummary[]) {
-      availableAdapters = Array.isArray(adapters) ? adapters : [];
-      broadcast("gateway-adapters", { adapters: availableAdapters });
+      gatewayStatusStore.setAvailableAdapters(adapters);
+      broadcast("gateway-adapters", { adapters: gatewayStatusStore.getAvailableAdapters() });
       broadcastGatewayStatus();
     },
 
@@ -349,11 +343,11 @@ export function createGatewayRuntimeServer({
 
     getGatewayState() {
       touchGatewayState();
-      return { ...gatewayState };
+      return gatewayStatusStore.getGatewayState();
     },
 
     getAvailableAdapters() {
-      return [...availableAdapters];
+      return gatewayStatusStore.getAvailableAdapters();
     },
 
     getRuntimeNode(deviceId: string) {
