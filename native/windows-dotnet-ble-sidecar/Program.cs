@@ -39,7 +39,6 @@ internal sealed class SidecarApp
 
     private BluetoothLEAdvertisementWatcher? _watcher;
     private bool _sessionStarted;
-    private string? _selectedAdapterId;
     private DateTimeOffset? _lastAdvertisementAt;
 
     public async Task RunAsync()
@@ -104,10 +103,6 @@ internal sealed class SidecarApp
         {
             case "list_adapters":
                 await EmitAdapterListAsync();
-                break;
-            case "select_adapter":
-                _selectedAdapterId = GetString(root, "adapter_id");
-                await EmitGatewayStateAsync();
                 break;
             case "set_allowed_nodes":
                 UpdateAllowedNodes(root);
@@ -328,8 +323,29 @@ internal sealed class SidecarApp
         });
     }
 
+    private async Task<string> ReadAdapterStateAsync()
+    {
+        var adapters = await Radio.GetRadiosAsync();
+        var bluetoothRadios = adapters
+            .Where(radio => radio.Kind == RadioKind.Bluetooth)
+            .ToArray();
+
+        if (bluetoothRadios.Any(radio => radio.State == RadioState.On))
+        {
+            return "poweredOn";
+        }
+
+        if (bluetoothRadios.Any(radio => radio.State == RadioState.Off || radio.State == RadioState.Disabled))
+        {
+            return "poweredOff";
+        }
+
+        return "unknown";
+    }
+
     private async Task EmitGatewayStateAsync()
     {
+        var adapterState = await ReadAdapterStateAsync();
         string scanState;
         lock (_stateGate)
         {
@@ -343,10 +359,9 @@ internal sealed class SidecarApp
             type = "gateway_state",
             gateway = new
             {
-                adapter_state = string.IsNullOrWhiteSpace(_selectedAdapterId) ? "unknown" : "poweredOn",
+                adapter_state = adapterState,
                 scan_state = scanState,
                 scan_reason = _sessionStarted ? "approved_nodes" : (string?)null,
-                selected_adapter_id = _selectedAdapterId,
                 last_advertisement_at = _lastAdvertisementAt?.ToString("O"),
             },
         });

@@ -125,7 +125,6 @@ export function createManagedGatewayRuntime(
     setGatewayIssue,
     emitGatewayIssueSnapshot,
     getDiscoveredAdapters,
-    getSelectedAdapter,
     applyAdapterSnapshot,
     applyManualScanPayload,
     pruneSnapshotToApprovedNodes,
@@ -409,7 +408,6 @@ export function createManagedGatewayRuntime(
     setRuntimePort: (nextPort) => {
       runtimePort = nextPort;
     },
-    selectedAdapter: getSelectedAdapter,
     readApprovedNodes,
     getWindowsScanRequested,
     getDesktopApiBaseUrl: () => apiServer.apiBaseUrl,

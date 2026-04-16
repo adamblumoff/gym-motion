@@ -6,7 +6,6 @@ import { app } from "electron";
 
 import type {
   ApprovedNodeRule,
-  BleAdapterSummary,
   GatewayStatusSummary,
 } from "@core/contracts";
 
@@ -32,7 +31,6 @@ type RuntimeBridgeDeps = {
   setChild: (child: ChildProcess | null) => void;
   getRuntimePort: () => number;
   setRuntimePort: (port: number) => void;
-  selectedAdapter: () => BleAdapterSummary | null;
   readApprovedNodes: () => ApprovedNodeRule[];
   getWindowsScanRequested: () => boolean;
   getDesktopApiBaseUrl: () => string;
@@ -218,8 +216,6 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   }
 
   async function startChild() {
-    const adapter = deps.selectedAdapter();
-
     const runtimePort = 4010 + Math.floor(Math.random() * 2000);
     deps.setRuntimePort(runtimePort);
     const env: Record<string, string | undefined> = buildGatewayChildEnv({
@@ -229,8 +225,6 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       childOutboxPath: path.join(app.getPath("userData"), "gateway-child-outbox.sqlite"),
       desktopApiBaseUrl: deps.getDesktopApiBaseUrl(),
     });
-
-    env.GATEWAY_SELECTED_ADAPTER_ID = adapter?.id ?? "";
     env.GATEWAY_START_SCAN_ON_BOOT = deps.getWindowsScanRequested() ? "1" : "0";
     const sidecarLaunch = resolveWindowsSidecarLaunch({
       isPackaged: app.isPackaged,

@@ -13,8 +13,6 @@ import {
 import {
   createGatewayConfig,
   parseApprovedNodeRules,
-  readSelectedAdapterId,
-  selectPreferredAdapter,
 } from "./windows-winrt-gateway-config.js";
 import {
   normalizeAllowedNodesPayload,
@@ -45,7 +43,6 @@ import type {
 const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
-let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
 let latestDevicesMetadata: DeviceSummary[] = [];
 let handleDesktopControlCommand:
   | ReturnType<typeof createDesktopControlCommandHandler>
@@ -152,21 +149,15 @@ function setRuntimeIssue(issue: string | null) {
   emitGatewayState();
 }
 
-function refreshSelectionIssue(adapters: BleAdapterSummary[]) {
-  if (!selectedAdapterId) {
+function refreshAdapterIssue(adapters: BleAdapterSummary[]) {
+  if (adapters.length === 0) {
     setRuntimeIssue("Bluetooth is unavailable on this machine.");
     return;
   }
 
-  const selectedAdapter = adapters.find((adapter) => adapter.id === selectedAdapterId);
-
-  if (!selectedAdapter) {
-    setRuntimeIssue("Bluetooth is unavailable on this machine.");
-    return;
-  }
-
-  if (!selectedAdapter.isAvailable) {
-    setRuntimeIssue(selectedAdapter.issue ?? "Bluetooth is unavailable on this machine.");
+  const availableAdapter = adapters.find((adapter) => adapter.isAvailable);
+  if (!availableAdapter) {
+    setRuntimeIssue(adapters[0]?.issue ?? "Bluetooth is unavailable on this machine.");
     return;
   }
 
@@ -355,25 +346,17 @@ function handleSidecarEvent(event: GatewaySidecarEvent) {
         );
       }
 
-      if (!selectedAdapterId) {
-        selectedAdapterId = selectPreferredAdapter(adapters);
-
-        if (selectedAdapterId) {
-          sendCommand("select_adapter", { adapter_id: selectedAdapterId });
-        }
-      }
-
       runtimeServer.setAvailableAdapters(adapters);
-      refreshSelectionIssue(adapters);
+      refreshAdapterIssue(adapters);
       emitAdaptersUpdated();
       emitGatewayState();
 
-      if (!sidecarSessionStarted && selectedAdapterId) {
+      if (!sidecarSessionStarted && adapters.length > 0) {
         sidecarSessionStarted = true;
         sendCommand("start");
       }
 
-      if (scanRequestedFromBoot && selectedAdapterId) {
+      if (scanRequestedFromBoot && adapters.length > 0) {
         scanRequestedFromBoot = false;
         sendCommand("rescan");
       }
@@ -467,15 +450,8 @@ async function startSidecar() {
     emitGatewayState();
   });
 
-  if (selectedAdapterId) {
-    sendCommand("select_adapter", { adapter_id: selectedAdapterId });
-  }
   syncAllowedNodes();
   sendCommand("list_adapters");
-  if (selectedAdapterId) {
-    sidecarSessionStarted = true;
-    sendCommand("start");
-  }
 }
 
 async function shutdown() {

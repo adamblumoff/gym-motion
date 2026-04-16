@@ -39,7 +39,6 @@ export function createManagedRuntimeStateController({
   let snapshot = createEmptySnapshot();
   let setupState = createEmptySetupState();
   let discoveredAdapters: BleAdapterSummary[] = [];
-  let autoSelectedAdapterId: string | null = null;
   let windowsScanRequested = false;
 
   function getSnapshot() {
@@ -131,10 +130,6 @@ export function createManagedRuntimeStateController({
     return discoveredAdapters;
   }
 
-  function getSelectedAdapter() {
-    return discoveredAdapters.find((adapter) => adapter.id === autoSelectedAdapterId) ?? null;
-  }
-
   function applyAdapterSnapshot(
     adapters: BleAdapterSummary[],
     runtimeError: string | null = null,
@@ -148,7 +143,6 @@ export function createManagedRuntimeStateController({
     });
 
     discoveredAdapters = adapters;
-    autoSelectedAdapterId = selectedAdapterId;
 
     setupState = {
       ...setupState,
@@ -228,7 +222,6 @@ export function createManagedRuntimeStateController({
     setGatewayIssue,
     emitGatewayIssueSnapshot,
     getDiscoveredAdapters,
-    getSelectedAdapter,
     applyAdapterSnapshot,
     applyManualScanPayload,
     pruneSnapshotToApprovedNodes,

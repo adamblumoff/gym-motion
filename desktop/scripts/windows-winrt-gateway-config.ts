@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ApprovedNodeRule, BleAdapterSummary } from "@core/contracts";
+import type { ApprovedNodeRule } from "@core/contracts";
 
 type GatewayConfig = {
   runtimeHost: string;
@@ -58,12 +58,4 @@ export function parseApprovedNodeRules(raw: string | undefined): ApprovedNodeRul
   } catch {
     return [];
   }
-}
-
-export function readSelectedAdapterId(value: string | undefined) {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-export function selectPreferredAdapter(adapters: BleAdapterSummary[]) {
-  return adapters.find((adapter) => adapter.isAvailable)?.id ?? adapters[0]?.id ?? null;
 }
