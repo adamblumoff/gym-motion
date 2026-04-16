@@ -31,6 +31,7 @@ import { createDiscoveryStore } from "./discovery-store.js";
 import { createManualScanManager } from "./manual-scan.js";
 import { createMetadataManager } from "./metadata-manager.js";
 import { createRuntimeDeviceEventController } from "./runtime-events.js";
+import { createGatewayServerHost } from "./server-host.js";
 import type { DiscoveryLocator, KnownNode, RuntimeDeviceMetadata, RuntimeNode } from "./runtime-types.js";
 
 type ManualScanPayload = {
@@ -77,8 +78,6 @@ export function createGatewayRuntimeServer({
 
   let availableAdapters: BleAdapterSummary[] = [];
   let runtimeIssue: string | null = null;
-  let server: http.Server | null = null;
-
   const gatewayState: GatewayStatusSummary = {
     hostname: os.hostname(),
     mode: "reference-ble-node-gateway",
@@ -261,30 +260,17 @@ export function createGatewayRuntimeServer({
     reconnectDisconnectGraceMs,
   });
 
+  const serverHost = createGatewayServerHost({
+    runtimeHost,
+    runtimePort,
+    handleRequest,
+    debug,
+  });
+
   return {
     async start() {
       await knownNodeStore.loadKnownNodes();
-
-      if (server) {
-        return;
-      }
-
-      server = http.createServer((request, response) => {
-        void handleRequest(request, response).catch((error) => {
-          console.error("[gateway-runtime] request failed", error);
-          jsonResponse(response, 500, { ok: false, error: "Gateway runtime failed." });
-        });
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(runtimePort, runtimeHost, () => {
-          server?.off("error", reject);
-          resolve();
-        });
-      });
-
-      debug(`runtime API listening on http://${runtimeHost}:${runtimePort}`);
+      await serverHost.start();
     },
 
     async stop() {
@@ -297,23 +283,7 @@ export function createGatewayRuntimeServer({
       }
       streamClients.clear();
 
-      if (!server) {
-        return;
-      }
-
-      const currentServer = server;
-      server = null;
-
-      await new Promise<void>((resolve, reject) => {
-        currentServer.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      });
+      await serverHost.stop();
     },
 
     setAdapterState(state: string) {

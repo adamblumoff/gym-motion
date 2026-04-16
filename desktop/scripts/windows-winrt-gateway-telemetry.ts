@@ -1,12 +1,40 @@
-// @ts-nocheck
+import type { TelemetryPayload } from "../../backend/runtime/gateway-runtime-server/runtime-types.js";
+import type {
+  GatewayDeviceContext,
+  GatewayLogFn,
+  GatewayRuntimeServer,
+  GatewayTelemetryEvent,
+} from "./windows-winrt-gateway-types.js";
 import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.js";
 
-function readTelemetryRawPayload(event) {
+type TelemetryHandlerDeps = {
+  runtimeServer: Pick<GatewayRuntimeServer, "noteTelemetry">;
+  deviceContexts: Map<string, GatewayDeviceContext>;
+  emitGatewayState: () => void;
+  emitRuntimeDeviceUpdated: (deviceId: string | null | undefined) => void;
+  emitPersistMessage: (type: "persist-motion", deviceId: string, payload: unknown) => void;
+  queueLiveDeviceTask: (deviceId: string, work: () => Promise<void>) => Promise<void>;
+  log: GatewayLogFn;
+  debug: GatewayLogFn;
+};
+
+type TelemetryMessagePayload = TelemetryPayload & {
+  snapshot?: boolean;
+};
+
+type ParsedTelemetryEnvelope = {
+  rawPayload: string | null;
+  payload: TelemetryMessagePayload | null;
+  payloadDeviceId: string | null;
+  error: unknown;
+};
+
+function readTelemetryRawPayload(event: GatewayTelemetryEvent) {
   const rawPayload = event.payload_text ?? event.payloadText ?? null;
   return typeof rawPayload === "string" && rawPayload.length > 0 ? rawPayload : null;
 }
 
-export function parseTelemetryPayload(event) {
+export function parseTelemetryPayload(event: GatewayTelemetryEvent): ParsedTelemetryEnvelope {
   const rawPayload = readTelemetryRawPayload(event);
 
   if (!rawPayload) {
@@ -45,8 +73,8 @@ export function createTelemetryEventHandler({
   queueLiveDeviceTask,
   log,
   debug,
-}) {
-  async function forwardTelemetryNow(event, payload) {
+}: TelemetryHandlerDeps) {
+  async function forwardTelemetryNow(event: GatewayTelemetryEvent, payload: TelemetryMessagePayload) {
     if (!payload?.deviceId || !payload?.state || !payload?.timestamp) {
       debug("ignored telemetry payload missing required fields", payload);
       return;
@@ -65,11 +93,7 @@ export function createTelemetryEventHandler({
     context.rssi = node.rssi ?? context.rssi ?? null;
     deviceContexts.set(payload.deviceId, context);
 
-    await runtimeServer.noteTelemetry(payload, {
-      ...node,
-      deviceId: payload.deviceId,
-      knownDeviceId: payload.deviceId,
-    });
+    await runtimeServer.noteTelemetry(payload, node);
     emitGatewayState();
     emitRuntimeDeviceUpdated(payload.deviceId);
 

@@ -1,7 +1,9 @@
-// @ts-nocheck
 /* global Buffer, console */
 
-export function attachJsonLineReader(stream, onEvent) {
+export function attachJsonLineReader(
+  stream: NodeJS.ReadableStream,
+  onEvent: (event: unknown) => void,
+) {
   let buffer = "";
 
   stream.on("data", (chunk) => {

@@ -1,9 +1,24 @@
-// @ts-nocheck
+import type { ManualScanCandidateSummary, ManualScanState } from "@core/contracts";
+
+type ManualScanPayload = {
+  state: ManualScanState;
+  pairingCandidateId: string | null;
+  error: string | null;
+  candidates: ManualScanCandidateSummary[];
+};
+
+type SetManualScanStateInput = {
+  state: ManualScanState;
+  pairingCandidateId?: string | null;
+  error?: string | null;
+  clearCandidates?: boolean;
+};
+
 export function createManualScanManager() {
   let manualScanState = "idle";
   let pairingCandidateId = null;
   let manualScanError = null;
-  const manualScanCandidatesById = new Map();
+  const manualScanCandidatesById = new Map<string, ManualScanCandidateSummary>();
 
   function sortCandidates() {
     return Array.from(manualScanCandidatesById.values()).toSorted(
@@ -13,9 +28,9 @@ export function createManualScanManager() {
     );
   }
 
-  function getPayload() {
+  function getPayload(): ManualScanPayload {
     return {
-      state: manualScanState,
+      state: manualScanState as ManualScanState,
       pairingCandidateId,
       error: manualScanError,
       candidates: sortCandidates(),
@@ -27,7 +42,7 @@ export function createManualScanManager() {
     pairingCandidateId: nextPairingCandidateId = null,
     error = null,
     clearCandidates = false,
-  }) {
+  }: SetManualScanStateInput) {
     manualScanState = state;
     pairingCandidateId = nextPairingCandidateId;
     manualScanError = error;
@@ -37,7 +52,7 @@ export function createManualScanManager() {
     }
   }
 
-  function upsertCandidate(candidate) {
+  function upsertCandidate(candidate: Partial<ManualScanCandidateSummary> & { id?: string | null }) {
     if (!candidate?.id) {
       return;
     }

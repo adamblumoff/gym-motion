@@ -1,6 +1,12 @@
-// @ts-nocheck
 import fs from "node:fs/promises";
 import path from "node:path";
+import type {
+  KnownNode,
+  KnownNodeStore,
+  OtaRuntimeState,
+  ReconnectRuntimeState,
+  RuntimeNode,
+} from "./runtime-types.js";
 
 export function createKnownNodeStore({
   knownNodesPath,
@@ -11,9 +17,18 @@ export function createKnownNodeStore({
   emptyReconnectRuntimeState,
   touchGatewayState,
   nowIso,
-}) {
-  let writeTimer = null;
-  let persistPromise = null;
+}: {
+  knownNodesPath: string;
+  knownNodesByDeviceId: Map<string, KnownNode>;
+  deviceIdByPeripheralId: Map<string, string>;
+  runtimeByDeviceId: Map<string, RuntimeNode>;
+  emptyOtaRuntimeState: () => OtaRuntimeState;
+  emptyReconnectRuntimeState: () => ReconnectRuntimeState;
+  touchGatewayState: () => void;
+  nowIso: () => string;
+}): KnownNodeStore {
+  let writeTimer: NodeJS.Timeout | null = null;
+  let persistPromise: Promise<void> | null = null;
 
   async function persistKnownNodes() {
     if (persistPromise) {
@@ -60,7 +75,7 @@ export function createKnownNodeStore({
   async function loadKnownNodes() {
     try {
       const raw = await fs.readFile(knownNodesPath, "utf8");
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as { nodes?: KnownNode[] } | null;
       const nodes = Array.isArray(parsed?.nodes) ? parsed.nodes : [];
 
       for (const node of nodes) {
@@ -77,6 +92,7 @@ export function createKnownNodeStore({
         runtimeByDeviceId.set(node.deviceId, {
           gatewayConnectionState: "disconnected",
           peripheralId: node.peripheralId ?? null,
+          address: node.lastKnownAddress ?? null,
           gatewayLastAdvertisementAt: node.lastSeenAt ?? null,
           gatewayLastConnectedAt: node.lastConnectedAt ?? null,
           gatewayLastDisconnectedAt: null,
@@ -85,6 +101,7 @@ export function createKnownNodeStore({
           advertisedName: node.lastAdvertisedName ?? null,
           lastRssi: null,
           lastState: "still",
+          sensorIssue: null,
           lastSeenAt: null,
           lastDelta: null,
           firmwareVersion: node.firmwareVersion ?? "unknown",
@@ -98,7 +115,7 @@ export function createKnownNodeStore({
 
       touchGatewayState();
     } catch (error) {
-      const code = error?.code;
+      const code = error instanceof Error && "code" in error ? error.code : null;
 
       if (code !== "ENOENT") {
         console.error("[gateway-runtime] failed to load known-node cache", error);

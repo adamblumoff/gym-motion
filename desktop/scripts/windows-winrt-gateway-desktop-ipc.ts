@@ -1,12 +1,17 @@
-// @ts-nocheck
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type {
+  GatewayDesktopMessage,
+  GatewayPersistAckMessage,
+  GatewayPersistMessage,
+  GatewayPersistMessageType,
+} from "./windows-winrt-gateway-types.js";
 
-const PERSIST_MESSAGE_TYPES = new Set([
+const PERSIST_MESSAGE_TYPES = new Set<GatewayPersistMessageType>([
   "persist-motion",
   "persist-heartbeat",
   "persist-device-log",
@@ -14,15 +19,30 @@ const PERSIST_MESSAGE_TYPES = new Set([
 const ACK_TIMEOUT_MS = 4_000;
 const MAX_BACKOFF_MS = 30_000;
 
-let database = null;
-let insertRow = null;
-let selectReadyRows = null;
-let deleteRow = null;
-let markFailed = null;
-let inflight = new Map();
-let drainTimer = null;
+type OutboxRow = {
+  id: number;
+  message_id: string;
+  message_json: string;
+  attempt_count: number;
+};
 
-function nextDelayMs(attemptCount) {
+type OutboxAttemptCountRow = {
+  attempt_count: number;
+};
+
+let database: DatabaseSync | null = null;
+let insertRow: StatementSync | null = null;
+let selectReadyRows: StatementSync | null = null;
+let deleteRow: StatementSync | null = null;
+let markFailed: StatementSync | null = null;
+let inflight = new Map<string, NodeJS.Timeout>();
+let drainTimer: NodeJS.Timeout | null = null;
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null;
+}
+
+function nextDelayMs(attemptCount: number) {
   return Math.min(500 * 2 ** Math.min(attemptCount, 6), MAX_BACKOFF_MS);
 }
 
@@ -33,8 +53,12 @@ function outboxPath() {
   );
 }
 
-function hasColumn(tableName, columnName) {
-  const rows = database.prepare(`pragma table_info(${tableName})`).all();
+function hasColumn(tableName: string, columnName: string) {
+  if (!database) {
+    return false;
+  }
+
+  const rows = database.prepare(`pragma table_info(${tableName})`).all() as Array<{ name: string }>;
   return rows.some((row) => row.name === columnName);
 }
 
@@ -131,15 +155,15 @@ function scheduleDrain(delayMs = 0) {
   drainTimer.unref?.();
 }
 
-function failMessage(messageId, attemptCount, detail, debug = () => {}) {
+function failMessage(messageId: string, attemptCount: number, detail: string, debug: (message: string, details?: unknown) => void = () => {}) {
   ensureDatabase();
   const availableAt = new Date(Date.now() + nextDelayMs(attemptCount + 1)).toISOString();
-  markFailed.run(availableAt, detail, messageId);
+  markFailed?.run(availableAt, detail, messageId);
   debug("scheduled desktop persist retry", { messageId, detail, availableAt });
   scheduleDrain(nextDelayMs(attemptCount + 1));
 }
 
-function startAckTimer(messageId, attemptCount, debug = () => {}) {
+function startAckTimer(messageId: string, attemptCount: number, debug: (message: string, details?: unknown) => void = () => {}) {
   const existing = inflight.get(messageId);
 
   if (existing) {
@@ -154,7 +178,7 @@ function startAckTimer(messageId, attemptCount, debug = () => {}) {
   inflight.set(messageId, timer);
 }
 
-async function drainPersistOutbox(debug = () => {}) {
+async function drainPersistOutbox(debug: (message: string, details?: unknown) => void = () => {}) {
   ensureDatabase();
 
   if (typeof process.send !== "function") {
@@ -162,7 +186,7 @@ async function drainPersistOutbox(debug = () => {}) {
     return;
   }
 
-  const rows = selectReadyRows.all(new Date().toISOString()) ?? [];
+  const rows = (selectReadyRows?.all(new Date().toISOString()) as OutboxRow[] | undefined) ?? [];
 
   for (const row of rows) {
     if (inflight.has(row.message_id)) {
@@ -183,12 +207,19 @@ async function drainPersistOutbox(debug = () => {}) {
   }
 }
 
-function isPersistMessage(message) {
-  return !!message && PERSIST_MESSAGE_TYPES.has(message.type);
+function isPersistMessage(message: GatewayDesktopMessage): message is GatewayPersistMessage {
+  return PERSIST_MESSAGE_TYPES.has(message.type as GatewayPersistMessageType);
 }
 
-export function handlePersistAck(message, debug = () => {}) {
-  if (!message || message.type !== "persist-ack" || typeof message.messageId !== "string") {
+export function handlePersistAck(
+  message: unknown,
+  debug: (message: string, details?: unknown) => void = () => {},
+): message is GatewayPersistAckMessage {
+  if (
+    !isRecord(message) ||
+    message.type !== "persist-ack" ||
+    typeof message.messageId !== "string"
+  ) {
     return false;
   }
 
@@ -202,19 +233,21 @@ export function handlePersistAck(message, debug = () => {}) {
   ensureDatabase();
 
   if (message.ok) {
-    deleteRow.run(message.messageId);
+    deleteRow?.run(message.messageId);
     return true;
   }
 
   const existing = database
     .prepare(`select attempt_count from outbox where message_id = ? limit 1`)
-    .get(message.messageId);
+    .get(message.messageId) as OutboxAttemptCountRow | undefined;
 
   if (existing) {
+    const errorDetail =
+      typeof message.error === "string" ? message.error : "desktop persist rejected";
     failMessage(
       message.messageId,
       existing.attempt_count ?? 0,
-      message.error ?? "desktop persist rejected",
+      errorDetail,
       debug,
     );
   }
@@ -222,7 +255,10 @@ export function handlePersistAck(message, debug = () => {}) {
   return true;
 }
 
-export function sendToDesktop(message, debug = () => {}) {
+export function sendToDesktop(
+  message: GatewayDesktopMessage,
+  debug: (message: string, details?: unknown) => void = () => {},
+) {
   if (!isPersistMessage(message)) {
     if (typeof process.send !== "function") {
       debug("desktop IPC channel unavailable");
@@ -251,7 +287,7 @@ export function sendToDesktop(message, debug = () => {}) {
   };
   const timestamp = new Date().toISOString();
 
-  insertRow.run(
+  insertRow?.run(
     persistedMessage.messageId,
     JSON.stringify(persistedMessage),
     timestamp,

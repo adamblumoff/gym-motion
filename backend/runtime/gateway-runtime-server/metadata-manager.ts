@@ -1,7 +1,15 @@
-// @ts-nocheck
 import { METADATA_REFRESH_MS } from "./utils.js";
+import type { RuntimeDeviceMetadata } from "./runtime-types.js";
 
-export function createMetadataManager({ loadDevicesMetadata, metadataByDeviceId, debug }) {
+export function createMetadataManager({
+  loadDevicesMetadata,
+  metadataByDeviceId,
+  debug,
+}: {
+  loadDevicesMetadata: () => Promise<RuntimeDeviceMetadata[]>;
+  metadataByDeviceId: Map<string, RuntimeDeviceMetadata>;
+  debug: (message: string, details?: unknown) => void;
+}) {
   let metadataLoadedAt = 0;
 
   async function refreshMetadata(force = false) {

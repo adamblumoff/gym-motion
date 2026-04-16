@@ -1,10 +1,11 @@
-// @ts-nocheck
 /* global console, setTimeout */
 
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { BleAdapterSummary, DeviceSummary } from "@core/contracts";
 
 import { createGatewayRuntimeServer } from "../../backend/runtime/gateway-runtime-server.js";
+import { createDesktopControlCommandHandler } from "./windows-winrt-gateway-control.js";
 import {
   shouldWriteGatewayLog,
   shouldWriteSidecarLog,
@@ -16,7 +17,6 @@ import {
   selectPreferredAdapter,
 } from "./windows-winrt-gateway-config.js";
 import {
-  approvedNodeRulesReferToSamePhysicalNode,
   normalizeAllowedNodesPayload,
   describeNode,
 } from "./windows-winrt-gateway-node.js";
@@ -28,35 +28,58 @@ import {
   handlePersistAck,
   sendToDesktop,
 } from "./windows-winrt-gateway-desktop-ipc.js";
-import { parseGatewayControlCommand } from "../main/managed-gateway-runtime/gateway-child-ipc.js";
+import {
+  parseGatewayControlCommand,
+  type GatewayChildRuntimeReadyMessage,
+} from "../main/managed-gateway-runtime/gateway-child-ipc.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 import { createTelemetryEventHandler } from "./windows-winrt-gateway-telemetry.js";
+import type {
+  GatewayDesktopMessage,
+  GatewayDeviceContext,
+  GatewayRuntimeServer,
+  GatewaySidecarAdapterRecord,
+  GatewaySidecarEvent,
+} from "./windows-winrt-gateway-types.js";
 
 const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let selectedAdapterId = readSelectedAdapterId(process.env.GATEWAY_SELECTED_ADAPTER_ID);
-let latestDevicesMetadata = [];
+let latestDevicesMetadata: DeviceSummary[] = [];
+let handleDesktopControlCommand:
+  | ReturnType<typeof createDesktopControlCommandHandler>
+  | null = null;
 
-const runtimeServer = createGatewayRuntimeServer({
+async function onControlCommand(command: unknown): Promise<Record<string, unknown> | void> {
+  const parsed = parseGatewayControlCommand(command);
+  if (!parsed || !handleDesktopControlCommand) {
+    throw new Error("Invalid control command.");
+  }
+
+  const result = await handleDesktopControlCommand(parsed);
+  return result && typeof result === "object" ? (result as Record<string, unknown>) : undefined;
+}
+
+const runtimeServer: GatewayRuntimeServer = createGatewayRuntimeServer({
   loadDevicesMetadata: async () => latestDevicesMetadata,
   runtimeHost: config.runtimeHost,
   runtimePort: config.runtimePort,
-  onControlCommand: handleDesktopControlCommand,
+  onControlCommand,
   verbose: config.verbose,
 });
 
-let sidecar = null;
+let sidecar: ChildProcessWithoutNullStreams | null = null;
 let shuttingDown = false;
 let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
 let scanRequestedFromBoot = config.startScanOnBoot;
 let currentScanReason = null;
 let lastLoggedAdapterSnapshot = null;
-const deviceContexts = new Map();
-const liveTaskChains = new Map();
+const deviceContexts = new Map<string, GatewayDeviceContext>();
+const liveTaskChains = new Map<string, Promise<void>>();
 
-function log(message, details) {
+function log(message: string, details?: unknown) {
   if (!shouldWriteGatewayLog(message, config.verbose)) {
     return;
   }
@@ -69,7 +92,7 @@ function log(message, details) {
   console.log(`[gateway-winrt] ${message}`);
 }
 
-function debug(message, details) {
+function debug(message: string, details?: unknown) {
   if (!config.verbose) {
     return;
   }
@@ -77,7 +100,7 @@ function debug(message, details) {
   log(message, details);
 }
 
-function emitDesktopMessage(message) {
+function emitDesktopMessage(message: GatewayDesktopMessage) {
   sendToDesktop(message, debug);
 }
 
@@ -97,7 +120,7 @@ function emitAdaptersUpdated() {
   });
 }
 
-function emitRuntimeDeviceUpdated(deviceId) {
+function emitRuntimeDeviceUpdated(deviceId: string | null | undefined) {
   if (!deviceId) {
     return;
   }
@@ -123,13 +146,13 @@ function emitCurrentRuntimeDevices() {
   }
 }
 
-function setRuntimeIssue(issue) {
+function setRuntimeIssue(issue: string | null) {
   latestGatewayIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
   runtimeServer.setGatewayIssue(latestGatewayIssue);
   emitGatewayState();
 }
 
-function refreshSelectionIssue(adapters) {
+function refreshSelectionIssue(adapters: BleAdapterSummary[]) {
   if (!selectedAdapterId) {
     setRuntimeIssue("Bluetooth is unavailable on this machine.");
     return;
@@ -152,7 +175,7 @@ function refreshSelectionIssue(adapters) {
   }
 }
 
-function sendCommand(type, payload = {}) {
+function sendCommand(type: string, payload: Record<string, unknown> = {}) {
   if (!sidecar?.stdin || sidecar.killed) {
     return;
   }
@@ -160,7 +183,7 @@ function sendCommand(type, payload = {}) {
   sidecar.stdin.write(`${JSON.stringify({ type, ...payload })}\n`);
 }
 
-function emitPersistMessage(type, deviceId, payload) {
+function emitPersistMessage(type: "persist-motion", deviceId: string, payload: unknown) {
   sendToDesktop(
     {
       type,
@@ -171,7 +194,7 @@ function emitPersistMessage(type, deviceId, payload) {
   );
 }
 
-function queueTask(taskChains, deviceId, work) {
+function queueTask(taskChains: Map<string, Promise<void>>, deviceId: string, work: () => Promise<void>) {
   const current = taskChains.get(deviceId) ?? Promise.resolve();
   const next = current.then(work, work);
   const tracked = next.catch(() => {});
@@ -184,7 +207,7 @@ function queueTask(taskChains, deviceId, work) {
   });
 }
 
-function queueLiveDeviceTask(deviceId, work) {
+function queueLiveDeviceTask(deviceId: string, work: () => Promise<void>) {
   return queueTask(liveTaskChains, deviceId, work);
 }
 
@@ -194,7 +217,7 @@ function syncAllowedNodes() {
   });
 }
 
-function requireSidecar(action) {
+function requireSidecar(action: string) {
   if (!sidecar || sidecar.killed || !sidecar.stdin) {
     throw new Error(`Cannot ${action} because the Windows BLE sidecar is not running.`);
   }
@@ -211,7 +234,7 @@ const handleTelemetryEvent = createTelemetryEventHandler({
   debug,
 });
 
-function normalizeAdapterState(adapterState) {
+function normalizeAdapterState(adapterState: string | null | undefined) {
   if (adapterState === "ready") {
     return "poweredOn";
   }
@@ -219,81 +242,54 @@ function normalizeAdapterState(adapterState) {
   return adapterState ?? "unknown";
 }
 
-async function handleDesktopControlCommand(command) {
-  if (!command || typeof command !== "object") {
-    throw new Error("Invalid control command.");
-  }
-
-  if (command.type === "set_devices_metadata") {
-    latestDevicesMetadata = Array.isArray(command.devices)
-      ? command.devices.filter(
-          (device) => device && typeof device === "object" && typeof device.id === "string",
-        )
-      : [];
-
-    for (const device of latestDevicesMetadata) {
-      emitRuntimeDeviceUpdated(device.id);
-    }
-    emitGatewayState();
-
-    return {
-      deviceCount: latestDevicesMetadata.length,
-    };
-  }
-
-  if (command.type !== "set_allowed_nodes" || !Array.isArray(command.nodes)) {
-    throw new Error(`Unsupported control command: ${String(command.type ?? "unknown")}`);
-  }
-
-  requireSidecar("update approved nodes");
-
-  const nextApprovedNodeRules = command.nodes.map((node) => ({
-    id: node.id,
-    label: node.label,
-    peripheralId: node.peripheralId ?? node.peripheral_id ?? null,
-    address: node.address ?? null,
-    localName: node.localName ?? node.local_name ?? null,
-    knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
-  }));
-  const nextRuleIds = new Set(nextApprovedNodeRules.map((node) => node.id));
-  const removedRules = approvedNodeRules.filter((node) => !nextRuleIds.has(node.id));
-  const forgottenRules = removedRules.filter(
-    (removedRule) =>
-      !nextApprovedNodeRules.some((nextRule) =>
-        approvedNodeRulesReferToSamePhysicalNode(removedRule, nextRule),
-      ),
-  );
-
-  for (const rule of nextApprovedNodeRules) {
-    runtimeServer.restoreApprovedDevice({
-      deviceId: rule.knownDeviceId ?? null,
-      knownDeviceId: rule.knownDeviceId ?? null,
-      peripheralId: rule.peripheralId ?? null,
-      address: rule.address ?? null,
-      localName: rule.localName ?? null,
-    });
-  }
-
-  for (const rule of forgottenRules) {
-    runtimeServer.forgetDevice({
-      deviceId: rule.knownDeviceId ?? null,
-      knownDeviceId: rule.knownDeviceId ?? null,
-      peripheralId: rule.peripheralId ?? null,
-      address: rule.address ?? null,
-      localName: rule.localName ?? null,
-    });
-  }
-
-  approvedNodeRules = nextApprovedNodeRules;
-  syncAllowedNodes();
-  sendCommand("refresh_scan_policy");
-  emitGatewayState();
-
+function normalizeManualScanPayload(): GatewayChildRuntimeReadyMessage["manualScan"] {
+  const payload = runtimeServer.getManualScanPayload();
   return {
-    approvedCount: approvedNodeRules.length,
-    removedCount: removedRules.length,
-    forgottenCount: forgottenRules.length,
+    ...payload,
+    state:
+      payload.state === "idle" ||
+      payload.state === "scanning" ||
+      payload.state === "pairing" ||
+      payload.state === "failed"
+        ? payload.state
+        : undefined,
   };
+}
+
+handleDesktopControlCommand = createDesktopControlCommandHandler({
+  runtimeServer,
+  getApprovedNodeRules: () => approvedNodeRules,
+  setApprovedNodeRules: (rules) => {
+    approvedNodeRules = rules;
+  },
+  setLatestDevicesMetadata: (devices) => {
+    latestDevicesMetadata = devices;
+  },
+  syncAllowedNodes,
+  sendCommand,
+  emitGatewayState,
+  emitRuntimeDeviceUpdated,
+  requireSidecar,
+});
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null;
+}
+
+function normalizeSidecarAdapters(adapters: GatewaySidecarAdapterRecord[] | null | undefined) {
+  return Array.isArray(adapters)
+    ? adapters.map((adapter) => ({
+        id: adapter.id,
+        label: adapter.label,
+        transport: adapter.transport ?? "winrt",
+        runtimeDeviceId: null,
+        isAvailable: adapter.is_available ?? adapter.isAvailable ?? false,
+        issue: adapter.issue ?? null,
+        details: Array.isArray(adapter.details)
+          ? adapter.details.filter((detail): detail is string => typeof detail === "string")
+          : [],
+      }))
+    : [];
 }
 
 function attachControlReader() {
@@ -309,7 +305,7 @@ function attachControlReader() {
       return;
     }
 
-    const commandId = input && typeof input === "object" && typeof input.commandId === "string"
+    const commandId = isRecord(input) && typeof input.commandId === "string"
       ? input.commandId
       : null;
 
@@ -343,23 +339,13 @@ function attachControlReader() {
   });
 }
 
-function handleSidecarEvent(event) {
+function handleSidecarEvent(event: GatewaySidecarEvent) {
   switch (event.type) {
     case "ready":
       log("Windows BLE sidecar is ready.");
       break;
     case "adapter_list": {
-      const adapters = Array.isArray(event.adapters)
-        ? event.adapters.map((adapter) => ({
-            id: adapter.id,
-            label: adapter.label,
-            transport: adapter.transport ?? "winrt",
-            runtimeDeviceId: null,
-            isAvailable: adapter.is_available ?? adapter.isAvailable ?? false,
-            issue: adapter.issue ?? null,
-            details: Array.isArray(adapter.details) ? adapter.details : [],
-          }))
-        : [];
+      const adapters = normalizeSidecarAdapters(event.adapters);
       const adapterSnapshot = JSON.stringify(adapters);
       if (adapterSnapshot !== lastLoggedAdapterSnapshot) {
         lastLoggedAdapterSnapshot = adapterSnapshot;
@@ -463,7 +449,7 @@ async function startSidecar() {
     stdio: ["pipe", "pipe", "pipe"],
   });
 
-  sidecar.stderr?.on("data", (chunk) => {
+  sidecar.stderr.on("data", (chunk) => {
     process.stderr.write(`[sidecar] ${chunk}`);
   });
   attachJsonLineReader(sidecar.stdout, handleSidecarEvent);
@@ -543,7 +529,7 @@ void runtimeServer
       gateway: runtimeServer.getGatewayState(),
       issue: latestGatewayIssue,
       adapters: runtimeServer.getAvailableAdapters(),
-      manualScan: runtimeServer.getManualScanPayload(),
+      manualScan: normalizeManualScanPayload(),
     });
     emitCurrentRuntimeDevices();
     await startSidecar();

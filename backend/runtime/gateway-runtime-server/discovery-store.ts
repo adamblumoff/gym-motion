@@ -1,12 +1,16 @@
-// @ts-nocheck
-function normalizeBleAddress(address) {
+import type { ManualScanCandidateSummary } from "@core/contracts";
+import type { DiscoveryUpsertPayload } from "./runtime-types.js";
+
+type DiscoveryEntry = ManualScanCandidateSummary;
+
+function normalizeBleAddress(address: string | null | undefined) {
   return typeof address === "string" ? address.toLowerCase() : null;
 }
 
-export function createDiscoveryStore({ nowIso }) {
-  const discoveriesById = new Map();
+export function createDiscoveryStore({ nowIso }: { nowIso: () => string }) {
+  const discoveriesById = new Map<string, DiscoveryEntry>();
 
-  function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }) {
+  function discoveryIdFor({ peripheralId, address, localName, knownDeviceId }: DiscoveryUpsertPayload) {
     if (knownDeviceId) {
       return `known:${knownDeviceId}`;
     }
@@ -26,9 +30,15 @@ export function createDiscoveryStore({ nowIso }) {
     return "unknown";
   }
 
-  function upsertDiscovery({ peripheralId, address, localName, rssi, knownDeviceId = null }) {
+  function upsertDiscovery({
+    peripheralId,
+    address,
+    localName,
+    rssi,
+    knownDeviceId = null,
+  }: DiscoveryUpsertPayload) {
     const id = discoveryIdFor({ peripheralId, address, localName, knownDeviceId });
-    const aliasIds = new Set();
+    const aliasIds = new Set<string>();
 
     if (knownDeviceId) {
       aliasIds.add(`known:${knownDeviceId}`);
@@ -46,7 +56,7 @@ export function createDiscoveryStore({ nowIso }) {
       aliasIds.add(`name:${localName}`);
     }
 
-    let previous = discoveriesById.get(id) ?? {};
+    let previous: Partial<DiscoveryEntry> = discoveriesById.get(id) ?? {};
 
     for (const aliasId of aliasIds) {
       if (aliasId === id) {
@@ -66,13 +76,22 @@ export function createDiscoveryStore({ nowIso }) {
       discoveriesById.delete(aliasId);
     }
 
-    const next = {
+    const next: DiscoveryEntry = {
       ...previous,
       id,
+      label:
+        previous.label ??
+        localName ??
+        peripheralId ??
+        address ??
+        knownDeviceId ??
+        id,
       peripheralId: peripheralId ?? previous.peripheralId ?? null,
       address: address ?? previous.address ?? null,
       localName: localName ?? previous.localName ?? null,
       knownDeviceId,
+      machineLabel: previous.machineLabel ?? null,
+      siteId: previous.siteId ?? null,
       lastSeenAt: nowIso(),
       lastRssi: rssi ?? previous.lastRssi ?? null,
     };
@@ -86,6 +105,11 @@ export function createDiscoveryStore({ nowIso }) {
     peripheralId = null,
     address = null,
     localName = null,
+  }: {
+    knownDeviceId?: string | null;
+    peripheralId?: string | null;
+    address?: string | null;
+    localName?: string | null;
   }) {
     for (const [id, discovery] of discoveriesById.entries()) {
       if (

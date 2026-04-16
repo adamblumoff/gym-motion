@@ -1,5 +1,7 @@
-// @ts-nocheck
-export function describeNode(node = {}) {
+import type { ApprovedNodeRule } from "@core/contracts";
+import type { GatewayDeviceContext, GatewayNodeRecord } from "./windows-winrt-gateway-types.js";
+
+export function describeNode(node: GatewayNodeRecord = {}) {
   return {
     deviceId: node.knownDeviceId ?? node.known_device_id ?? null,
     knownDeviceId: node.knownDeviceId ?? node.known_device_id ?? null,
@@ -10,7 +12,7 @@ export function describeNode(node = {}) {
   };
 }
 
-export function createDeviceContext(deviceId) {
+export function createDeviceContext(deviceId: string): GatewayDeviceContext {
   return {
     deviceId,
     lastState: null,
@@ -24,7 +26,7 @@ export function createDeviceContext(deviceId) {
   };
 }
 
-export function normalizeAllowedNodesPayload(approvedNodeRules) {
+export function normalizeAllowedNodesPayload(approvedNodeRules: ApprovedNodeRule[]) {
   return approvedNodeRules.map((node) => ({
     id: node.id,
     label: node.label,
@@ -35,11 +37,14 @@ export function normalizeAllowedNodesPayload(approvedNodeRules) {
   }));
 }
 
-function normalizeBleAddress(address) {
+function normalizeBleAddress(address: string | null | undefined) {
   return typeof address === "string" ? address.toLowerCase() : null;
 }
 
-export function approvedNodeRulesReferToSamePhysicalNode(left = {}, right = {}) {
+export function approvedNodeRulesReferToSamePhysicalNode(
+  left: Partial<ApprovedNodeRule> = {},
+  right: Partial<ApprovedNodeRule> = {},
+) {
   if (
     left.knownDeviceId &&
     right.knownDeviceId &&

@@ -1,5 +1,14 @@
-// @ts-nocheck
 import path from "node:path";
+import type { ApprovedNodeRule, BleAdapterSummary } from "@core/contracts";
+
+type GatewayConfig = {
+  runtimeHost: string;
+  runtimePort: number;
+  startScanOnBoot: boolean;
+  sidecarPath: string;
+  sidecarArgs: string[];
+  verbose: boolean;
+};
 
 function defaultSidecarPath() {
   return path.join(
@@ -14,7 +23,7 @@ function defaultSidecarPath() {
   );
 }
 
-function parseSidecarArgs(raw) {
+function parseSidecarArgs(raw: string | undefined) {
   if (!raw) {
     return [];
   }
@@ -27,7 +36,7 @@ function parseSidecarArgs(raw) {
   }
 }
 
-export function createGatewayConfig() {
+export function createGatewayConfig(): GatewayConfig {
   return {
     runtimeHost: process.env.GATEWAY_RUNTIME_HOST ?? "127.0.0.1",
     runtimePort: Number(process.env.GATEWAY_RUNTIME_PORT ?? 4010),
@@ -38,7 +47,7 @@ export function createGatewayConfig() {
   };
 }
 
-export function parseApprovedNodeRules(raw) {
+export function parseApprovedNodeRules(raw: string | undefined): ApprovedNodeRule[] {
   if (!raw) {
     return [];
   }
@@ -51,10 +60,10 @@ export function parseApprovedNodeRules(raw) {
   }
 }
 
-export function readSelectedAdapterId(value) {
+export function readSelectedAdapterId(value: string | undefined) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function selectPreferredAdapter(adapters) {
+export function selectPreferredAdapter(adapters: BleAdapterSummary[]) {
   return adapters.find((adapter) => adapter.isAvailable)?.id ?? adapters[0]?.id ?? null;
 }

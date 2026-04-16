@@ -1,13 +1,39 @@
-// @ts-nocheck
+import type {
+  DiscoveryLocator,
+  RuntimeGatewayTransitionState,
+} from "../../backend/runtime/gateway-runtime-server/runtime-types.js";
+import type {
+  GatewayConnectionStateEvent,
+  GatewayDeviceContext,
+  GatewayRuntimeServer,
+} from "./windows-winrt-gateway-types.js";
 import { createDeviceContext, describeNode } from "./windows-winrt-gateway-node.js";
 
-export function getGatewayConnectionState(event) {
-  return event.gateway_connection_state ?? event.gatewayConnectionState ?? "disconnected";
+type GatewayConnectionStateHandlerDeps = {
+  runtimeServer: Pick<
+    GatewayRuntimeServer,
+    "applyGatewayConnectionState" | "resolveKnownDeviceId"
+  >;
+  deviceContexts: Map<string, GatewayDeviceContext>;
+  emitGatewayState: () => void;
+  emitRuntimeDeviceUpdated: (deviceId: string | null | undefined) => void;
+};
+
+export function getGatewayConnectionState(
+  event: GatewayConnectionStateEvent,
+): RuntimeGatewayTransitionState {
+  const state = event.gateway_connection_state ?? event.gatewayConnectionState;
+
+  if (state === "connecting" || state === "reconnecting" || state === "connected") {
+    return state;
+  }
+
+  return "disconnected";
 }
 
 export function applyNodeConnectionStateEvent(
-  event,
-  { runtimeServer, deviceContexts, emitGatewayState, emitRuntimeDeviceUpdated },
+  event: GatewayConnectionStateEvent,
+  { runtimeServer, deviceContexts, emitGatewayState, emitRuntimeDeviceUpdated }: GatewayConnectionStateHandlerDeps,
 ) {
   const node = event.node ?? {};
   const connectionState = getGatewayConnectionState(event);
@@ -17,13 +43,13 @@ export function applyNodeConnectionStateEvent(
     reconnectAttempt: null,
     reconnectAttemptLimit: null,
     reconnectRetryExhausted: false,
-    reconnectAwaitingDecision: false,
+      reconnectAwaitingDecision: false,
   };
 
   const knownDeviceId =
     node.knownDeviceId ??
     node.known_device_id ??
-    runtimeServer.resolveKnownDeviceId(peripheralInfo) ??
+    runtimeServer.resolveKnownDeviceId(peripheralInfo as DiscoveryLocator) ??
     null;
 
   if (knownDeviceId) {
@@ -41,7 +67,9 @@ export function applyNodeConnectionStateEvent(
     reason: event.reason ?? "ble-disconnected",
   });
 
-  const updatedDeviceId = knownDeviceId ?? runtimeServer.resolveKnownDeviceId(peripheralInfo);
+  const updatedDeviceId =
+    knownDeviceId ??
+    runtimeServer.resolveKnownDeviceId(peripheralInfo as DiscoveryLocator);
   emitGatewayState();
   emitRuntimeDeviceUpdated(updatedDeviceId);
 

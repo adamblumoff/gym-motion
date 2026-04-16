@@ -1,4 +1,10 @@
-// @ts-nocheck
+import type http from "node:http";
+import type {
+  BleAdapterSummary,
+  GatewayRuntimeDevicesResponse,
+  GatewayStatusSummary,
+  ManualScanCandidateSummary,
+} from "@core/contracts";
 import { STREAM_PING_MS, formatSseEvent, jsonResponse } from "./utils.js";
 
 export function createRequestHandler({
@@ -13,8 +19,25 @@ export function createRequestHandler({
   broadcastGatewayStatus,
   readJsonRequest,
   listDiscoveries,
+}: {
+  gatewayState: GatewayStatusSummary;
+  getRuntimeIssue: () => string | null;
+  getAvailableAdapters: () => BleAdapterSummary[];
+  streamClients: Set<http.ServerResponse>;
+  getDevicesPayload: () => Promise<GatewayRuntimeDevicesResponse>;
+  getManualScanPayload: () => {
+    state: string;
+    pairingCandidateId?: string | null;
+    error?: string | null;
+    candidates?: ManualScanCandidateSummary[];
+  };
+  onControlCommand: ((command: unknown) => Promise<Record<string, unknown> | void>) | null;
+  touchGatewayState: () => void;
+  broadcastGatewayStatus: () => void;
+  readJsonRequest: (request: http.IncomingMessage) => Promise<unknown>;
+  listDiscoveries: () => ManualScanCandidateSummary[];
 }) {
-  return async function handleRequest(request, response) {
+  return async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     const runtimeIssue = getRuntimeIssue();
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
 

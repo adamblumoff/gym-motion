@@ -1,5 +1,4 @@
-// @ts-nocheck
-export function shouldWriteGatewayLog(message, verbose) {
+export function shouldWriteGatewayLog(message: string, verbose: boolean) {
   if (verbose) {
     return true;
   }
@@ -10,11 +9,11 @@ export function shouldWriteGatewayLog(message, verbose) {
   );
 }
 
-export function shouldWriteDiscoveryLog(scanReason) {
+export function shouldWriteDiscoveryLog(scanReason: string | null) {
   return scanReason !== "approved-reconnect";
 }
 
-export function shouldWriteSidecarLog(level, message, verbose) {
+export function shouldWriteSidecarLog(level: string, message: string, verbose: boolean) {
   if (level !== "info") {
     return true;
   }
@@ -25,6 +24,7 @@ export function shouldWriteSidecarLog(level, message, verbose) {
 
   return (
     message.startsWith("Configured telemetry notifications.") ||
-    message.startsWith("Established session via direct runtime-status verification.")
+    message.startsWith("Established session via direct runtime-status verification.") ||
+    message.startsWith("Pausing BLE scan while reconnect handshake is in flight.")
   );
 }
