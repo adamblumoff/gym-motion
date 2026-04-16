@@ -1,11 +1,25 @@
-// @ts-nocheck
 const MAX_BUFFER_LENGTH = 64 * 1024
 
-export function createJsonObjectDecoder({ label, onObject, onParseError }) {
-  let buffer = ""
-  let framedBuffer = null
+type JsonObjectDecoderOptions<TObject> = {
+  label: string
+  onObject: (value: TObject) => void
+  onParseError?: (error: Error, candidate: string) => void
+}
 
-  function emitParseError(error, candidate) {
+type JsonObjectDecoder = {
+  push: (chunk: Buffer | string) => void
+  reset: () => void
+}
+
+export function createJsonObjectDecoder<TObject = unknown>({
+  label,
+  onObject,
+  onParseError,
+}: JsonObjectDecoderOptions<TObject>): JsonObjectDecoder {
+  let buffer = ""
+  let framedBuffer: string | null = null
+
+  function emitParseError(error: unknown, candidate: string) {
     onParseError?.(
       error instanceof Error ? error : new Error(String(error)),
       candidate,
@@ -92,7 +106,7 @@ export function createJsonObjectDecoder({ label, onObject, onParseError }) {
           framedBuffer = null
 
           try {
-            onObject(JSON.parse(candidate))
+            onObject(JSON.parse(candidate) as TObject)
           } catch (error) {
             emitParseError(error, candidate)
           }
@@ -133,7 +147,7 @@ export function createJsonObjectDecoder({ label, onObject, onParseError }) {
         buffer = buffer.slice(objectEnd + 1)
 
         try {
-          onObject(JSON.parse(candidate))
+          onObject(JSON.parse(candidate) as TObject)
         } catch (error) {
           emitParseError(error, candidate)
         }

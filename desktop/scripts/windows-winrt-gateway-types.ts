@@ -91,6 +91,15 @@ export type GatewayDesktopMessage =
       device: GatewayRuntimeDeviceSummary;
     }
   | {
+      type: "manual-scan-updated";
+      payload: {
+        state?: "idle" | "scanning" | "pairing" | "failed";
+        pairingCandidateId?: string | null;
+        error?: string | null;
+        candidates?: ManualScanCandidateSummary[];
+      };
+    }
+  | {
       type: "runtime-ready";
       gateway: GatewayStatusSummary;
       issue: string | null;

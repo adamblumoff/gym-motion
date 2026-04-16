@@ -237,7 +237,12 @@ export function handlePersistAck(
     return true;
   }
 
-  const existing = database
+  const db = database;
+  if (!db) {
+    return true;
+  }
+
+  const existing = db
     .prepare(`select attempt_count from outbox where message_id = ? limit 1`)
     .get(message.messageId) as OutboxAttemptCountRow | undefined;
 

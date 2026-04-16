@@ -1,8 +1,58 @@
-// @ts-nocheck
 import process from "node:process";
 
+import type {
+  ApprovedNodeRule,
+  BleAdapterSummary,
+  DeviceLogLevel,
+  GatewayConnectionState,
+  GatewayRuntimeDeviceSummary,
+  GatewayStatusSummary,
+  HealthStatus,
+  ManualScanCandidateSummary,
+  ManualScanState,
+  MotionState,
+  TelemetryFreshness,
+} from "@core/contracts";
+import {
+  parseGatewayControlCommand,
+  type GatewayControlCommand,
+} from "../main/managed-gateway-runtime/gateway-child-ipc.js";
 import { sendToDesktop } from "../scripts/windows-winrt-gateway-desktop-ipc.js";
-import { parseGatewayControlCommand } from "../main/managed-gateway-runtime/gateway-child-ipc.js";
+import type { GatewayDesktopMessage } from "../scripts/windows-winrt-gateway-types.js";
+
+type FakeNodeIdentity = {
+  ruleId: string;
+  candidateId: string;
+  deviceId: string;
+  label: string;
+  localName: string;
+  address: string;
+  peripheralId: string;
+  bootId: string;
+  firmwareVersion: string;
+  hardwareId: string;
+  rssi: number;
+  machineLabel: string;
+  siteId: string;
+};
+
+type FakeManualScanPayload = {
+  state: ManualScanState;
+  pairingCandidateId: string | null;
+  error: string | null;
+  candidates: ManualScanCandidateSummary[];
+};
+
+type GatewayIncomingControlCommand =
+  | (GatewayControlCommand & { commandId?: string })
+  | {
+      type?: string;
+      commandId?: string;
+      candidateId?: string;
+      ruleId?: string;
+      name?: string;
+      nodes?: unknown;
+    };
 
 const DEFAULT_NODE = {
   ruleId: "rule-f4e9d4",
@@ -18,7 +68,7 @@ const DEFAULT_NODE = {
   rssi: -58,
   machineLabel: "Leg Press",
   siteId: "Dallas",
-};
+} satisfies FakeNodeIdentity;
 
 function nowIso() {
   return new Date().toISOString();
@@ -28,15 +78,27 @@ function nowMs() {
   return Date.now();
 }
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+function clone<TValue>(value: TValue): TValue {
+  return JSON.parse(JSON.stringify(value)) as TValue;
 }
 
-function log(...parts) {
-  process.stdout.write(`[fake-gateway-child] ${parts.join(" ")}\n`);
+function log(...parts: unknown[]) {
+  process.stdout.write(`[fake-gateway-child] ${parts.map(String).join(" ")}\n`);
 }
 
-function parseApprovedRules() {
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null;
+}
+
+function isApprovedNodeRule(input: unknown): input is ApprovedNodeRule {
+  return (
+    isRecord(input) &&
+    typeof input.id === "string" &&
+    typeof input.label === "string"
+  );
+}
+
+function parseApprovedRules(): ApprovedNodeRule[] {
   const raw = process.env.GATEWAY_APPROVED_NODE_RULES;
   if (!raw) {
     return [];
@@ -44,7 +106,7 @@ function parseApprovedRules() {
 
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.filter(isApprovedNodeRule) : [];
   } catch (error) {
     log(
       "failed to parse GATEWAY_APPROVED_NODE_RULES:",
@@ -54,23 +116,92 @@ function parseApprovedRules() {
   }
 }
 
-let approvedRules = parseApprovedRules();
-let adapterState = "poweredOn";
-let scanState = approvedRules.length > 0 ? "scanning" : "stopped";
-let scanReason = approvedRules.length > 0 ? "approved-reconnect" : null;
+function healthStatusFor(connectionState: GatewayConnectionState): HealthStatus {
+  switch (connectionState) {
+    case "connected":
+      return "online";
+    case "connecting":
+    case "reconnecting":
+    case "discovered":
+      return "stale";
+    case "disconnected":
+    case "unreachable":
+    default:
+      return "offline";
+  }
+}
+
+function telemetryFreshnessFor(
+  connectionState: GatewayConnectionState,
+  lastTelemetryAt: string | null,
+): TelemetryFreshness {
+  if (connectionState === "connected" && lastTelemetryAt) {
+    return "fresh";
+  }
+
+  if (lastTelemetryAt) {
+    return "stale";
+  }
+
+  return "missing";
+}
+
+function createAdapterSummary(): BleAdapterSummary {
+  return {
+    id: "winrt:0",
+    label: "Bluetooth",
+    transport: "winrt",
+    runtimeDeviceId: null,
+    isAvailable: adapterState === "poweredOn",
+    issue: adapterState === "poweredOn" ? null : `adapter-${adapterState}`,
+    details: [`state:${adapterState}`],
+  };
+}
+
+function normalizeIncomingCommand(input: unknown): GatewayIncomingControlCommand {
+  const parsed = parseGatewayControlCommand(input);
+  const commandId =
+    isRecord(input) && typeof input.commandId === "string" ? input.commandId : undefined;
+
+  if (parsed) {
+    return commandId ? { ...parsed, commandId } : parsed;
+  }
+
+  if (!isRecord(input)) {
+    return {};
+  }
+
+  return {
+    type: typeof input.type === "string" ? input.type : undefined,
+    commandId,
+    candidateId:
+      typeof input.candidateId === "string" ? input.candidateId : undefined,
+    ruleId: typeof input.ruleId === "string" ? input.ruleId : undefined,
+    name: typeof input.name === "string" ? input.name : undefined,
+    nodes: input.nodes,
+  };
+}
+
+let approvedRules: ApprovedNodeRule[] = parseApprovedRules();
+let adapterState: GatewayStatusSummary["adapterState"] = "poweredOn";
+let scanState: GatewayStatusSummary["scanState"] =
+  approvedRules.length > 0 ? "scanning" : "stopped";
+let scanReason: GatewayStatusSummary["scanReason"] =
+  approvedRules.length > 0 ? "approved-reconnect" : null;
 let gatewayStartedAt = nowIso();
-let gatewayLastAdvertisementAt = null;
-let manualScan = {
+let gatewayLastAdvertisementAt: string | null = null;
+let manualScan: FakeManualScanPayload = {
   state: "idle",
   pairingCandidateId: null,
   error: null,
   candidates: [],
 };
-let runtimeDevice = approvedRules.length > 0 ? createRuntimeDevice("disconnected") : null;
+let runtimeDevice: GatewayRuntimeDeviceSummary | null =
+  approvedRules.length > 0 ? createRuntimeDevice("disconnected") : null;
 let motionSequence = 0;
 let logSequence = 0;
 
-function currentIdentity() {
+function currentIdentity(): FakeNodeIdentity {
   const approvedRule = approvedRules[0] ?? null;
   return {
     ruleId: approvedRule?.id ?? DEFAULT_NODE.ruleId,
@@ -89,7 +220,7 @@ function currentIdentity() {
   };
 }
 
-function currentCandidate() {
+function currentCandidate(): ManualScanCandidateSummary {
   const identity = currentIdentity();
   return {
     id: identity.candidateId,
@@ -105,49 +236,80 @@ function currentCandidate() {
   };
 }
 
-function createRuntimeDevice(connectionState, overrides = {}) {
+function createRuntimeDevice(
+  connectionState: GatewayConnectionState,
+  overrides: Partial<GatewayRuntimeDeviceSummary> = {},
+): GatewayRuntimeDeviceSummary {
   const identity = currentIdentity();
   const timestamp = nowIso();
+  const gatewayLastTelemetryAt =
+    overrides.gatewayLastTelemetryAt ?? runtimeDevice?.gatewayLastTelemetryAt ?? null;
+
   return {
-    deviceId: identity.deviceId,
+    id: identity.deviceId,
+    lastState: overrides.lastState ?? runtimeDevice?.lastState ?? "still",
+    lastSeenAt: overrides.lastSeenAt ?? runtimeDevice?.lastSeenAt ?? nowMs(),
+    lastDelta: overrides.lastDelta ?? runtimeDevice?.lastDelta ?? null,
+    updatedAt: timestamp,
+    hardwareId: identity.hardwareId,
+    bootId: identity.bootId,
+    firmwareVersion: identity.firmwareVersion,
+    machineLabel: identity.machineLabel,
+    siteId: identity.siteId,
+    provisioningState:
+      overrides.provisioningState ?? runtimeDevice?.provisioningState ?? "assigned",
+    updateStatus: overrides.updateStatus ?? runtimeDevice?.updateStatus ?? "idle",
+    updateTargetVersion:
+      overrides.updateTargetVersion ?? runtimeDevice?.updateTargetVersion ?? null,
+    updateDetail: overrides.updateDetail ?? runtimeDevice?.updateDetail ?? null,
+    updateUpdatedAt:
+      overrides.updateUpdatedAt ?? runtimeDevice?.updateUpdatedAt ?? null,
+    lastHeartbeatAt:
+      overrides.lastHeartbeatAt ?? runtimeDevice?.lastHeartbeatAt ?? null,
+    lastEventReceivedAt:
+      overrides.lastEventReceivedAt ?? runtimeDevice?.lastEventReceivedAt ?? null,
+    healthStatus:
+      overrides.healthStatus ?? healthStatusFor(connectionState),
     gatewayConnectionState: connectionState,
+    telemetryFreshness:
+      overrides.telemetryFreshness ??
+      telemetryFreshnessFor(connectionState, gatewayLastTelemetryAt),
+    sensorIssue: overrides.sensorIssue ?? runtimeDevice?.sensorIssue ?? null,
     peripheralId: identity.peripheralId,
     address: identity.address,
     gatewayLastAdvertisementAt:
       overrides.gatewayLastAdvertisementAt ?? gatewayLastAdvertisementAt,
     gatewayLastConnectedAt:
       overrides.gatewayLastConnectedAt ??
-      (connectionState === "connected" ? timestamp : null),
+      (connectionState === "connected"
+        ? timestamp
+        : runtimeDevice?.gatewayLastConnectedAt ?? null),
     gatewayLastDisconnectedAt:
-      connectionState === "connected" ? null : overrides.gatewayLastDisconnectedAt ?? timestamp,
-    gatewayLastTelemetryAt: overrides.gatewayLastTelemetryAt ?? null,
+      connectionState === "connected"
+        ? null
+        : overrides.gatewayLastDisconnectedAt ?? timestamp,
+    gatewayLastTelemetryAt,
     gatewayDisconnectReason:
-      overrides.gatewayDisconnectReason ?? (connectionState === "connected" ? null : "link lost"),
+      overrides.gatewayDisconnectReason ??
+      (connectionState === "connected" ? null : "link lost"),
     advertisedName: identity.localName,
     lastRssi: identity.rssi,
-    lastState: overrides.lastState ?? "still",
-    lastSeenAt: overrides.lastSeenAt ?? nowMs(),
-    lastDelta: overrides.lastDelta ?? null,
-    firmwareVersion: identity.firmwareVersion,
-    bootId: identity.bootId,
-    hardwareId: identity.hardwareId,
-    otaStatus: "idle",
-    otaTargetVersion: null,
-    otaProgressBytesSent: null,
-    otaTotalBytes: null,
-    otaLastPhase: null,
-    otaFailureDetail: null,
-    otaLastStatusMessage: null,
-    otaUpdatedAt: null,
+    otaStatus: overrides.otaStatus ?? "idle",
+    otaTargetVersion: overrides.otaTargetVersion ?? null,
+    otaProgressBytesSent: overrides.otaProgressBytesSent ?? null,
+    otaTotalBytes: overrides.otaTotalBytes ?? null,
+    otaLastPhase: overrides.otaLastPhase ?? null,
+    otaFailureDetail: overrides.otaFailureDetail ?? null,
+    otaLastStatusMessage: overrides.otaLastStatusMessage ?? null,
+    otaUpdatedAt: overrides.otaUpdatedAt ?? null,
     reconnectAttempt: overrides.reconnectAttempt ?? 0,
     reconnectAttemptLimit: overrides.reconnectAttemptLimit ?? 20,
     reconnectRetryExhausted: overrides.reconnectRetryExhausted ?? false,
     reconnectAwaitingDecision: overrides.reconnectAwaitingDecision ?? false,
-    updatedAt: timestamp,
   };
 }
 
-function currentGateway() {
+function currentGateway(): GatewayStatusSummary {
   return {
     hostname: "e2e-desktop",
     mode: "reference-ble-node-gateway",
@@ -156,7 +318,8 @@ function currentGateway() {
     scanState,
     scanReason,
     connectedNodeCount: runtimeDevice?.gatewayConnectionState === "connected" ? 1 : 0,
-    reconnectingNodeCount: runtimeDevice?.gatewayConnectionState === "reconnecting" ? 1 : 0,
+    reconnectingNodeCount:
+      runtimeDevice?.gatewayConnectionState === "reconnecting" ? 1 : 0,
     knownNodeCount: approvedRules.length,
     startedAt: gatewayStartedAt,
     updatedAt: nowIso(),
@@ -164,7 +327,7 @@ function currentGateway() {
   };
 }
 
-function sendRuntime(message) {
+function sendRuntime(message: GatewayDesktopMessage) {
   sendToDesktop(message, log);
 }
 
@@ -179,17 +342,7 @@ function emitGatewayState() {
 function emitAdapters() {
   sendRuntime({
     type: "adapters-updated",
-    adapters: [
-      {
-        id: "winrt:0",
-        label: "Bluetooth",
-        transport: "winrt",
-        runtimeDeviceId: null,
-        isAvailable: adapterState === "poweredOn",
-        issue: adapterState === "poweredOn" ? null : `adapter-${adapterState}`,
-        details: [`state:${adapterState}`],
-      },
-    ],
+    adapters: [createAdapterSummary()],
     issue: null,
   });
 }
@@ -212,8 +365,12 @@ function emitRuntimeDevice() {
   });
 }
 
-function respond(command, ok, resultOrError) {
-  if (typeof command?.commandId !== "string") {
+function respond(
+  command: GatewayIncomingControlCommand,
+  ok: boolean,
+  resultOrError: unknown,
+) {
+  if (typeof command.commandId !== "string") {
     return;
   }
 
@@ -221,7 +378,9 @@ function respond(command, ok, resultOrError) {
     type: "control-response",
     commandId: command.commandId,
     ok,
-    ...(ok ? { result: resultOrError } : { error: String(resultOrError ?? "Unknown error") }),
+    ...(ok
+      ? { result: resultOrError }
+      : { error: String(resultOrError ?? "Unknown error") }),
   });
 }
 
@@ -259,7 +418,7 @@ function syncRuntimeIdentityFromApprovedRules() {
   const identity = currentIdentity();
   runtimeDevice = {
     ...runtimeDevice,
-    deviceId: identity.deviceId,
+    id: identity.deviceId,
     peripheralId: identity.peripheralId,
     address: identity.address,
     advertisedName: identity.localName,
@@ -271,7 +430,10 @@ function syncRuntimeIdentityFromApprovedRules() {
   };
 }
 
-function setDisconnected(reason = "link lost", overrides = {}) {
+function setDisconnected(
+  reason = "link lost",
+  overrides: Partial<GatewayRuntimeDeviceSummary> = {},
+) {
   runtimeDevice = createRuntimeDevice("disconnected", {
     lastState: runtimeDevice?.lastState ?? "still",
     lastSeenAt: runtimeDevice?.lastSeenAt ?? nowMs(),
@@ -293,6 +455,9 @@ function setConnected() {
     lastSeenAt: runtimeDevice?.lastSeenAt ?? nowMs(),
     lastDelta: runtimeDevice?.lastDelta ?? null,
     gatewayLastTelemetryAt: runtimeDevice?.gatewayLastTelemetryAt ?? null,
+    lastEventReceivedAt: nowIso(),
+    healthStatus: "online",
+    telemetryFreshness: runtimeDevice?.gatewayLastTelemetryAt ? "fresh" : "missing",
   });
   scanState = "stopped";
   scanReason = null;
@@ -324,7 +489,7 @@ function clearManualScan() {
   emitManualScan();
 }
 
-function sendPersistMotion(state, delta = null) {
+function sendPersistMotion(state: MotionState, delta: number | null = null) {
   motionSequence += 1;
   const identity = currentIdentity();
   const timestamp = nowMs();
@@ -334,6 +499,8 @@ function sendPersistMotion(state, delta = null) {
     lastSeenAt: timestamp,
     lastDelta: delta,
     gatewayLastTelemetryAt: nowIso(),
+    lastEventReceivedAt: nowIso(),
+    telemetryFreshness: "fresh",
     updatedAt: nowIso(),
   };
   emitRuntimeDevice();
@@ -356,7 +523,7 @@ function sendPersistMotion(state, delta = null) {
   );
 }
 
-function sendDeviceLog(level, code, message) {
+function sendDeviceLog(level: DeviceLogLevel, code: string, message: string) {
   logSequence += 1;
   const identity = currentIdentity();
   sendToDesktop(
@@ -379,7 +546,7 @@ function sendDeviceLog(level, code, message) {
   );
 }
 
-function applyStep(name) {
+function applyStep(name: string | undefined) {
   switch (name) {
     case "announceCandidate":
       showCandidate();
@@ -481,7 +648,11 @@ function applyStep(name) {
         reconnectAwaitingDecision: runtimeDevice?.reconnectAwaitingDecision ?? false,
       });
       sendPersistMotion("moving", 12);
-      sendDeviceLog("info", "motion.telemetry", "Motion telemetry arrived while transport stayed disconnected.");
+      sendDeviceLog(
+        "info",
+        "motion.telemetry",
+        "Motion telemetry arrived while transport stayed disconnected.",
+      );
       return { ok: true };
     case "emitMovingTelemetry":
       syncRuntimeIdentityFromApprovedRules();
@@ -498,12 +669,15 @@ function applyStep(name) {
   }
 }
 
-function handleCommand(command) {
+function handleCommand(command: GatewayIncomingControlCommand) {
   try {
-    log("command", String(command?.type ?? "unknown"));
-    switch (command?.type) {
+    log("command", String(command.type ?? "unknown"));
+    switch (command.type) {
       case "set_allowed_nodes":
-        approvedRules = Array.isArray(command.nodes) ? clone(command.nodes) : [];
+        approvedRules =
+          Array.isArray(command.nodes) && command.nodes.every(isApprovedNodeRule)
+            ? clone(command.nodes)
+            : [];
         syncRuntimeIdentityFromApprovedRules();
         refreshApprovedReconnectState();
         emitGatewayState();
@@ -550,15 +724,19 @@ function handleCommand(command) {
         respond(command, true, applyStep(command.name));
         return;
       default:
-        respond(command, false, `Unsupported control command: ${String(command?.type ?? "unknown")}`);
+        respond(
+          command,
+          false,
+          `Unsupported control command: ${String(command.type ?? "unknown")}`,
+        );
     }
   } catch (error) {
     respond(command, false, error instanceof Error ? error.message : String(error));
   }
 }
 
-process.on("message", (message) => {
-  handleCommand(parseGatewayControlCommand(message) ?? message);
+process.on("message", (message: unknown) => {
+  handleCommand(normalizeIncomingCommand(message));
 });
 
 process.on("SIGTERM", () => {
@@ -574,17 +752,7 @@ function emitInitialState() {
     type: "runtime-ready",
     gateway: currentGateway(),
     issue: null,
-    adapters: [
-      {
-        id: "winrt:0",
-        label: "Bluetooth",
-        transport: "winrt",
-        runtimeDeviceId: null,
-        isAvailable: true,
-        issue: null,
-        details: ["state:PoweredOn"],
-      },
-    ],
+    adapters: [createAdapterSummary()],
     manualScan: clone(manualScan),
   });
 

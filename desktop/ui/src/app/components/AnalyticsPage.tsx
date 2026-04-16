@@ -8,6 +8,9 @@ import {
   BarChart,
   CartesianGrid,
   Tooltip,
+  type TooltipContentProps,
+  type TooltipPayloadEntry,
+  type TooltipValueType,
   XAxis,
   YAxis,
 } from "recharts";
@@ -40,18 +43,35 @@ function analyticsKey(deviceId: string, window: AnalyticsWindow) {
 
 const ANALYTICS_WINDOWS: AnalyticsWindow[] = ["24h", "7d"];
 const ACTIVITY_LIMIT = 60;
+type AnalyticsTooltipProps = TooltipContentProps<TooltipValueType>;
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+function formatTooltipValue(value: TooltipValueType | undefined) {
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+
+  return value ?? "";
+}
+
+const CustomTooltip = ({
+  active,
+  payload,
+  label,
+}: AnalyticsTooltipProps) => {
   if (!active || !payload?.length) {
     return null;
   }
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950/95 px-3 py-2 shadow-2xl">
-      <p className="mb-1 text-xs text-zinc-400">{label}</p>
-      {payload.map((entry: any) => (
-        <p key={entry.name} className="text-xs" style={{ color: entry.color }}>
-          {entry.name}: {entry.value}
+      <p className="mb-1 text-xs text-zinc-400">{String(label ?? "")}</p>
+      {payload.map((entry: TooltipPayloadEntry<TooltipValueType>, index) => (
+        <p
+          key={String(entry.name ?? entry.dataKey ?? index)}
+          className="text-xs"
+          style={{ color: entry.color }}
+        >
+          {String(entry.name ?? entry.dataKey ?? "Value")}: {formatTooltipValue(entry.value)}
           {entry.dataKey === "movingMinutes" ? " min" : ""}
         </p>
       ))}
@@ -464,7 +484,7 @@ export function AnalyticsPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
                   <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                  <Tooltip content={<CustomTooltip />} />
+                  <Tooltip content={CustomTooltip} />
                   <Area
                     type="monotone"
                     dataKey="movingMinutes"
@@ -502,7 +522,7 @@ export function AnalyticsPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="label" stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
                   <YAxis stroke="#52525b" tick={{ fill: "#71717a", fontSize: 11 }} />
-                  <Tooltip content={<CustomTooltip />} />
+                  <Tooltip content={CustomTooltip} />
                   <Bar
                     dataKey="movements"
                     name="Movement starts"
