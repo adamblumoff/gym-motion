@@ -14,7 +14,6 @@ export function createDeviceContext(deviceId) {
   return {
     deviceId,
     lastState: null,
-    lastHeartbeatForwardedAt: 0,
     firmwareVersion: "unknown",
     bootId: null,
     hardwareId: null,

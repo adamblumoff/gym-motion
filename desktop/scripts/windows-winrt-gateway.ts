@@ -17,15 +17,19 @@ import {
 } from "./windows-winrt-gateway-config.js";
 import {
   approvedNodeRulesReferToSamePhysicalNode,
-  createDeviceContext,
   normalizeAllowedNodesPayload,
   describeNode,
 } from "./windows-winrt-gateway-node.js";
+import {
+  applyNodeConnectionStateEvent,
+  getGatewayConnectionState,
+} from "./windows-winrt-gateway-connection.js";
 import {
   handlePersistAck,
   sendToDesktop,
 } from "./windows-winrt-gateway-desktop-ipc.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
+import { createTelemetryEventHandler } from "./windows-winrt-gateway-telemetry.js";
 
 const config = createGatewayConfig();
 
@@ -202,140 +206,16 @@ function requireSidecar(action) {
   }
 }
 
-function applyNodeConnectionState(event) {
-  const node = event.node ?? {};
-  const connectionState =
-    event.gateway_connection_state ??
-    event.gatewayConnectionState ??
-    "disconnected";
-  const peripheralInfo = describeNode(node);
-  const payload = {
-    ...peripheralInfo,
-    reconnectAttempt: null,
-    reconnectAttemptLimit: null,
-    reconnectRetryExhausted: false,
-    reconnectAwaitingDecision: false,
-  };
-
-  const knownDeviceId =
-    node.knownDeviceId ??
-    node.known_device_id ??
-    runtimeServer.resolveKnownDeviceId(peripheralInfo) ??
-    null;
-  if (knownDeviceId) {
-    const context = deviceContexts.get(knownDeviceId) ?? createDeviceContext(knownDeviceId);
-    context.lastGatewayConnectionState = connectionState;
-    context.peripheralId = payload.peripheralId ?? context.peripheralId ?? null;
-    context.address = payload.address ?? context.address ?? null;
-    context.advertisedName = payload.localName ?? context.advertisedName ?? null;
-    context.rssi = payload.rssi ?? context.rssi ?? null;
-    deviceContexts.set(knownDeviceId, context);
-  }
-
-  if (connectionState === "connecting" || connectionState === "reconnecting") {
-    runtimeServer.noteConnecting(payload);
-  } else if (connectionState === "connected") {
-    runtimeServer.noteConnected(payload);
-  } else {
-    runtimeServer.noteDisconnected({
-      ...payload,
-      reason: event.reason ?? "ble-disconnected",
-    });
-  }
-
-  emitGatewayState();
-  emitRuntimeDeviceUpdated(knownDeviceId ?? runtimeServer.resolveKnownDeviceId(peripheralInfo));
-}
-
-async function forwardTelemetryNow(event) {
-  const rawPayload = event.payload_text ?? event.payloadText ?? null;
-  if (typeof rawPayload !== "string" || rawPayload.length === 0) {
-    return;
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(rawPayload);
-  } catch (error) {
-    log("failed to parse telemetry payload", {
-      error: error instanceof Error ? error.message : String(error),
-      rawPayload,
-    });
-    return;
-  }
-
-  if (!payload?.deviceId || !payload?.state || !payload?.timestamp) {
-    debug("ignored telemetry payload missing required fields", payload);
-    return;
-  }
-
-  const node = describeNode(event.node ?? {});
-  const context = deviceContexts.get(payload.deviceId) ?? createDeviceContext(payload.deviceId);
-  const previousState = context.lastState;
-
-  context.firmwareVersion = payload.firmwareVersion ?? context.firmwareVersion ?? "unknown";
-  context.bootId = payload.bootId ?? context.bootId ?? null;
-  context.hardwareId = payload.hardwareId ?? context.hardwareId ?? null;
-  context.peripheralId = node.peripheralId ?? context.peripheralId ?? null;
-  context.address = node.address ?? context.address ?? null;
-  context.advertisedName = node.localName ?? context.advertisedName ?? null;
-  context.rssi = node.rssi ?? context.rssi ?? null;
-  context.lastGatewayConnectionState = "connected";
-  deviceContexts.set(payload.deviceId, context);
-
-  await runtimeServer.noteTelemetry(payload, {
-    ...node,
-    deviceId: payload.deviceId,
-    knownDeviceId: payload.deviceId,
-  });
-  emitGatewayState();
-  emitRuntimeDeviceUpdated(payload.deviceId);
-
-  if (payload.snapshot === true) {
-    context.lastState = payload.state;
-    return;
-  }
-
-  if (previousState === payload.state) {
-    context.lastState = payload.state;
-    return;
-  }
-
-  emitPersistMessage("persist-motion", payload.deviceId, {
-    deviceId: payload.deviceId,
-    state: payload.state,
-    timestamp: payload.timestamp,
-    delta: payload.delta ?? null,
-    sequence: payload.sequence,
-    bootId: payload.bootId,
-    firmwareVersion: payload.firmwareVersion,
-    hardwareId: payload.hardwareId,
-  });
-  context.lastState = payload.state;
-}
-
-function handleTelemetryEvent(event) {
-  const payloadDeviceId = (() => {
-    const rawPayload = event.payload_text ?? event.payloadText ?? null;
-    if (typeof rawPayload !== "string" || rawPayload.length === 0) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(rawPayload);
-      return typeof parsed?.deviceId === "string" ? parsed.deviceId : null;
-    } catch {
-      return null;
-    }
-  })();
-
-  if (!payloadDeviceId) {
-    void forwardTelemetryNow(event);
-    return;
-  }
-
-  void queueLiveDeviceTask(payloadDeviceId, () => forwardTelemetryNow(event));
-}
+const handleTelemetryEvent = createTelemetryEventHandler({
+  runtimeServer,
+  deviceContexts,
+  emitGatewayState,
+  emitRuntimeDeviceUpdated,
+  emitPersistMessage,
+  queueLiveDeviceTask,
+  log,
+  debug,
+});
 
 function normalizeAdapterState(adapterState) {
   if (adapterState === "ready") {
@@ -542,14 +422,16 @@ function handleSidecarEvent(event) {
     }
     case "node_connection_state":
       log("received node connection state", {
-        state:
-          event.gateway_connection_state ??
-          event.gatewayConnectionState ??
-          "disconnected",
+        state: getGatewayConnectionState(event),
         peripheralId: event.node?.peripheral_id ?? event.node?.peripheralId ?? null,
         knownDeviceId: event.node?.known_device_id ?? event.node?.knownDeviceId ?? null,
       });
-      applyNodeConnectionState(event);
+      applyNodeConnectionStateEvent(event, {
+        runtimeServer,
+        deviceContexts,
+        emitGatewayState,
+        emitRuntimeDeviceUpdated,
+      });
       break;
     case "telemetry":
       handleTelemetryEvent(event);
