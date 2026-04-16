@@ -29,6 +29,12 @@ export function createRuntimeServer(overrides = {}) {
         after: { gatewayConnectionState: "connecting" },
       };
     },
+    applyGatewayConnectionState() {
+      return {
+        before: { gatewayConnectionState: "disconnected" },
+        after: { gatewayConnectionState: "connecting" },
+      };
+    },
     noteConnected() {
       return {
         before: { gatewayConnectionState: "connecting" },

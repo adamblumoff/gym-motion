@@ -101,30 +101,23 @@ function emitRuntimeDeviceUpdated(deviceId) {
     return;
   }
 
-  const runtimeNode = runtimeServer.getRuntimeNode(deviceId);
+  const deviceSummary = runtimeServer.getDeviceSummary(deviceId);
 
-  if (!runtimeNode) {
+  if (!deviceSummary) {
     return;
   }
 
   emitDesktopMessage({
     type: "runtime-device-updated",
-    device: {
-      deviceId,
-      ...runtimeNode,
-      reconnectAwaitingDecision: runtimeNode.reconnectAwaitingDecision ?? false,
-    },
+    device: deviceSummary,
   });
 }
 
 function emitCurrentRuntimeDevices() {
-  for (const runtimeNode of runtimeServer.getRuntimeNodes()) {
+  for (const device of runtimeServer.getDeviceSummaries()) {
     emitDesktopMessage({
       type: "runtime-device-updated",
-      device: {
-        ...runtimeNode,
-        reconnectAwaitingDecision: runtimeNode.reconnectAwaitingDecision ?? false,
-      },
+      device,
     });
   }
 }

@@ -18,7 +18,7 @@ describe("windows winrt gateway connection", () => {
   it("applies a connected event and updates runtime/device context state", () => {
     const runtimeServer = createRuntimeServer({
       resolveKnownDeviceId: vi.fn(() => "known-node"),
-      noteConnected: vi.fn(),
+      applyGatewayConnectionState: vi.fn(),
     });
     const deviceContexts = new Map();
     const emitGatewayState = vi.fn();
@@ -42,8 +42,9 @@ describe("windows winrt gateway connection", () => {
       },
     );
 
-    expect(runtimeServer.noteConnected).toHaveBeenCalledWith(
+    expect(runtimeServer.applyGatewayConnectionState).toHaveBeenCalledWith(
       expect.objectContaining({
+        connectionState: "connected",
         deviceId: null,
         knownDeviceId: null,
         peripheralId: "peripheral:aa",
@@ -59,7 +60,6 @@ describe("windows winrt gateway connection", () => {
         address: "AA",
         advertisedName: "Gym Motion",
         rssi: -51,
-        lastGatewayConnectionState: "connected",
       }),
     );
     expect(emitGatewayState).toHaveBeenCalledTimes(1);

@@ -20,6 +20,7 @@ import {
 import { createKnownNodeStore } from "./persistence.js";
 import { createRequestHandler } from "./routes.js";
 import { createProjectionHelpers } from "./projection.js";
+import { createRuntimeStateHelpers } from "./runtime-state.js";
 import { createDiscoveryStore } from "./discovery-store.js";
 import { createManualScanManager } from "./manual-scan.js";
 import { createMetadataManager } from "./metadata-manager.js";
@@ -146,27 +147,36 @@ export function createGatewayRuntimeServer({
     metadataByDeviceId,
     runtimeByDeviceId,
     knownNodesByDeviceId,
-    deviceIdByPeripheralId,
-    gatewayState,
     broadcast,
-    broadcastGatewayStatus,
-    touchGatewayState,
     nowIso,
     healthStatusFromRuntime,
     telemetryFreshnessFromTimestamp,
+  });
+
+  const { mergeDevice, emitDevice } = projection;
+
+  const runtimeState = createRuntimeStateHelpers({
+    metadataByDeviceId,
+    runtimeByDeviceId,
+    knownNodesByDeviceId,
+    deviceIdByPeripheralId,
+    touchGatewayState,
+    emitDevice,
+    mergeDevice,
     emptyOtaRuntimeState,
     emptyReconnectRuntimeState,
+    nowIso,
   });
 
   const {
-    mergeDevice,
-    emitDevice,
     upsertKnownNode,
     resolveKnownDeviceIdByDiscovery,
     updateRuntimeNode,
     normalizeIdleConnectionStates,
     inspectNodeConnection,
-  } = projection;
+    getDeviceSummary,
+    getDeviceSummaries,
+  } = runtimeState;
 
   async function getDevicesPayload() {
     await refreshMetadata();
@@ -354,6 +364,10 @@ export function createGatewayRuntimeServer({
       const runtime = runtimeByDeviceId.get(deviceId);
       return runtime ? { ...runtime } : null;
     },
+
+    getDeviceSummary,
+
+    getDeviceSummaries,
 
     getRuntimeNodes() {
       return Array.from(runtimeByDeviceId.entries()).map(([deviceId, runtime]) => ({

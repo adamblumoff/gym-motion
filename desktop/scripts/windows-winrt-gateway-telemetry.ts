@@ -63,7 +63,6 @@ export function createTelemetryEventHandler({
     context.address = node.address ?? context.address ?? null;
     context.advertisedName = node.localName ?? context.advertisedName ?? null;
     context.rssi = node.rssi ?? context.rssi ?? null;
-    context.lastGatewayConnectionState = "connected";
     deviceContexts.set(payload.deviceId, context);
 
     await runtimeServer.noteTelemetry(payload, {

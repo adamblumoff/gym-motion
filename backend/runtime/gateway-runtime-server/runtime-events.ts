@@ -95,6 +95,257 @@ export function createRuntimeDeviceEventController({
     });
   }
 
+  function applyGatewayConnectionState({
+    connectionState,
+    reason = null,
+    ...payload
+  }) {
+    if (connectionState === "connecting" || connectionState === "reconnecting") {
+      return noteConnecting(payload);
+    }
+
+    if (connectionState === "connected") {
+      return noteConnected(payload);
+    }
+
+    return noteDisconnected({
+      ...payload,
+      reason: reason ?? "ble-disconnected",
+    });
+  }
+
+  function noteConnecting({
+    deviceId = null,
+    knownDeviceId = null,
+    peripheralId,
+    address,
+    localName,
+    rssi,
+    reconnectAttempt = null,
+    reconnectAttemptLimit = null,
+    reconnectRetryExhausted = null,
+    reconnectAwaitingDecision = null,
+  }) {
+    const previous = inspectNodeConnection({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+    const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+    upsertDiscovery({
+      peripheralId,
+      address,
+      localName,
+      rssi,
+      knownDeviceId: resolvedDeviceId,
+    });
+
+    if (!resolvedDeviceId) {
+      return;
+    }
+
+    clearPendingReconnectDisconnect(resolvedDeviceId);
+
+    const nextConnectionState =
+      previous?.gatewayConnectionState === "disconnected" ||
+      previous?.gatewayConnectionState === "unreachable" ||
+      previous?.gatewayConnectionState === "reconnecting"
+        ? "reconnecting"
+        : "connecting";
+
+    updateRuntimeNode(resolvedDeviceId, {
+      peripheralId,
+      address: address ?? null,
+      gatewayConnectionState: nextConnectionState,
+      gatewayLastAdvertisementAt: nowIso(),
+      advertisedName: localName ?? null,
+      lastRssi: rssi ?? null,
+      reconnectAttempt:
+        reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
+      reconnectAttemptLimit:
+        reconnectAttemptLimit ??
+        runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+        20,
+      reconnectRetryExhausted: reconnectRetryExhausted ?? false,
+      reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
+    });
+    upsertKnownNode(resolvedDeviceId, {
+      peripheralId,
+      lastAdvertisedName: localName ?? null,
+      lastKnownAddress: address ?? null,
+    });
+    knownNodeStore.schedulePersist();
+    emitDevice(resolvedDeviceId);
+    broadcastGatewayStatus();
+    return {
+      before: previous,
+      after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
+    };
+  }
+
+  function noteConnected({
+    deviceId = null,
+    knownDeviceId = null,
+    peripheralId,
+    address,
+    localName,
+    rssi,
+    reconnectAttempt = null,
+    reconnectAttemptLimit = null,
+    reconnectAwaitingDecision = null,
+  }) {
+    const previous = inspectNodeConnection({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+    const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+    upsertDiscovery({
+      peripheralId,
+      address,
+      localName,
+      rssi,
+      knownDeviceId: resolvedDeviceId,
+    });
+
+    if (!resolvedDeviceId) {
+      return;
+    }
+
+    clearPendingReconnectDisconnect(resolvedDeviceId);
+
+    updateRuntimeNode(resolvedDeviceId, {
+      peripheralId,
+      address: address ?? null,
+      gatewayConnectionState: "connected",
+      gatewayLastConnectedAt: nowIso(),
+      gatewayDisconnectReason: null,
+      advertisedName: localName ?? null,
+      lastRssi: rssi ?? null,
+      reconnectAttempt: reconnectAttempt ?? 0,
+      reconnectAttemptLimit:
+        reconnectAttemptLimit ??
+        runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+        20,
+      reconnectRetryExhausted: false,
+      reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
+    });
+    upsertKnownNode(resolvedDeviceId, {
+      peripheralId,
+      lastAdvertisedName: localName ?? null,
+      lastKnownAddress: address ?? null,
+      lastConnectedAt: nowIso(),
+    });
+    knownNodeStore.schedulePersist();
+    emitDevice(resolvedDeviceId);
+    broadcastGatewayStatus();
+    return {
+      before: previous,
+      after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
+    };
+  }
+
+  function noteDisconnected({
+    deviceId = null,
+    knownDeviceId = null,
+    peripheralId,
+    localName,
+    address,
+    reason,
+    reconnectAttempt = null,
+    reconnectAttemptLimit = null,
+    reconnectRetryExhausted = null,
+    reconnectAwaitingDecision = null,
+  }) {
+    const previous = inspectNodeConnection({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+    const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
+      deviceId,
+      knownDeviceId,
+      peripheralId,
+      localName,
+      address,
+    });
+
+    if (!resolvedDeviceId) {
+      return {
+        applied: false,
+        before: previous,
+        after: null,
+      };
+    }
+
+    if (isReconnectInFlight(previous?.gatewayConnectionState)) {
+      scheduleReconnectDisconnect(resolvedDeviceId, {
+        peripheralId,
+        address: address ?? null,
+        reason: reason ?? "ble-disconnected",
+        reconnectAttempt,
+        reconnectAttemptLimit,
+        reconnectRetryExhausted,
+        reconnectAwaitingDecision,
+      });
+      return {
+        applied: false,
+        provisional: true,
+        before: previous,
+        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
+      };
+    }
+
+    clearPendingReconnectDisconnect(resolvedDeviceId);
+
+    updateRuntimeNode(resolvedDeviceId, {
+      peripheralId,
+      address: address ?? null,
+      gatewayConnectionState: "disconnected",
+      gatewayLastDisconnectedAt: nowIso(),
+      gatewayDisconnectReason: reason ?? "ble-disconnected",
+      reconnectAttempt:
+        reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
+      reconnectAttemptLimit:
+        reconnectAttemptLimit ??
+        runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
+        20,
+      reconnectRetryExhausted:
+        reconnectRetryExhausted ??
+        runtimeByDeviceId.get(resolvedDeviceId)?.reconnectRetryExhausted ??
+        false,
+      reconnectAwaitingDecision:
+        reconnectAwaitingDecision ??
+        runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAwaitingDecision ??
+        false,
+    });
+    emitDevice(resolvedDeviceId);
+    broadcastGatewayStatus();
+    return {
+      applied: true,
+      before: previous,
+      after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
+    };
+  }
+
   return {
     noteDiscovery({
       deviceId = null,
@@ -162,152 +413,11 @@ export function createRuntimeDeviceEventController({
       knownNodeStore.schedulePersist();
     },
 
-    noteConnecting({
-      deviceId = null,
-      knownDeviceId = null,
-      peripheralId,
-      address,
-      localName,
-      rssi,
-      reconnectAttempt = null,
-      reconnectAttemptLimit = null,
-      reconnectRetryExhausted = null,
-      reconnectAwaitingDecision = null,
-    }) {
-      const previous = inspectNodeConnection({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-      upsertDiscovery({
-        peripheralId,
-        address,
-        localName,
-        rssi,
-        knownDeviceId: resolvedDeviceId,
-      });
+    applyGatewayConnectionState,
 
-      if (!resolvedDeviceId) {
-        return;
-      }
+    noteConnecting,
 
-      clearPendingReconnectDisconnect(resolvedDeviceId);
-
-      const nextConnectionState =
-        previous?.gatewayConnectionState === "disconnected" ||
-        previous?.gatewayConnectionState === "unreachable" ||
-        previous?.gatewayConnectionState === "reconnecting"
-          ? "reconnecting"
-          : "connecting";
-
-      updateRuntimeNode(resolvedDeviceId, {
-        peripheralId,
-        address: address ?? null,
-        gatewayConnectionState: nextConnectionState,
-        gatewayLastAdvertisementAt: nowIso(),
-        advertisedName: localName ?? null,
-        lastRssi: rssi ?? null,
-        reconnectAttempt:
-          reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
-        reconnectAttemptLimit:
-          reconnectAttemptLimit ??
-          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
-          20,
-        reconnectRetryExhausted: reconnectRetryExhausted ?? false,
-        reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
-      });
-      upsertKnownNode(resolvedDeviceId, {
-        peripheralId,
-        lastAdvertisedName: localName ?? null,
-        lastKnownAddress: address ?? null,
-      });
-      knownNodeStore.schedulePersist();
-      emitDevice(resolvedDeviceId);
-      broadcastGatewayStatus();
-      return {
-        before: previous,
-        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
-      };
-    },
-
-    noteConnected({
-      deviceId = null,
-      knownDeviceId = null,
-      peripheralId,
-      address,
-      localName,
-      rssi,
-      reconnectAttempt = null,
-      reconnectAttemptLimit = null,
-      reconnectAwaitingDecision = null,
-    }) {
-      const previous = inspectNodeConnection({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-      upsertDiscovery({
-        peripheralId,
-        address,
-        localName,
-        rssi,
-        knownDeviceId: resolvedDeviceId,
-      });
-
-      if (!resolvedDeviceId) {
-        return;
-      }
-
-      clearPendingReconnectDisconnect(resolvedDeviceId);
-
-      updateRuntimeNode(resolvedDeviceId, {
-        peripheralId,
-        address: address ?? null,
-        gatewayConnectionState: "connected",
-        gatewayLastConnectedAt: nowIso(),
-        gatewayDisconnectReason: null,
-        advertisedName: localName ?? null,
-        lastRssi: rssi ?? null,
-        reconnectAttempt: reconnectAttempt ?? 0,
-        reconnectAttemptLimit:
-          reconnectAttemptLimit ??
-          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
-          20,
-        reconnectRetryExhausted: false,
-        reconnectAwaitingDecision: reconnectAwaitingDecision ?? false,
-      });
-      upsertKnownNode(resolvedDeviceId, {
-        peripheralId,
-        lastAdvertisedName: localName ?? null,
-        lastKnownAddress: address ?? null,
-        lastConnectedAt: nowIso(),
-      });
-      knownNodeStore.schedulePersist();
-      emitDevice(resolvedDeviceId);
-      broadcastGatewayStatus();
-      return {
-        before: previous,
-        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
-      };
-    },
+    noteConnected,
 
     async noteTelemetry(payload, peripheralInfo = {}) {
       const previous = inspectNodeConnection({ deviceId: payload.deviceId });
@@ -383,90 +493,7 @@ export function createRuntimeDeviceEventController({
       };
     },
 
-    noteDisconnected({
-      deviceId = null,
-      knownDeviceId = null,
-      peripheralId,
-      localName,
-      address,
-      reason,
-      reconnectAttempt = null,
-      reconnectAttemptLimit = null,
-      reconnectRetryExhausted = null,
-      reconnectAwaitingDecision = null,
-    }) {
-      const previous = inspectNodeConnection({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-      const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
-        deviceId,
-        knownDeviceId,
-        peripheralId,
-        localName,
-        address,
-      });
-
-      if (!resolvedDeviceId) {
-        return {
-          applied: false,
-          before: previous,
-          after: null,
-        };
-      }
-
-      if (isReconnectInFlight(previous?.gatewayConnectionState)) {
-        scheduleReconnectDisconnect(resolvedDeviceId, {
-          peripheralId,
-          address: address ?? null,
-          reason: reason ?? "ble-disconnected",
-          reconnectAttempt,
-          reconnectAttemptLimit,
-          reconnectRetryExhausted,
-          reconnectAwaitingDecision,
-        });
-        return {
-          applied: false,
-          provisional: true,
-          before: previous,
-          after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
-        };
-      }
-
-      clearPendingReconnectDisconnect(resolvedDeviceId);
-
-      updateRuntimeNode(resolvedDeviceId, {
-        peripheralId,
-        address: address ?? null,
-        gatewayConnectionState: "disconnected",
-        gatewayLastDisconnectedAt: nowIso(),
-        gatewayDisconnectReason: reason ?? "ble-disconnected",
-        reconnectAttempt:
-          reconnectAttempt ?? runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttempt ?? 0,
-        reconnectAttemptLimit:
-          reconnectAttemptLimit ??
-          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAttemptLimit ??
-          20,
-        reconnectRetryExhausted:
-          reconnectRetryExhausted ??
-          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectRetryExhausted ??
-          false,
-        reconnectAwaitingDecision:
-          reconnectAwaitingDecision ??
-          runtimeByDeviceId.get(resolvedDeviceId)?.reconnectAwaitingDecision ??
-          false,
-      });
-      emitDevice(resolvedDeviceId);
-      broadcastGatewayStatus();
-      return {
-        applied: true,
-        before: previous,
-        after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
-      };
-    },
+    noteDisconnected,
 
     clearReconnectDecision({
       deviceId = null,

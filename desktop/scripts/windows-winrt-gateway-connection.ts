@@ -28,7 +28,6 @@ export function applyNodeConnectionStateEvent(
 
   if (knownDeviceId) {
     const context = deviceContexts.get(knownDeviceId) ?? createDeviceContext(knownDeviceId);
-    context.lastGatewayConnectionState = connectionState;
     context.peripheralId = payload.peripheralId ?? context.peripheralId ?? null;
     context.address = payload.address ?? context.address ?? null;
     context.advertisedName = payload.localName ?? context.advertisedName ?? null;
@@ -36,16 +35,11 @@ export function applyNodeConnectionStateEvent(
     deviceContexts.set(knownDeviceId, context);
   }
 
-  if (connectionState === "connecting" || connectionState === "reconnecting") {
-    runtimeServer.noteConnecting(payload);
-  } else if (connectionState === "connected") {
-    runtimeServer.noteConnected(payload);
-  } else {
-    runtimeServer.noteDisconnected({
-      ...payload,
-      reason: event.reason ?? "ble-disconnected",
-    });
-  }
+  runtimeServer.applyGatewayConnectionState({
+    connectionState,
+    ...payload,
+    reason: event.reason ?? "ble-disconnected",
+  });
 
   const updatedDeviceId = knownDeviceId ?? runtimeServer.resolveKnownDeviceId(peripheralInfo);
   emitGatewayState();

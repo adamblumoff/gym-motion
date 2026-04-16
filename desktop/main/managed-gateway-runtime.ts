@@ -12,9 +12,6 @@ import { hasMotionRollupTables, listDevices, rebuildMotionRollups } from "../../
 import { getDb } from "../../backend/data/db";
 
 import { createDesktopApiServer } from "./desktop-api-server";
-import {
-  mergeRuntimeDeviceIntoGatewaySnapshot,
-} from "./gateway-snapshot";
 import type { PreferencesStore } from "./preferences-store";
 import {
   matchesApprovedNodeRule,
@@ -370,14 +367,13 @@ export function createManagedGatewayRuntime(
       ? never
       : Extract<GatewayChildRuntimeMessage, { type: "runtime-device-updated" }>["device"],
   ) {
-    const nextDevice = mergeRuntimeDeviceIntoGatewaySnapshot(snapshot.devices, runtimeDevice);
-    runtimeCache.upsertDevice(nextDevice);
+    runtimeCache.upsertDevice(runtimeDevice);
     snapshot = getSnapshot();
     if (pruneSnapshotToApprovedNodes()) {
       snapshot = getSnapshot();
     }
     emitRuntimeBatch({
-      devices: [nextDevice],
+      devices: [runtimeDevice],
     });
   }
 

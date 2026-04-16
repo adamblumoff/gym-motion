@@ -21,7 +21,6 @@ export function createDeviceContext(deviceId) {
     address: null,
     advertisedName: null,
     rssi: null,
-    lastGatewayConnectionState: null,
   };
 }
 

@@ -1,9 +1,8 @@
 import type {
   BleAdapterSummary,
-  GatewayConnectionState,
+  GatewayRuntimeDeviceSummary,
   GatewayStatusSummary,
   ManualScanCandidateSummary,
-  OtaRuntimeStatus,
 } from "@core/contracts";
 
 type GatewayChildPersistMessageType =
@@ -20,39 +19,7 @@ export type GatewayChildPersistMessage = {
 
 export type GatewayChildRuntimeDeviceMessage = {
   type: "runtime-device-updated";
-  device: {
-    deviceId: string;
-    gatewayConnectionState: GatewayConnectionState;
-    peripheralId: string | null;
-    address: string | null;
-    gatewayLastAdvertisementAt: string | null;
-    gatewayLastConnectedAt: string | null;
-    gatewayLastDisconnectedAt: string | null;
-    gatewayLastTelemetryAt: string | null;
-    gatewayDisconnectReason: string | null;
-    advertisedName: string | null;
-    lastRssi: number | null;
-    lastState: "moving" | "still";
-    sensorIssue?: string | null;
-    lastSeenAt: number;
-    lastDelta: number | null;
-    firmwareVersion: string;
-    bootId: string | null;
-    hardwareId: string | null;
-    otaStatus: OtaRuntimeStatus;
-    otaTargetVersion: string | null;
-    otaProgressBytesSent: number | null;
-    otaTotalBytes: number | null;
-    otaLastPhase: string | null;
-    otaFailureDetail: string | null;
-    otaLastStatusMessage: string | null;
-    otaUpdatedAt: string | null;
-    reconnectAttempt: number;
-    reconnectAttemptLimit: number;
-    reconnectRetryExhausted: boolean;
-    reconnectAwaitingDecision: boolean;
-    updatedAt: string;
-  };
+  device: GatewayRuntimeDeviceSummary;
 };
 
 export type GatewayChildGatewayStateMessage = {
