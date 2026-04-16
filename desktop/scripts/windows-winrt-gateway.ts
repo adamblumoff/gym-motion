@@ -44,13 +44,11 @@ const config = createGatewayConfig();
 
 let approvedNodeRules = parseApprovedNodeRules(process.env.GATEWAY_APPROVED_NODE_RULES);
 let latestDevicesMetadata: DeviceSummary[] = [];
-let handleDesktopControlCommand:
-  | ReturnType<typeof createDesktopControlCommandHandler>
-  | null = null;
+let handleDesktopControlCommand: ReturnType<typeof createDesktopControlCommandHandler>;
 
 async function onControlCommand(command: unknown): Promise<Record<string, unknown> | void> {
   const parsed = parseGatewayControlCommand(command);
-  if (!parsed || !handleDesktopControlCommand) {
+  if (!parsed) {
     throw new Error("Invalid control command.");
   }
 
@@ -254,10 +252,6 @@ handleDesktopControlCommand = createDesktopControlCommandHandler({
   requireSidecar,
 });
 
-function isRecord(input: unknown): input is Record<string, unknown> {
-  return typeof input === "object" && input !== null;
-}
-
 function normalizeSidecarAdapters(adapters: GatewaySidecarAdapterRecord[] | null | undefined) {
   return Array.isArray(adapters)
     ? adapters.map((adapter) => ({
@@ -280,18 +274,15 @@ function attachControlReader() {
       return;
     }
 
-    const command = parseGatewayControlCommand(input);
-
-    if (!command) {
-      console.error("[gateway-winrt] ignored invalid control command", input);
-      return;
-    }
-
-    const commandId = isRecord(input) && typeof input.commandId === "string"
+    const commandId =
+      typeof input === "object" &&
+      input !== null &&
+      "commandId" in input &&
+      typeof input.commandId === "string"
       ? input.commandId
       : null;
 
-    void handleDesktopControlCommand(command)
+    void onControlCommand(input)
       .then((result) => {
         if (!commandId) {
           return;
