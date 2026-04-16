@@ -233,6 +233,11 @@ export function createRuntimeDeviceEventController({
       const previous = inspectNodeConnection({ deviceId: payload.deviceId });
       const telemetryAt = nowIso();
       const previousRuntime = runtimeByDeviceId.get(payload.deviceId) ?? null;
+      const nextConnectionState =
+        previousRuntime?.gatewayConnectionState === "connecting" ||
+        previousRuntime?.gatewayConnectionState === "reconnecting"
+          ? previousRuntime.gatewayConnectionState
+          : "connected";
 
       updateRuntimeNode(payload.deviceId, {
         peripheralId:
@@ -245,7 +250,7 @@ export function createRuntimeDeviceEventController({
           previousRuntime?.address ??
           knownNodesByDeviceId.get(payload.deviceId)?.lastKnownAddress ??
           null,
-        gatewayConnectionState: "connected",
+        gatewayConnectionState: nextConnectionState,
         gatewayLastConnectedAt: previousRuntime?.gatewayLastConnectedAt ?? telemetryAt,
         gatewayDisconnectReason: null,
         gatewayLastTelemetryAt: telemetryAt,

@@ -207,11 +207,7 @@ export function createProjectionHelpers({
 
   function normalizeIdleConnectionStates() {
     for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
-      if (
-        runtime.gatewayConnectionState === "connecting" ||
-        runtime.gatewayConnectionState === "reconnecting" ||
-        runtime.gatewayConnectionState === "discovered"
-      ) {
+      if (runtime.gatewayConnectionState === "discovered") {
         runtimeByDeviceId.set(deviceId, {
           ...runtime,
           gatewayConnectionState: "disconnected",

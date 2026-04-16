@@ -163,6 +163,113 @@ describe("gateway runtime server", () => {
     ]);
   });
 
+  it("keeps reconnecting visible until the explicit connected event arrives", async () => {
+    const runtimePort = 51250 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createRuntimeServer({ runtimePort });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+    runtimeServer.noteConnecting({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+    await runtimeServer.noteTelemetry(
+      {
+        deviceId: "stack-001",
+        state: "moving",
+        timestamp: 123,
+        delta: 7,
+        bootId: "boot-1",
+        firmwareVersion: "0.5.3",
+        hardwareId: "hw-1",
+      },
+      {
+        peripheralId: "peripheral-1",
+        address: "AA:BB",
+        localName: "GymMotion-f4e9d4",
+        rssi: -48,
+      },
+    );
+
+    const reconnectingResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const reconnectingPayload = await reconnectingResponse.json();
+
+    expect(reconnectingPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "reconnecting",
+        lastState: "moving",
+        telemetryFreshness: "fresh",
+      }),
+    ]);
+
+    runtimeServer.noteConnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+
+    const connectedResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const connectedPayload = await connectedResponse.json();
+
+    expect(connectedPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "connected",
+      }),
+    ]);
+  });
+
+  it("does not demote reconnecting nodes back to disconnected when scan stops", async () => {
+    const runtimePort = 51275 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createRuntimeServer({ runtimePort });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+    runtimeServer.noteConnecting({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+    runtimeServer.setScanState("stopped");
+
+    const response = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const payload = await response.json();
+
+    expect(payload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "reconnecting",
+      }),
+    ]);
+  });
+
   it("resolves address-only known nodes case-insensitively during rediscovery and flushes known-node writes on stop", async () => {
     const runtimePort = 51300 + Math.floor(Math.random() * 1000);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-known-"));

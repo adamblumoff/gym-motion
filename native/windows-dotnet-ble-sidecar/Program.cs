@@ -595,9 +595,9 @@ internal sealed class NodeConnection
                 });
 
                 _activeSessionId = adoptedSessionId;
+                await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
                 StartLeaseLoop(discovered, adoptedSessionId, connectToken);
                 StartTelemetryLoop(discovered, connectToken);
-                await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
                 return;
             }
 
@@ -634,9 +634,9 @@ internal sealed class NodeConnection
             });
 
             _activeSessionId = sessionId;
+            await _app.EmitNodeConnectionStateAsync(discovered, "connected", bootId);
             StartLeaseLoop(discovered, sessionId, connectToken);
             StartTelemetryLoop(discovered, connectToken);
-            await _app.EmitNodeConnectionStateAsync(discovered, "connected", bootId);
         }
         catch (OperationCanceledException)
         {
