@@ -71,7 +71,6 @@ let shuttingDown = false;
 let latestGatewayIssue = null;
 let sidecarSessionStarted = false;
 let scanRequestedFromBoot = config.startScanOnBoot;
-let currentScanReason = null;
 let lastLoggedAdapterSnapshot = null;
 const deviceContexts = new Map<string, GatewayDeviceContext>();
 const liveTaskChains = new Map<string, Promise<void>>();
@@ -225,14 +224,6 @@ const handleTelemetryEvent = createTelemetryEventHandler({
   debug,
 });
 
-function normalizeAdapterState(adapterState: string | null | undefined) {
-  if (adapterState === "ready") {
-    return "poweredOn";
-  }
-
-  return adapterState ?? "unknown";
-}
-
 function normalizeManualScanPayload(): GatewayChildRuntimeReadyMessage["manualScan"] {
   const payload = runtimeServer.getManualScanPayload();
   return {
@@ -363,13 +354,12 @@ function handleSidecarEvent(event: GatewaySidecarEvent) {
       break;
     }
     case "gateway_state":
-      currentScanReason = event.gateway?.scan_reason ?? event.scanReason ?? null;
       runtimeServer.setAdapterState(
-        normalizeAdapterState(event.gateway?.adapter_state ?? event.adapterState),
+        event.gateway?.adapter_state ?? event.adapterState ?? "unknown",
       );
       runtimeServer.setScanState(
         event.gateway?.scan_state ?? event.scanState ?? "stopped",
-        currentScanReason,
+        event.gateway?.scan_reason ?? event.scanReason ?? null,
       );
       setRuntimeIssue(event.gateway?.issue ?? event.issue ?? null);
       emitGatewayState();
@@ -438,7 +428,6 @@ async function startSidecar() {
   attachJsonLineReader(sidecar.stdout, handleSidecarEvent);
   sidecar.once("exit", (code, signal) => {
     sidecar = null;
-    currentScanReason = null;
     runtimeServer.setAdapterState("unknown");
     runtimeServer.setScanState("stopped", null);
 

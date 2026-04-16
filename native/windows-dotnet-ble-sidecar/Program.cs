@@ -23,6 +23,7 @@ internal static class Program
 internal sealed class SidecarApp
 {
     private const uint ProtocolVersion = 1;
+    private sealed record AdapterSnapshot(string Id, string Label, bool IsAvailable, string? Issue, string[] Details);
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -112,16 +113,11 @@ internal sealed class SidecarApp
                 }
                 break;
             case "start":
-                _sessionStarted = true;
-                EnsureWatcher();
-                await EmitGatewayStateAsync();
-                TryConnectApprovedNodes();
+                await StartSessionAsync();
                 break;
             case "rescan":
             case "refresh_scan_policy":
-                EnsureWatcher(forceRestart: true);
-                await EmitGatewayStateAsync();
-                TryConnectApprovedNodes();
+                await StartSessionAsync(forceRestart: true);
                 break;
             case "stop":
                 await StopAsync();
@@ -136,6 +132,14 @@ internal sealed class SidecarApp
                 });
                 break;
         }
+    }
+
+    private async Task StartSessionAsync(bool forceRestart = false)
+    {
+        _sessionStarted = true;
+        EnsureWatcher(forceRestart);
+        await EmitGatewayStateAsync();
+        TryConnectApprovedNodes();
     }
 
     private void UpdateAllowedNodes(JsonElement root)
@@ -291,51 +295,56 @@ internal sealed class SidecarApp
         await EmitGatewayStateAsync();
     }
 
-    private async Task EmitAdapterListAsync()
+    private async Task<AdapterSnapshot[]> ReadBluetoothAdaptersAsync()
     {
         var adapters = await Radio.GetRadiosAsync();
-        var bluetoothRadios = adapters
+        return adapters
             .Where(radio => radio.Kind == RadioKind.Bluetooth)
-            .Select((radio, index) => new
-            {
-                id = $"winrt:{index}",
-                label = string.IsNullOrWhiteSpace(radio.Name) ? "Bluetooth adapter" : radio.Name,
-                transport = "winrt",
-                is_available = radio.State == RadioState.On,
-                issue = radio.State switch
+            .Select((radio, index) => new AdapterSnapshot(
+                $"winrt:{index}",
+                string.IsNullOrWhiteSpace(radio.Name) ? "Bluetooth adapter" : radio.Name,
+                radio.State == RadioState.On,
+                radio.State switch
                 {
                     RadioState.Disabled => "Adapter is disabled.",
                     RadioState.Off => "Adapter is powered off.",
                     _ => (string?)null,
                 },
-                details = new[]
+                new[]
                 {
                     $"state:{radio.State}",
                     $"radio_index:{index}",
-                },
-            })
+                }))
             .ToArray();
+    }
+
+    private async Task EmitAdapterListAsync()
+    {
+        var bluetoothRadios = await ReadBluetoothAdaptersAsync();
 
         await EmitEventAsync(new
         {
             type = "adapter_list",
-            adapters = bluetoothRadios,
+            adapters = bluetoothRadios.Select(adapter => new
+            {
+                id = adapter.Id,
+                label = adapter.Label,
+                transport = "winrt",
+                is_available = adapter.IsAvailable,
+                issue = adapter.Issue,
+                details = adapter.Details,
+            }),
         });
     }
 
-    private async Task<string> ReadAdapterStateAsync()
+    private static string DeriveAdapterState(AdapterSnapshot[] adapters)
     {
-        var adapters = await Radio.GetRadiosAsync();
-        var bluetoothRadios = adapters
-            .Where(radio => radio.Kind == RadioKind.Bluetooth)
-            .ToArray();
-
-        if (bluetoothRadios.Any(radio => radio.State == RadioState.On))
+        if (adapters.Any(adapter => adapter.IsAvailable))
         {
             return "poweredOn";
         }
 
-        if (bluetoothRadios.Any(radio => radio.State == RadioState.Off || radio.State == RadioState.Disabled))
+        if (adapters.Any(adapter => !string.IsNullOrWhiteSpace(adapter.Issue)))
         {
             return "poweredOff";
         }
@@ -345,7 +354,7 @@ internal sealed class SidecarApp
 
     private async Task EmitGatewayStateAsync()
     {
-        var adapterState = await ReadAdapterStateAsync();
+        var adapterState = DeriveAdapterState(await ReadBluetoothAdaptersAsync());
         string scanState;
         lock (_stateGate)
         {
