@@ -49,51 +49,21 @@ bool notifyCharacteristicValue(BLECharacteristic* characteristic, const String& 
   return characteristic->notify(runtimeBleConnId, payload.c_str());
 }
 
-bool notifyCharacteristicValueForConnection(
+void sendConnectedNotification(
   BLECharacteristic* characteristic,
-  uint16_t conn_hdl,
+  bool connected,
+  const char* missingCharacteristicMessage,
+  const char* disconnectedMessage,
   const String& payload
 ) {
   if (characteristic == nullptr) {
-    return false;
-  }
-
-  characteristic->write(payload.c_str());
-
-  if (!characteristic->notifyEnabled(conn_hdl)) {
-    return true;
-  }
-
-  return characteristic->notify(conn_hdl, payload.c_str());
-}
-
-void notifyProvisioningCharacteristic(BLECharacteristic* characteristic, const String& payload) {
-  if (characteristic == nullptr) {
-    Serial.print("BLE notify skipped (missing characteristic): ");
+    Serial.print(missingCharacteristicMessage);
     Serial.println(payload);
     return;
   }
 
-  if (!provisioningBleConnected) {
-    Serial.print("BLE notify skipped (runtime client disconnected): ");
-    Serial.println(payload);
-    return;
-  }
-
-  Serial.print("BLE notify sent: ");
-  Serial.println(payload);
-  notifyCharacteristicValue(characteristic, payload);
-}
-
-void notifyRuntimeCharacteristic(BLECharacteristic* characteristic, const String& payload) {
-  if (characteristic == nullptr) {
-    Serial.print("BLE notify skipped (missing runtime characteristic): ");
-    Serial.println(payload);
-    return;
-  }
-
-  if (!runtimeBleConnected) {
-    Serial.print("BLE notify skipped (runtime client disconnected): ");
+  if (!connected) {
+    Serial.print(disconnectedMessage);
     Serial.println(payload);
     return;
   }
@@ -206,20 +176,22 @@ bool enqueueChunkedNotification(
   return true;
 }
 
-bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload) {
-  return enqueueBleTxMessage(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
-}
-
-bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload) {
-  return enqueueChunkedNotification(runtimeTxQueue, characteristic, &runtimeBleConnected, payload);
-}
-
 bool enqueueRuntimeStatusPayload(const String& payload) {
   if (payload.length() <= 244) {
-    return enqueueRuntimeNotification(runtimeStatusCharacteristic, payload);
+    return enqueueBleTxMessage(
+      runtimeTxQueue,
+      runtimeStatusCharacteristic,
+      &runtimeBleConnected,
+      payload
+    );
   }
 
-  return enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
+  return enqueueChunkedNotification(
+    runtimeTxQueue,
+    runtimeStatusCharacteristic,
+    &runtimeBleConnected,
+    payload
+  );
 }
 
 bool processBleTxMessage(BleTxQueue& queue) {
@@ -256,7 +228,13 @@ void processBleNotificationQueues() {
 }
 
 void sendProvisioningStatus(const String& payload) {
-  notifyProvisioningCharacteristic(provisioningStatusCharacteristic, payload);
+  sendConnectedNotification(
+    provisioningStatusCharacteristic,
+    provisioningBleConnected,
+    "BLE notify skipped (missing characteristic): ",
+    "BLE notify skipped (runtime client disconnected): ",
+    payload
+  );
 }
 
 String createRuntimeReadyPayload() {
@@ -297,7 +275,12 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   }
 
   payload += "}";
-  enqueueRuntimeNotificationChunked(runtimeStatusCharacteristic, payload);
+  enqueueChunkedNotification(
+    runtimeTxQueue,
+    runtimeStatusCharacteristic,
+    &runtimeBleConnected,
+    payload
+  );
 }
 
 void enqueueBoardLogStatus(const String& tag, const String& message, const String& level) {
@@ -314,7 +297,13 @@ void notifyCurrentRuntimeStatus() {
     return;
   }
 
-  notifyRuntimeCharacteristic(runtimeStatusCharacteristic, createRuntimeReadyPayload());
+  sendConnectedNotification(
+    runtimeStatusCharacteristic,
+    runtimeBleConnected,
+    "BLE notify skipped (missing runtime characteristic): ",
+    "BLE notify skipped (runtime client disconnected): ",
+    createRuntimeReadyPayload()
+  );
 }
 
 void writeCurrentStatusSnapshots() {
@@ -707,7 +696,12 @@ void sendTelemetry(int delta, unsigned long timestamp, bool force, bool stateCha
     "\",\"snapshot\":" + String(stateChanged ? "false" : "true") + "}";
 
   writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
-  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, payload);
+  enqueueBleTxMessage(
+    runtimeTxQueue,
+    runtimeTelemetryCharacteristic,
+    &runtimeBleConnected,
+    payload
+  );
   lastReportedState = currentDetectedState;
   lastReportedDelta = delta;
   lastTelemetryAt = timestamp;
@@ -728,7 +722,12 @@ void sendSensorIssueTelemetry(const char* sensorIssue, unsigned long timestamp) 
     "\",\"snapshot\":true}";
 
   writeCharacteristicValue(runtimeTelemetryCharacteristic, payload);
-  enqueueRuntimeNotification(runtimeTelemetryCharacteristic, payload);
+  enqueueBleTxMessage(
+    runtimeTxQueue,
+    runtimeTelemetryCharacteristic,
+    &runtimeBleConnected,
+    payload
+  );
   lastReportedState = currentDetectedState;
   lastTelemetryAt = timestamp;
   pendingMotionUpdate = false;
@@ -911,49 +910,37 @@ void handleProvisioningControlWrite(uint16_t conn_hdl, BLECharacteristic* charac
   (void)conn_hdl;
   (void)characteristic;
   const String value = bytesToString(data, len);
+  String command;
+  const FramedWriteState writeState = advanceFramedWriteState(
+    value,
+    provisioningCommandBuffer,
+    provisioningCommandFramed,
+    command
+  );
 
-  if (value.length() == 0) {
-    return;
-  }
-
-  if (value.startsWith("BEGIN:")) {
-    provisioningCommandBuffer = "";
-    provisioningCommandFramed = true;
-    return;
-  }
-
-  if (provisioningCommandFramed && value == "END") {
-    const String command = provisioningCommandBuffer;
-    provisioningCommandBuffer = "";
-    provisioningCommandFramed = false;
+  if (writeState == FramedWriteState::FrameComplete ||
+      writeState == FramedWriteState::InlineComplete) {
     handleProvisioningCommand(command);
-    return;
   }
-
-  if (provisioningCommandFramed) {
-    provisioningCommandBuffer += value;
-    return;
-  }
-
-  if (value.startsWith("{") && value.endsWith("}")) {
-    handleProvisioningCommand(value);
-    return;
-  }
-
-  provisioningCommandBuffer = "";
-  provisioningCommandBuffer += value;
 }
 
 void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {
   (void)conn_hdl;
   (void)characteristic;
   const String value = bytesToString(data, len);
-  const String controlType = classifyRuntimeControlPayloadType(value);
+  String command;
+  const FramedWriteState writeState = advanceFramedWriteState(
+    value,
+    runtimeCommandBuffer,
+    runtimeCommandFramed,
+    command
+  );
 
-  if (value.length() == 0) {
+  if (writeState == FramedWriteState::Empty) {
     return;
   }
 
+  const String controlType = classifyRuntimeControlPayloadType(value);
   runtimeControlWriteCount += 1;
   writeCurrentStatusSnapshots();
 
@@ -961,19 +948,14 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     sendRuntimeControlDebugStatus("write-callback", controlType);
   }
 
-  if (value.startsWith("BEGIN:")) {
+  if (writeState == FramedWriteState::FrameBegin) {
     sendRuntimeControlDebugStatus("frame-begin", "");
-    runtimeCommandBuffer = "";
-    runtimeCommandFramed = true;
     logRuntimeControlFrame("begin", value);
     return;
   }
 
-  if (runtimeCommandFramed && value == "END") {
-    const String command = runtimeCommandBuffer;
+  if (writeState == FramedWriteState::FrameComplete) {
     const String framedControlType = classifyRuntimeControlPayloadType(command);
-    runtimeCommandBuffer = "";
-    runtimeCommandFramed = false;
     logRuntimeControlFrame("end", command);
     if (framedControlType.length() > 0) {
       sendRuntimeControlDebugStatus("assembled-framed", framedControlType);
@@ -982,8 +964,7 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     return;
   }
 
-  if (runtimeCommandFramed) {
-    runtimeCommandBuffer += value;
+  if (writeState == FramedWriteState::FrameChunk) {
     const String chunkedControlType = classifyRuntimeControlPayloadType(runtimeCommandBuffer);
     if (chunkedControlType.length() > 0) {
       sendRuntimeControlDebugStatus("frame-chunk", chunkedControlType);
@@ -992,17 +973,21 @@ void handleRuntimeControlWrite(uint16_t conn_hdl, BLECharacteristic* characteris
     return;
   }
 
-  if (value.startsWith("{") && value.endsWith("}")) {
+  if (writeState == FramedWriteState::InlineComplete) {
     if (controlType.length() > 0) {
       sendRuntimeControlDebugStatus("assembled-inline", controlType);
     }
-    handleRuntimeControl(value, conn_hdl);
+    handleRuntimeControl(command, conn_hdl);
     return;
   }
 
-  runtimeCommandBuffer = "";
-  runtimeCommandBuffer += value;
-  logRuntimeControlFrame("chunk", value);
+  if (writeState == FramedWriteState::Partial) {
+    const String chunkedControlType = classifyRuntimeControlPayloadType(runtimeCommandBuffer);
+    if (chunkedControlType.length() > 0) {
+      sendRuntimeControlDebugStatus("frame-chunk", chunkedControlType);
+    }
+    logRuntimeControlFrame("chunk", value);
+  }
 }
 
 void handleRuntimeOtaDataWrite(uint16_t conn_hdl, BLECharacteristic* characteristic, uint8_t* data, uint16_t len) {

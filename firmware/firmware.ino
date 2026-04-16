@@ -115,6 +115,15 @@ String runtimeCommandBuffer;
 bool provisioningCommandFramed = false;
 bool runtimeCommandFramed = false;
 
+enum class FramedWriteState : uint8_t {
+  Empty = 0,
+  FrameBegin,
+  FrameChunk,
+  FrameComplete,
+  InlineComplete,
+  Partial,
+};
+
 String hardwareId;
 String bootId;
 String configuredDeviceId;
@@ -299,6 +308,45 @@ String createHardwareId() {
     static_cast<unsigned long>(NRF_FICR->DEVICEID[0])
   );
   return String(buffer);
+}
+
+FramedWriteState advanceFramedWriteState(
+  const String& value,
+  String& buffer,
+  bool& framed,
+  String& completed
+) {
+  completed = "";
+
+  if (value.length() == 0) {
+    return FramedWriteState::Empty;
+  }
+
+  if (value.startsWith("BEGIN:")) {
+    buffer = "";
+    framed = true;
+    return FramedWriteState::FrameBegin;
+  }
+
+  if (framed && value == "END") {
+    completed = buffer;
+    buffer = "";
+    framed = false;
+    return FramedWriteState::FrameComplete;
+  }
+
+  if (framed) {
+    buffer += value;
+    return FramedWriteState::FrameChunk;
+  }
+
+  if (value.startsWith("{") && value.endsWith("}")) {
+    completed = value;
+    return FramedWriteState::InlineComplete;
+  }
+
+  buffer = value;
+  return FramedWriteState::Partial;
 }
 
 String createBootId() {
