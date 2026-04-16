@@ -25,7 +25,11 @@ import {
   type ManagedGatewayRuntime,
   type ManualScanPayload,
 } from "./managed-gateway-runtime/common";
-import type { GatewayChildRuntimeMessage } from "./managed-gateway-runtime/gateway-child-ipc";
+import type {
+  GatewayChildRuntimeMessage,
+  GatewayControlCommand,
+  GatewayControlCommandResult,
+} from "./managed-gateway-runtime/gateway-child-ipc";
 import { createRuntimeBridge } from "./managed-gateway-runtime/runtime-bridge";
 import { createRuntimeLifecycle } from "./managed-gateway-runtime/lifecycle";
 import { createOperatorIntents } from "./managed-gateway-runtime/operator-intents";
@@ -85,12 +89,14 @@ export function createManagedGatewayRuntime(
     })();
   }
 
-  async function sendGatewayCommand(command: Record<string, unknown>) {
-    await runtimeBridge.sendGatewayCommand(command);
+  async function sendGatewayCommand<TCommand extends GatewayControlCommand>(
+    command: TCommand,
+  ): Promise<GatewayControlCommandResult<TCommand>> {
+    return await runtimeBridge.sendGatewayCommand(command);
   }
 
   function sendGatewayCommandInBackground(
-    command: Record<string, unknown>,
+    command: GatewayControlCommand,
     context: string,
   ) {
     runtimeBridge.sendGatewayCommandInBackground(command, context);

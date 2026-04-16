@@ -5,6 +5,10 @@ import type {
 } from "@core/contracts";
 
 import { forgetApprovedNodeRules } from "../setup-selection";
+import type {
+  GatewayControlCommand,
+  GatewayControlCommandResult,
+} from "./gateway-child-ipc";
 
 type OperatorIntentDeps = {
   getSetupState: () => DesktopSetupState;
@@ -12,7 +16,9 @@ type OperatorIntentDeps = {
   emitSetup: () => void;
   getChild: () => { killed?: boolean } | null;
   refreshAdapters: () => Promise<void>;
-  sendGatewayCommand: (command: Record<string, unknown>) => Promise<void>;
+  sendGatewayCommand: <TCommand extends GatewayControlCommand>(
+    command: TCommand,
+  ) => Promise<GatewayControlCommandResult<TCommand>>;
   restartRuntime: () => Promise<unknown>;
   manualCandidateById: (candidateId: string) => DesktopSetupState["manualCandidates"][number] | null;
   persistApprovedNodes: (nextNodes: ApprovedNodeRule[]) => ApprovedNodeRule[];

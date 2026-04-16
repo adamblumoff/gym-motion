@@ -2,6 +2,7 @@
 import process from "node:process";
 
 import { sendToDesktop } from "../scripts/windows-winrt-gateway-desktop-ipc.js";
+import { parseGatewayControlCommand } from "../main/managed-gateway-runtime/gateway-child-ipc.js";
 
 const DEFAULT_NODE = {
   ruleId: "rule-f4e9d4",
@@ -557,7 +558,7 @@ function handleCommand(command) {
 }
 
 process.on("message", (message) => {
-  handleCommand(message);
+  handleCommand(parseGatewayControlCommand(message) ?? message);
 });
 
 process.on("SIGTERM", () => {

@@ -17,8 +17,11 @@ import {
 import { buildGatewayChildEnv } from "./gateway-child-env";
 import {
   parseGatewayChildMessage,
+  type GatewayControlCommand,
+  type GatewayControlCommandResult,
   type GatewayChildControlResponseMessage,
   type GatewayChildMessage,
+  type GatewayParentControlMessage,
   type GatewayChildPersistMessage,
   type GatewayChildRuntimeMessage,
 } from "./gateway-child-ipc";
@@ -52,8 +55,10 @@ type PendingCommand = {
 };
 
 export type RuntimeBridge = {
-  sendGatewayCommand: (command: Record<string, unknown>) => Promise<unknown>;
-  sendGatewayCommandInBackground: (command: Record<string, unknown>, context: string) => void;
+  sendGatewayCommand: <TCommand extends GatewayControlCommand>(
+    command: TCommand,
+  ) => Promise<GatewayControlCommandResult<TCommand>>;
+  sendGatewayCommandInBackground: (command: GatewayControlCommand, context: string) => void;
   stopChild: () => Promise<void>;
   runtimeStartIssue: () => string | null;
   startChild: () => Promise<void>;
@@ -120,7 +125,9 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
     readyRejecter = null;
   }
 
-  async function sendGatewayCommand(command: Record<string, unknown>) {
+  async function sendGatewayCommand<TCommand extends GatewayControlCommand>(
+    command: TCommand,
+  ): Promise<GatewayControlCommandResult<TCommand>> {
     const child = deps.getChild();
 
     if (!canSendGatewayCommand(child)) {
@@ -133,7 +140,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         ? command.type
         : "unknown";
 
-    return await new Promise<unknown>((resolve, reject) => {
+    return await new Promise<GatewayControlCommandResult<TCommand>>((resolve, reject) => {
       const timeout = setTimeout(() => {
         pendingCommands.delete(commandId);
         reject(new Error(`Gateway command timed out: ${commandType}.`));
@@ -143,7 +150,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
       pendingCommands.set(commandId, {
         resolve(value) {
           clearTimeout(timeout);
-          resolve(value);
+          resolve(value as GatewayControlCommandResult<TCommand>);
         },
         reject(error) {
           clearTimeout(timeout);
@@ -151,7 +158,12 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
         },
       });
 
-      child.send({ commandId, ...command }, (error) => {
+      const message: GatewayParentControlMessage = {
+        commandId,
+        ...command,
+      };
+
+      child.send(message, (error) => {
         if (!error) {
           return;
         }
@@ -164,7 +176,7 @@ export function createRuntimeBridge(deps: RuntimeBridgeDeps): RuntimeBridge {
   }
 
   function sendGatewayCommandInBackground(
-    command: Record<string, unknown>,
+    command: GatewayControlCommand,
     context: string,
   ) {
     void sendGatewayCommand(command).catch((error) => {

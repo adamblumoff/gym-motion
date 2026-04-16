@@ -28,6 +28,7 @@ import {
   handlePersistAck,
   sendToDesktop,
 } from "./windows-winrt-gateway-desktop-ipc.js";
+import { parseGatewayControlCommand } from "../main/managed-gateway-runtime/gateway-child-ipc.js";
 import { attachJsonLineReader } from "./windows-winrt-gateway-sidecar-io.js";
 import { createTelemetryEventHandler } from "./windows-winrt-gateway-telemetry.js";
 
@@ -296,17 +297,21 @@ async function handleDesktopControlCommand(command) {
 }
 
 function attachControlReader() {
-  process.on("message", (command) => {
-    if (handlePersistAck(command, debug)) {
+  process.on("message", (input) => {
+    if (handlePersistAck(input, debug)) {
       return;
     }
 
-    if (!command || typeof command !== "object") {
-      console.error("[gateway-winrt] ignored invalid control command", command);
+    const command = parseGatewayControlCommand(input);
+
+    if (!command) {
+      console.error("[gateway-winrt] ignored invalid control command", input);
       return;
     }
 
-    const commandId = typeof command.commandId === "string" ? command.commandId : null;
+    const commandId = input && typeof input === "object" && typeof input.commandId === "string"
+      ? input.commandId
+      : null;
 
     void handleDesktopControlCommand(command)
       .then((result) => {
