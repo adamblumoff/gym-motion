@@ -1,8 +1,14 @@
-// @ts-nocheck
 import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type {
+  BleAdapterSummary,
+  GatewayRuntimeDevicesResponse,
+  GatewayStatusSummary,
+  ManualScanCandidateSummary,
+  ManualScanState,
+} from "@core/contracts";
 
 import {
   DEFAULT_KNOWN_NODE_DIR,
@@ -25,6 +31,18 @@ import { createDiscoveryStore } from "./discovery-store.js";
 import { createManualScanManager } from "./manual-scan.js";
 import { createMetadataManager } from "./metadata-manager.js";
 import { createRuntimeDeviceEventController } from "./runtime-events.js";
+import type { DiscoveryLocator, KnownNode, RuntimeDeviceMetadata, RuntimeNode } from "./runtime-types.js";
+
+type ManualScanPayload = {
+  state: ManualScanState;
+  pairingCandidateId?: string | null;
+  error?: string | null;
+  candidates?: ManualScanCandidateSummary[];
+};
+
+type GatewayControlCommandHandler =
+  | ((command: unknown) => Promise<Record<string, unknown> | void>)
+  | null;
 
 export function createGatewayRuntimeServer({
   loadDevicesMetadata = async () => [],
@@ -34,14 +52,22 @@ export function createGatewayRuntimeServer({
   onControlCommand = null,
   reconnectDisconnectGraceMs = RECONNECT_DISCONNECT_GRACE_MS,
   verbose = false,
+}: {
+  loadDevicesMetadata?: () => Promise<RuntimeDeviceMetadata[]>;
+  runtimeHost: string;
+  runtimePort: number;
+  knownNodesPath?: string;
+  onControlCommand?: GatewayControlCommandHandler;
+  reconnectDisconnectGraceMs?: number;
+  verbose?: boolean;
 }) {
   const sessionId = crypto.randomUUID();
-  const metadataByDeviceId = new Map();
-  const runtimeByDeviceId = new Map();
-  const knownNodesByDeviceId = new Map();
-  const suppressedDeviceIds = new Set();
-  const deviceIdByPeripheralId = new Map();
-  const streamClients = new Set();
+  const metadataByDeviceId = new Map<string, RuntimeDeviceMetadata>();
+  const runtimeByDeviceId = new Map<string, RuntimeNode>();
+  const knownNodesByDeviceId = new Map<string, KnownNode>();
+  const suppressedDeviceIds = new Set<string>();
+  const deviceIdByPeripheralId = new Map<string, string>();
+  const streamClients = new Set<http.ServerResponse>();
 
   const discoveryStore = createDiscoveryStore({ nowIso });
   const { listDiscoveries, removeDiscoveryEntries, upsertDiscovery } = discoveryStore;
@@ -49,11 +75,11 @@ export function createGatewayRuntimeServer({
   const manualScanManager = createManualScanManager();
   const getManualScanPayload = manualScanManager.getPayload;
 
-  let availableAdapters = [];
-  let runtimeIssue = null;
-  let server = null;
+  let availableAdapters: BleAdapterSummary[] = [];
+  let runtimeIssue: string | null = null;
+  let server: http.Server | null = null;
 
-  const gatewayState = {
+  const gatewayState: GatewayStatusSummary = {
     hostname: os.hostname(),
     mode: "reference-ble-node-gateway",
     sessionId,
@@ -68,7 +94,7 @@ export function createGatewayRuntimeServer({
     lastAdvertisementAt: null,
   };
 
-  function debug(message, details) {
+  function debug(message: string, details?: unknown) {
     if (!verbose) {
       return;
     }
@@ -81,7 +107,7 @@ export function createGatewayRuntimeServer({
     console.log(`[gateway-runtime] ${message}`);
   }
 
-  function touchGatewayState(patch = {}) {
+  function touchGatewayState(patch: Partial<GatewayStatusSummary> = {}) {
     Object.assign(gatewayState, patch, { updatedAt: nowIso() });
     gatewayState.knownNodeCount = knownNodesByDeviceId.size;
     gatewayState.connectedNodeCount = Array.from(runtimeByDeviceId.values()).filter(
@@ -105,7 +131,7 @@ export function createGatewayRuntimeServer({
     nowIso,
   });
 
-  function broadcast(event, payload) {
+  function broadcast(event: string, payload: unknown) {
     const body = formatSseEvent(event, payload);
 
     for (const client of streamClients) {
@@ -129,8 +155,8 @@ export function createGatewayRuntimeServer({
   });
   const { refreshMetadata } = metadataManager;
 
-  async function readJsonRequest(request) {
-    const chunks = [];
+  async function readJsonRequest(request: http.IncomingMessage) {
+    const chunks: Buffer[] = [];
 
     for await (const chunk of request) {
       chunks.push(Buffer.from(chunk));
@@ -178,7 +204,7 @@ export function createGatewayRuntimeServer({
     getDeviceSummaries,
   } = runtimeState;
 
-  async function getDevicesPayload() {
+  async function getDevicesPayload(): Promise<GatewayRuntimeDevicesResponse> {
     await refreshMetadata();
 
     const deviceIds = new Set([
@@ -250,7 +276,7 @@ export function createGatewayRuntimeServer({
         });
       });
 
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(runtimePort, runtimeHost, () => {
           server?.off("error", reject);
@@ -278,7 +304,7 @@ export function createGatewayRuntimeServer({
       const currentServer = server;
       server = null;
 
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         currentServer.close((error) => {
           if (error) {
             reject(error);
@@ -290,7 +316,7 @@ export function createGatewayRuntimeServer({
       });
     },
 
-    setAdapterState(state) {
+    setAdapterState(state: string) {
       touchGatewayState({ adapterState: state });
 
       if (state === "poweredOn") {
@@ -317,18 +343,18 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    setGatewayIssue(issue) {
+    setGatewayIssue(issue: string | null) {
       runtimeIssue = typeof issue === "string" && issue.length > 0 ? issue : null;
       broadcastGatewayStatus();
     },
 
-    setAvailableAdapters(adapters) {
+    setAvailableAdapters(adapters: BleAdapterSummary[]) {
       availableAdapters = Array.isArray(adapters) ? adapters : [];
       broadcast("gateway-adapters", { adapters: availableAdapters });
       broadcastGatewayStatus();
     },
 
-    setScanState(scanState, scanReason = null) {
+    setScanState(scanState: string, scanReason: string | null = null) {
       touchGatewayState({
         scanState,
         scanReason: scanState === "scanning" ? scanReason : null,
@@ -341,11 +367,11 @@ export function createGatewayRuntimeServer({
       broadcastGatewayStatus();
     },
 
-    setManualScanState(config) {
+    setManualScanState(config: ManualScanPayload) {
       manualScanManager.setState(config);
     },
 
-    upsertManualScanCandidate(candidate) {
+    upsertManualScanCandidate(candidate: ManualScanCandidateSummary) {
       manualScanManager.upsertCandidate(candidate);
     },
 
@@ -360,7 +386,7 @@ export function createGatewayRuntimeServer({
       return [...availableAdapters];
     },
 
-    getRuntimeNode(deviceId) {
+    getRuntimeNode(deviceId: string) {
       const runtime = runtimeByDeviceId.get(deviceId);
       return runtime ? { ...runtime } : null;
     },
@@ -376,7 +402,7 @@ export function createGatewayRuntimeServer({
       }));
     },
 
-    resolveKnownDeviceId(input) {
+    resolveKnownDeviceId(input: DiscoveryLocator) {
       return resolveKnownDeviceIdByDiscovery(input);
     },
 

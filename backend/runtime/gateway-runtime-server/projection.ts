@@ -1,5 +1,12 @@
-// @ts-nocheck
+import type { GatewayRuntimeDeviceSummary } from "@core/contracts";
 import { latestTimestamp } from "./utils.js";
+import type {
+  EmitDevice,
+  KnownNode,
+  MergeDevice,
+  RuntimeDeviceMetadata,
+  RuntimeNode,
+} from "./runtime-types.js";
 
 export function createProjectionHelpers({
   metadataByDeviceId,
@@ -9,8 +16,18 @@ export function createProjectionHelpers({
   nowIso,
   healthStatusFromRuntime,
   telemetryFreshnessFromTimestamp,
-}) {
-  function mergeDevice(deviceId) {
+}: {
+  metadataByDeviceId: Map<string, RuntimeDeviceMetadata>;
+  runtimeByDeviceId: Map<string, RuntimeNode>;
+  knownNodesByDeviceId: Map<string, KnownNode>;
+  broadcast: (event: string, payload: { device: GatewayRuntimeDeviceSummary }) => void;
+  nowIso: () => string;
+  healthStatusFromRuntime: (connectionState: RuntimeNode["gatewayConnectionState"]) => GatewayRuntimeDeviceSummary["healthStatus"];
+  telemetryFreshnessFromTimestamp: (
+    timestamp: string | null,
+  ) => GatewayRuntimeDeviceSummary["telemetryFreshness"];
+}): { mergeDevice: MergeDevice; emitDevice: EmitDevice } {
+  function mergeDevice(deviceId: string): GatewayRuntimeDeviceSummary {
     const metadata = metadataByDeviceId.get(deviceId);
     const runtime = runtimeByDeviceId.get(deviceId);
     const known = knownNodesByDeviceId.get(deviceId);
@@ -75,7 +92,7 @@ export function createProjectionHelpers({
     };
   }
 
-  function emitDevice(deviceId) {
+  function emitDevice(deviceId: string): void {
     if (!deviceId) {
       return;
     }

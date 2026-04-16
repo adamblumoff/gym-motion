@@ -1,4 +1,33 @@
-// @ts-nocheck
+import type { GatewayStatusSummary } from "@core/contracts";
+import type {
+  DiscoveryLocator,
+  DiscoveryUpsertPayload,
+  EmitDevice,
+  KnownNode,
+  KnownNodeStore,
+  NodeConnectionInspection,
+  RuntimeDeviceEventPayload,
+  RuntimeGatewayConnectionEvent,
+  RuntimeNode,
+  RuntimeNodePatch,
+  RuntimeDeviceMetadata,
+  TelemetryPayload,
+  TelemetryPeripheralInfo,
+  TouchGatewayState,
+} from "./runtime-types.js";
+
+type PendingReconnectDisconnect = {
+  peripheralId?: string | null;
+  address?: string | null;
+  reason: string;
+  reconnectAttempt?: number | null;
+  reconnectAttemptLimit?: number | null;
+  reconnectRetryExhausted?: boolean | null;
+  reconnectAwaitingDecision?: boolean | null;
+  token: symbol;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export function createRuntimeDeviceEventController({
   metadataByDeviceId,
   runtimeByDeviceId,
@@ -19,10 +48,32 @@ export function createRuntimeDeviceEventController({
   inspectNodeConnection,
   nowIso,
   reconnectDisconnectGraceMs,
+}: {
+  metadataByDeviceId: Map<string, RuntimeDeviceMetadata>;
+  runtimeByDeviceId: Map<string, RuntimeNode>;
+  knownNodesByDeviceId: Map<string, KnownNode>;
+  suppressedDeviceIds: Set<string>;
+  deviceIdByPeripheralId: Map<string, string>;
+  gatewayState: GatewayStatusSummary;
+  knownNodeStore: KnownNodeStore;
+  refreshMetadata: (force?: boolean) => Promise<void>;
+  touchGatewayState: TouchGatewayState;
+  broadcastGatewayStatus: () => void;
+  upsertDiscovery: (payload: DiscoveryUpsertPayload) => unknown;
+  removeDiscoveryEntries: (
+    payload: Required<Pick<DiscoveryLocator, "knownDeviceId" | "peripheralId" | "address" | "localName">>,
+  ) => void;
+  emitDevice: EmitDevice;
+  upsertKnownNode: (deviceId: string | null | undefined, patch?: Partial<KnownNode>) => void;
+  resolveKnownDeviceIdByDiscovery: (input: DiscoveryLocator) => string | null;
+  updateRuntimeNode: (deviceId: string | null | undefined, patch: RuntimeNodePatch) => void;
+  inspectNodeConnection: (input: DiscoveryLocator) => NodeConnectionInspection | null;
+  nowIso: () => string;
+  reconnectDisconnectGraceMs: number;
 }) {
-  const pendingReconnectDisconnects = new Map();
+  const pendingReconnectDisconnects = new Map<string, PendingReconnectDisconnect>();
 
-  function clearPendingReconnectDisconnect(deviceId) {
+  function clearPendingReconnectDisconnect(deviceId: string | null | undefined) {
     if (!deviceId) {
       return null;
     }
@@ -37,11 +88,11 @@ export function createRuntimeDeviceEventController({
     return pending;
   }
 
-  function isReconnectInFlight(connectionState) {
+  function isReconnectInFlight(connectionState?: RuntimeNode["gatewayConnectionState"] | null) {
     return connectionState === "connecting" || connectionState === "reconnecting";
   }
 
-  function finalizeReconnectDisconnect(deviceId, token) {
+  function finalizeReconnectDisconnect(deviceId: string, token: symbol) {
     const pending = pendingReconnectDisconnects.get(deviceId) ?? null;
     if (!pending || pending.token !== token) {
       return;
@@ -79,7 +130,7 @@ export function createRuntimeDeviceEventController({
     broadcastGatewayStatus();
   }
 
-  function scheduleReconnectDisconnect(deviceId, pending) {
+  function scheduleReconnectDisconnect(deviceId: string, pending: Omit<PendingReconnectDisconnect, "token" | "timer">) {
     clearPendingReconnectDisconnect(deviceId);
 
     const token = Symbol("reconnect-disconnect");
@@ -99,7 +150,7 @@ export function createRuntimeDeviceEventController({
     connectionState,
     reason = null,
     ...payload
-  }) {
+  }: RuntimeGatewayConnectionEvent) {
     if (connectionState === "connecting" || connectionState === "reconnecting") {
       return noteConnecting(payload);
     }
@@ -125,7 +176,7 @@ export function createRuntimeDeviceEventController({
     reconnectAttemptLimit = null,
     reconnectRetryExhausted = null,
     reconnectAwaitingDecision = null,
-  }) {
+  }: RuntimeDeviceEventPayload) {
     const previous = inspectNodeConnection({
       deviceId,
       knownDeviceId,
@@ -201,7 +252,7 @@ export function createRuntimeDeviceEventController({
     reconnectAttempt = null,
     reconnectAttemptLimit = null,
     reconnectAwaitingDecision = null,
-  }) {
+  }: RuntimeDeviceEventPayload) {
     const previous = inspectNodeConnection({
       deviceId,
       knownDeviceId,
@@ -272,7 +323,7 @@ export function createRuntimeDeviceEventController({
     reconnectAttemptLimit = null,
     reconnectRetryExhausted = null,
     reconnectAwaitingDecision = null,
-  }) {
+  }: RuntimeDeviceEventPayload & { reason?: string | null }) {
     const previous = inspectNodeConnection({
       deviceId,
       knownDeviceId,
@@ -358,7 +409,7 @@ export function createRuntimeDeviceEventController({
       reconnectAttemptLimit = null,
       reconnectRetryExhausted = null,
       reconnectAwaitingDecision = null,
-    }) {
+    }: RuntimeDeviceEventPayload) {
       const timestamp = nowIso();
       touchGatewayState({ lastAdvertisementAt: timestamp });
       const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
@@ -419,7 +470,7 @@ export function createRuntimeDeviceEventController({
 
     noteConnected,
 
-    async noteTelemetry(payload, peripheralInfo = {}) {
+    async noteTelemetry(payload: TelemetryPayload, peripheralInfo: TelemetryPeripheralInfo = {}) {
       const previous = inspectNodeConnection({ deviceId: payload.deviceId });
       const telemetryAt = nowIso();
       const previousRuntime = runtimeByDeviceId.get(payload.deviceId) ?? null;
@@ -501,7 +552,7 @@ export function createRuntimeDeviceEventController({
       peripheralId,
       localName,
       address,
-    }) {
+    }: DiscoveryLocator) {
       const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
         deviceId,
         knownDeviceId,
@@ -534,7 +585,7 @@ export function createRuntimeDeviceEventController({
       peripheralId,
       localName,
       address,
-    }) {
+    }: DiscoveryLocator) {
       const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
         deviceId,
         knownDeviceId,
@@ -559,7 +610,7 @@ export function createRuntimeDeviceEventController({
       peripheralId,
       localName,
       address,
-    }) {
+    }: DiscoveryLocator) {
       const resolvedDeviceId = resolveKnownDeviceIdByDiscovery({
         deviceId,
         knownDeviceId,
@@ -593,12 +644,21 @@ export function createRuntimeDeviceEventController({
       return resolvedDeviceId;
     },
 
-    noteOtaStatus(deviceId, patch) {
+    noteOtaStatus(deviceId: string | null | undefined, patch: Partial<Pick<
+      RuntimeNode,
+      | "otaStatus"
+      | "otaTargetVersion"
+      | "otaProgressBytesSent"
+      | "otaTotalBytes"
+      | "otaLastPhase"
+      | "otaFailureDetail"
+      | "otaLastStatusMessage"
+    >>) {
       if (!deviceId) {
         return;
       }
 
-      const previous = runtimeByDeviceId.get(deviceId) ?? {};
+      const previous: Partial<RuntimeNode> = runtimeByDeviceId.get(deviceId) ?? {};
 
       updateRuntimeNode(deviceId, {
         otaStatus: patch.otaStatus ?? previous.otaStatus ?? "idle",

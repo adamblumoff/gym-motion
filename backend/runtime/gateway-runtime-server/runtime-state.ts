@@ -1,4 +1,18 @@
-// @ts-nocheck
+import type { GatewayRuntimeDeviceSummary } from "@core/contracts";
+import type {
+  EmitDevice,
+  KnownNode,
+  DiscoveryLocator,
+  MergeDevice,
+  NodeConnectionInspection,
+  RuntimeDeviceMetadata,
+  RuntimeNode,
+  RuntimeNodePatch,
+  OtaRuntimeState,
+  ReconnectRuntimeState,
+  TouchGatewayState,
+} from "./runtime-types.js";
+
 export function createRuntimeStateHelpers({
   metadataByDeviceId,
   runtimeByDeviceId,
@@ -10,8 +24,19 @@ export function createRuntimeStateHelpers({
   emptyOtaRuntimeState,
   emptyReconnectRuntimeState,
   nowIso,
+}: {
+  metadataByDeviceId: Map<string, RuntimeDeviceMetadata>;
+  runtimeByDeviceId: Map<string, RuntimeNode>;
+  knownNodesByDeviceId: Map<string, KnownNode>;
+  deviceIdByPeripheralId: Map<string, string>;
+  touchGatewayState: TouchGatewayState;
+  emitDevice: EmitDevice;
+  mergeDevice: MergeDevice;
+  emptyOtaRuntimeState: () => OtaRuntimeState;
+  emptyReconnectRuntimeState: () => ReconnectRuntimeState;
+  nowIso: () => string;
 }) {
-  function upsertKnownNode(deviceId, patch = {}) {
+  function upsertKnownNode(deviceId: string | null | undefined, patch: Partial<KnownNode> = {}) {
     if (!deviceId) {
       return;
     }
@@ -32,7 +57,7 @@ export function createRuntimeStateHelpers({
     touchGatewayState();
   }
 
-  function resolveKnownDeviceId(peripheralId) {
+  function resolveKnownDeviceId(peripheralId?: string | null) {
     if (!peripheralId) {
       return null;
     }
@@ -40,7 +65,7 @@ export function createRuntimeStateHelpers({
     return deviceIdByPeripheralId.get(peripheralId) ?? null;
   }
 
-  function normalizeBleAddress(address) {
+  function normalizeBleAddress(address?: string | null) {
     return typeof address === "string" ? address.toLowerCase() : null;
   }
 
@@ -50,7 +75,7 @@ export function createRuntimeStateHelpers({
     peripheralId,
     localName,
     address,
-  }) {
+  }: DiscoveryLocator) {
     if (deviceId) {
       return deviceId;
     }
@@ -89,12 +114,12 @@ export function createRuntimeStateHelpers({
     return null;
   }
 
-  function updateRuntimeNode(deviceId, patch) {
+  function updateRuntimeNode(deviceId: string | null | undefined, patch: RuntimeNodePatch) {
     if (!deviceId) {
       return;
     }
 
-    const previous = runtimeByDeviceId.get(deviceId) ?? {
+    const previous: RuntimeNode = runtimeByDeviceId.get(deviceId) ?? {
       gatewayConnectionState: "discovered",
       peripheralId: patch.peripheralId ?? null,
       address: patch.address ?? null,
@@ -145,7 +170,7 @@ export function createRuntimeStateHelpers({
     peripheralId,
     localName,
     address,
-  }) {
+  }: DiscoveryLocator): NodeConnectionInspection | null {
     const resolvedDeviceId =
       deviceId ??
       resolveKnownDeviceIdByDiscovery({ knownDeviceId, peripheralId, localName, address });
@@ -167,7 +192,7 @@ export function createRuntimeStateHelpers({
     };
   }
 
-  function getDeviceSummary(deviceId) {
+  function getDeviceSummary(deviceId: string | null | undefined): GatewayRuntimeDeviceSummary | null {
     if (
       !deviceId ||
       (!runtimeByDeviceId.has(deviceId) &&
@@ -180,7 +205,7 @@ export function createRuntimeStateHelpers({
     return mergeDevice(deviceId);
   }
 
-  function getDeviceSummaries() {
+  function getDeviceSummaries(): GatewayRuntimeDeviceSummary[] {
     const deviceIds = new Set([
       ...knownNodesByDeviceId.keys(),
       ...runtimeByDeviceId.keys(),
