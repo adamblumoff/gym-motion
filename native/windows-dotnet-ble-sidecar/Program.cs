@@ -518,15 +518,7 @@ internal sealed class NodeConnection
     private GattCharacteristic? _statusCharacteristic;
     private CancellationTokenSource? _sessionLifetime;
     private Task? _leaseLoop;
-    private Task? _telemetryLoop;
     private string? _lastTelemetryPayload;
-    private string? _lastTelemetryNotificationPayload;
-    private int _telemetryDuplicateCount;
-    private int _telemetryEmptyCount;
-    private int _telemetryFailureCount;
-    private int _telemetryNotificationDuplicateCount;
-    private int _telemetryNotificationEmptyCount;
-    private int _telemetryNotificationFailureCount;
     private string? _activeSessionId;
     private bool _disposed;
 
@@ -594,12 +586,12 @@ internal sealed class NodeConnection
                     bootId = adoptedBootId,
                 });
 
-                _activeSessionId = adoptedSessionId;
-                await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
-                StartLeaseLoop(discovered, adoptedSessionId, connectToken);
-                StartTelemetryLoop(discovered, connectToken);
-                return;
-            }
+            _activeSessionId = adoptedSessionId;
+            await _app.EmitNodeConnectionStateAsync(discovered, "connected", adoptedBootId);
+            await EmitBootstrapTelemetryAsync(discovered, connectToken);
+            StartLeaseLoop(discovered, adoptedSessionId, connectToken);
+            return;
+        }
 
             var sessionId = RandomHexToken(8);
             var sessionNonce = RandomHexToken(8);
@@ -635,8 +627,8 @@ internal sealed class NodeConnection
 
             _activeSessionId = sessionId;
             await _app.EmitNodeConnectionStateAsync(discovered, "connected", bootId);
+            await EmitBootstrapTelemetryAsync(discovered, connectToken);
             StartLeaseLoop(discovered, sessionId, connectToken);
-            StartTelemetryLoop(discovered, connectToken);
         }
         catch (OperationCanceledException)
         {
@@ -688,23 +680,11 @@ internal sealed class NodeConnection
             _sessionLifetime?.Cancel();
 
             var leaseLoop = _leaseLoop;
-            var telemetryLoop = _telemetryLoop;
             if (leaseLoop is not null)
             {
                 try
                 {
                     await leaseLoop;
-                }
-                catch
-                {
-                }
-            }
-
-            if (telemetryLoop is not null)
-            {
-                try
-                {
-                    await telemetryLoop;
                 }
                 catch
                 {
@@ -824,97 +804,6 @@ internal sealed class NodeConnection
         }
     }
 
-    private void StartTelemetryLoop(DiscoveredNodeInfo discovered, CancellationToken shutdownToken)
-    {
-        _lastTelemetryPayload = null;
-        _lastTelemetryNotificationPayload = null;
-        _telemetryDuplicateCount = 0;
-        _telemetryEmptyCount = 0;
-        _telemetryFailureCount = 0;
-        _telemetryNotificationDuplicateCount = 0;
-        _telemetryNotificationEmptyCount = 0;
-        _telemetryNotificationFailureCount = 0;
-        var telemetryToken = _sessionLifetime?.Token ?? shutdownToken;
-
-        _telemetryLoop = Task.Run(async () =>
-        {
-            while (!telemetryToken.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await ReadTelemetryPayloadAsync(telemetryToken);
-                    if (result.Status != GattCommunicationStatus.Success)
-                    {
-                        _telemetryFailureCount++;
-                        if (_telemetryFailureCount == 1 || _telemetryFailureCount % 10 == 0)
-                        {
-                            await _app.EmitLogAsync("warn", "Telemetry read returned a non-success GATT status.", new
-                            {
-                                node = discovered.NodeId,
-                                status = result.Status.ToString(),
-                                failures = _telemetryFailureCount,
-                            });
-                        }
-                    }
-                    else if (string.IsNullOrWhiteSpace(result.Payload))
-                    {
-                        _telemetryEmptyCount++;
-                        if (_telemetryEmptyCount == 1 || _telemetryEmptyCount % 10 == 0)
-                        {
-                            await _app.EmitLogAsync("warn", "Telemetry read returned an empty payload.", new
-                            {
-                                node = discovered.NodeId,
-                                empties = _telemetryEmptyCount,
-                            });
-                        }
-                    }
-                    else if (!string.Equals(result.Payload, _lastTelemetryPayload, StringComparison.Ordinal))
-                    {
-                        _lastTelemetryPayload = result.Payload;
-                        _telemetryDuplicateCount = 0;
-                        _telemetryEmptyCount = 0;
-                        _telemetryFailureCount = 0;
-                        await _app.EmitLogAsync("info", "Telemetry read produced a fresh payload.", new
-                        {
-                            node = discovered.NodeId,
-                            payload = result.Payload,
-                        });
-                        await _app.EmitTelemetryAsync(discovered, result.Payload);
-                    }
-                    else
-                    {
-                        _telemetryDuplicateCount++;
-                        if (_telemetryDuplicateCount == 1 || _telemetryDuplicateCount % 10 == 0)
-                        {
-                            await _app.EmitLogAsync("warn", "Telemetry read repeated the previous payload.", new
-                            {
-                                node = discovered.NodeId,
-                                duplicates = _telemetryDuplicateCount,
-                                payload = result.Payload,
-                            });
-                        }
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception error)
-                {
-                    _telemetryFailureCount++;
-                    await _app.EmitLogAsync("error", "Telemetry loop hit an exception.", new
-                    {
-                        node = discovered.NodeId,
-                        error = error.Message,
-                        failures = _telemetryFailureCount,
-                    });
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(500), telemetryToken);
-            }
-        }, telemetryToken);
-    }
-
     private async Task EnableTelemetryNotificationsAsync(
         DiscoveredNodeInfo discovered,
         CancellationToken shutdownToken)
@@ -961,55 +850,63 @@ internal sealed class NodeConnection
         try
         {
             var payload = ReadBufferText(args.CharacteristicValue);
-            if (string.IsNullOrWhiteSpace(payload))
-            {
-                _telemetryNotificationEmptyCount++;
-                if (_telemetryNotificationEmptyCount == 1 || _telemetryNotificationEmptyCount % 10 == 0)
-                {
-                    await _app.EmitLogAsync("warn", "Telemetry notification payload was empty.", new
-                    {
-                        node = discovered.NodeId,
-                        empties = _telemetryNotificationEmptyCount,
-                    });
-                }
-                return;
-            }
-
-            if (!string.Equals(payload, _lastTelemetryNotificationPayload, StringComparison.Ordinal))
-            {
-                _lastTelemetryNotificationPayload = payload;
-                _telemetryNotificationDuplicateCount = 0;
-                _telemetryNotificationEmptyCount = 0;
-                _telemetryNotificationFailureCount = 0;
-                await _app.EmitLogAsync("info", "Telemetry notification produced a fresh payload.", new
-                {
-                    node = discovered.NodeId,
-                    payload,
-                });
-                return;
-            }
-
-            _telemetryNotificationDuplicateCount++;
-            if (_telemetryNotificationDuplicateCount == 1 || _telemetryNotificationDuplicateCount % 10 == 0)
-            {
-                await _app.EmitLogAsync("warn", "Telemetry notification repeated the previous payload.", new
-                {
-                    node = discovered.NodeId,
-                    duplicates = _telemetryNotificationDuplicateCount,
-                    payload,
-                });
-            }
+            await EmitTelemetryPayloadAsync(discovered, payload, "notification");
         }
         catch (Exception error)
         {
-            _telemetryNotificationFailureCount++;
             await _app.EmitLogAsync("error", "Telemetry notification handler failed.", new
             {
                 node = discovered.NodeId,
                 error = error.Message,
-                failures = _telemetryNotificationFailureCount,
             });
         }
+    }
+
+    private async Task EmitBootstrapTelemetryAsync(
+        DiscoveredNodeInfo discovered,
+        CancellationToken shutdownToken)
+    {
+        try
+        {
+            var payload = await ReadCurrentTelemetryPayloadAsync(shutdownToken);
+            await EmitTelemetryPayloadAsync(discovered, payload, "bootstrap-read");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            await _app.EmitLogAsync("warn", "Bootstrap telemetry read failed.", new
+            {
+                node = discovered.NodeId,
+                error = error.Message,
+            });
+        }
+    }
+
+    private async Task EmitTelemetryPayloadAsync(
+        DiscoveredNodeInfo discovered,
+        string? payload,
+        string source)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return;
+        }
+
+        if (string.Equals(payload, _lastTelemetryPayload, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTelemetryPayload = payload;
+        await _app.EmitLogAsync("info", "Telemetry produced a fresh payload.", new
+        {
+            node = discovered.NodeId,
+            source,
+            payload,
+        });
+        await _app.EmitTelemetryAsync(discovered, payload);
     }
 
     private async Task TryEndSessionAsync()
@@ -1095,11 +992,11 @@ internal sealed class NodeConnection
         return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
-    private async Task<TelemetryReadResult> ReadTelemetryPayloadAsync(CancellationToken shutdownToken)
+    private async Task<string?> ReadCurrentTelemetryPayloadAsync(CancellationToken shutdownToken)
     {
         if (_telemetryCharacteristic is null)
         {
-            return new TelemetryReadResult(GattCommunicationStatus.Unreachable, null);
+            return null;
         }
 
         var result = await WithTimeout(
@@ -1109,18 +1006,16 @@ internal sealed class NodeConnection
 
         if (result.Status != GattCommunicationStatus.Success)
         {
-            return new TelemetryReadResult(result.Status, null);
+            return null;
         }
 
         var text = ReadBufferText(result.Value);
         if (string.IsNullOrWhiteSpace(text))
         {
-            return new TelemetryReadResult(result.Status, null);
+            return null;
         }
 
-        return new TelemetryReadResult(
-            result.Status,
-            text.StartsWith("{", StringComparison.Ordinal) ? text : null);
+        return text.StartsWith("{", StringComparison.Ordinal) ? text : null;
     }
 
     private async Task<GattDeviceService> GetRequiredServiceAsync(
@@ -1193,7 +1088,7 @@ internal sealed class NodeConnection
         _sessionLifetime?.Dispose();
         _sessionLifetime = null;
         _leaseLoop = null;
-        _telemetryLoop = null;
+        _lastTelemetryPayload = null;
         _activeSessionId = null;
 
         if (_device is not null)
@@ -1341,10 +1236,6 @@ internal sealed record SessionStatus(
     string? BootId,
     string? SessionId,
     string? SessionNonce);
-
-internal sealed record TelemetryReadResult(
-    GattCommunicationStatus Status,
-    string? Payload);
 
 internal sealed record Config(
     Guid RuntimeServiceUuid,
