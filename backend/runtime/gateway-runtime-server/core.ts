@@ -14,6 +14,7 @@ import {
   sortDevices,
   emptyOtaRuntimeState,
   emptyReconnectRuntimeState,
+  RECONNECT_DISCONNECT_GRACE_MS,
 } from "./utils.js";
 
 import { createKnownNodeStore } from "./persistence.js";
@@ -30,6 +31,7 @@ export function createGatewayRuntimeServer({
   runtimePort,
   knownNodesPath = path.join(DEFAULT_KNOWN_NODE_DIR, "gateway-known-nodes.json"),
   onControlCommand = null,
+  reconnectDisconnectGraceMs = RECONNECT_DISCONNECT_GRACE_MS,
   verbose = false,
 }) {
   const sessionId = crypto.randomUUID();
@@ -220,6 +222,7 @@ export function createGatewayRuntimeServer({
     updateRuntimeNode,
     inspectNodeConnection,
     nowIso,
+    reconnectDisconnectGraceMs,
   });
 
   return {
@@ -249,6 +252,7 @@ export function createGatewayRuntimeServer({
     },
 
     async stop() {
+      runtimeEvents.cancelPendingReconnectDisconnects();
       knownNodeStore.cancelPersist();
       await knownNodeStore.persistKnownNodes();
 
@@ -287,6 +291,7 @@ export function createGatewayRuntimeServer({
           emitDevice(deviceId);
         }
       } else {
+        runtimeEvents.cancelPendingReconnectDisconnects();
         for (const [deviceId, runtime] of runtimeByDeviceId.entries()) {
           runtimeByDeviceId.set(deviceId, {
             ...runtime,

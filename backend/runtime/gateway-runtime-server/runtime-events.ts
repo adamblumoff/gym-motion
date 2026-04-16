@@ -18,7 +18,83 @@ export function createRuntimeDeviceEventController({
   updateRuntimeNode,
   inspectNodeConnection,
   nowIso,
+  reconnectDisconnectGraceMs,
 }) {
+  const pendingReconnectDisconnects = new Map();
+
+  function clearPendingReconnectDisconnect(deviceId) {
+    if (!deviceId) {
+      return null;
+    }
+
+    const pending = pendingReconnectDisconnects.get(deviceId) ?? null;
+    if (!pending) {
+      return null;
+    }
+
+    clearTimeout(pending.timer);
+    pendingReconnectDisconnects.delete(deviceId);
+    return pending;
+  }
+
+  function isReconnectInFlight(connectionState) {
+    return connectionState === "connecting" || connectionState === "reconnecting";
+  }
+
+  function finalizeReconnectDisconnect(deviceId, token) {
+    const pending = pendingReconnectDisconnects.get(deviceId) ?? null;
+    if (!pending || pending.token !== token) {
+      return;
+    }
+
+    pendingReconnectDisconnects.delete(deviceId);
+
+    const runtime = runtimeByDeviceId.get(deviceId) ?? null;
+    if (!isReconnectInFlight(runtime?.gatewayConnectionState)) {
+      return;
+    }
+
+    updateRuntimeNode(deviceId, {
+      peripheralId: pending.peripheralId,
+      address: pending.address,
+      gatewayConnectionState: "disconnected",
+      gatewayLastDisconnectedAt: nowIso(),
+      gatewayDisconnectReason: pending.reason,
+      reconnectAttempt:
+        pending.reconnectAttempt ?? runtimeByDeviceId.get(deviceId)?.reconnectAttempt ?? 0,
+      reconnectAttemptLimit:
+        pending.reconnectAttemptLimit ??
+        runtimeByDeviceId.get(deviceId)?.reconnectAttemptLimit ??
+        20,
+      reconnectRetryExhausted:
+        pending.reconnectRetryExhausted ??
+        runtimeByDeviceId.get(deviceId)?.reconnectRetryExhausted ??
+        false,
+      reconnectAwaitingDecision:
+        pending.reconnectAwaitingDecision ??
+        runtimeByDeviceId.get(deviceId)?.reconnectAwaitingDecision ??
+        false,
+    });
+    emitDevice(deviceId);
+    broadcastGatewayStatus();
+  }
+
+  function scheduleReconnectDisconnect(deviceId, pending) {
+    clearPendingReconnectDisconnect(deviceId);
+
+    const token = Symbol("reconnect-disconnect");
+    const timer = setTimeout(() => {
+      finalizeReconnectDisconnect(deviceId, token);
+    }, reconnectDisconnectGraceMs);
+    timer?.unref?.();
+
+    pendingReconnectDisconnects.set(deviceId, {
+      ...pending,
+      token,
+      timer,
+    });
+  }
+
   return {
     noteDiscovery({
       deviceId = null,
@@ -124,6 +200,8 @@ export function createRuntimeDeviceEventController({
         return;
       }
 
+      clearPendingReconnectDisconnect(resolvedDeviceId);
+
       const nextConnectionState =
         previous?.gatewayConnectionState === "disconnected" ||
         previous?.gatewayConnectionState === "unreachable" ||
@@ -198,6 +276,8 @@ export function createRuntimeDeviceEventController({
         return;
       }
 
+      clearPendingReconnectDisconnect(resolvedDeviceId);
+
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         address: address ?? null,
@@ -233,6 +313,7 @@ export function createRuntimeDeviceEventController({
       const previous = inspectNodeConnection({ deviceId: payload.deviceId });
       const telemetryAt = nowIso();
       const previousRuntime = runtimeByDeviceId.get(payload.deviceId) ?? null;
+      clearPendingReconnectDisconnect(payload.deviceId);
       const nextConnectionState =
         previousRuntime?.gatewayConnectionState === "connecting" ||
         previousRuntime?.gatewayConnectionState === "reconnecting"
@@ -337,6 +418,26 @@ export function createRuntimeDeviceEventController({
         };
       }
 
+      if (isReconnectInFlight(previous?.gatewayConnectionState)) {
+        scheduleReconnectDisconnect(resolvedDeviceId, {
+          peripheralId,
+          address: address ?? null,
+          reason: reason ?? "ble-disconnected",
+          reconnectAttempt,
+          reconnectAttemptLimit,
+          reconnectRetryExhausted,
+          reconnectAwaitingDecision,
+        });
+        return {
+          applied: false,
+          provisional: true,
+          before: previous,
+          after: inspectNodeConnection({ deviceId: resolvedDeviceId }),
+        };
+      }
+
+      clearPendingReconnectDisconnect(resolvedDeviceId);
+
       updateRuntimeNode(resolvedDeviceId, {
         peripheralId,
         address: address ?? null,
@@ -385,6 +486,8 @@ export function createRuntimeDeviceEventController({
       if (!resolvedDeviceId) {
         return null;
       }
+
+      clearPendingReconnectDisconnect(resolvedDeviceId);
 
       updateRuntimeNode(resolvedDeviceId, {
         reconnectAttempt: 0,
@@ -439,6 +542,7 @@ export function createRuntimeDeviceEventController({
       });
 
       if (resolvedDeviceId) {
+        clearPendingReconnectDisconnect(resolvedDeviceId);
         suppressedDeviceIds.add(resolvedDeviceId);
         runtimeByDeviceId.delete(resolvedDeviceId);
         knownNodesByDeviceId.delete(resolvedDeviceId);
@@ -497,6 +601,12 @@ export function createRuntimeDeviceEventController({
       });
       emitDevice(deviceId);
       broadcastGatewayStatus();
+    },
+
+    cancelPendingReconnectDisconnects() {
+      for (const [deviceId] of pendingReconnectDisconnects.entries()) {
+        clearPendingReconnectDisconnect(deviceId);
+      }
     },
   };
 }

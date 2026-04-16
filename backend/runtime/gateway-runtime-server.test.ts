@@ -16,6 +16,7 @@ async function createRuntimeServer(options: {
   runtimeHost?: string;
   runtimePort: number;
   onControlCommand?: ((command: unknown) => unknown | Promise<unknown>) | null;
+  reconnectDisconnectGraceMs?: number;
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gym-motion-runtime-test-"));
   tempDirs.push(tempDir);
@@ -25,6 +26,7 @@ async function createRuntimeServer(options: {
     runtimePort: options.runtimePort,
     knownNodesPath: path.join(tempDir, "gateway-known-nodes.json"),
     onControlCommand: options.onControlCommand ?? null,
+    reconnectDisconnectGraceMs: options.reconnectDisconnectGraceMs,
   });
   runtimeServers.push(runtimeServer);
   return runtimeServer;
@@ -231,6 +233,128 @@ describe("gateway runtime server", () => {
       expect.objectContaining({
         id: "stack-001",
         gatewayConnectionState: "connected",
+      }),
+    ]);
+  });
+
+  it("keeps reconnecting visible across a transient disconnect during reconnect", async () => {
+    const runtimePort = 51260 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createRuntimeServer({
+      runtimePort,
+      reconnectDisconnectGraceMs: 40,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+    runtimeServer.noteConnecting({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+
+    const reconnectingResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const reconnectingPayload = await reconnectingResponse.json();
+
+    expect(reconnectingPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "reconnecting",
+      }),
+    ]);
+
+    runtimeServer.noteConnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+
+    const connectedResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const connectedPayload = await connectedResponse.json();
+
+    expect(connectedPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "connected",
+      }),
+    ]);
+  });
+
+  it("falls back to disconnected when a reconnect grace window expires", async () => {
+    const runtimePort = 51270 + Math.floor(Math.random() * 1000);
+    const runtimeServer = await createRuntimeServer({
+      runtimePort,
+      reconnectDisconnectGraceMs: 25,
+    });
+
+    await runtimeServer.start();
+    runtimeServer.setAdapterState("poweredOn");
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+    runtimeServer.noteConnecting({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      rssi: -48,
+    });
+    runtimeServer.noteDisconnected({
+      deviceId: "stack-001",
+      knownDeviceId: "stack-001",
+      peripheralId: "peripheral-1",
+      address: "AA:BB",
+      localName: "GymMotion-f4e9d4",
+      reason: "ble-disconnected",
+    });
+
+    const provisionalResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const provisionalPayload = await provisionalResponse.json();
+
+    expect(provisionalPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "reconnecting",
+      }),
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const disconnectedResponse = await fetch(`http://127.0.0.1:${runtimePort}/devices`);
+    const disconnectedPayload = await disconnectedResponse.json();
+
+    expect(disconnectedPayload.devices).toEqual([
+      expect.objectContaining({
+        id: "stack-001",
+        gatewayConnectionState: "disconnected",
+        gatewayDisconnectReason: "ble-disconnected",
       }),
     ]);
   });

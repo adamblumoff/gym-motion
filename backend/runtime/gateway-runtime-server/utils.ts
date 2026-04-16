@@ -4,6 +4,7 @@ import path from "node:path";
 export const METADATA_REFRESH_MS = 15_000;
 export const STREAM_PING_MS = 15_000;
 export const TELEMETRY_FRESH_MS = 20_000;
+export const RECONNECT_DISCONNECT_GRACE_MS = 1_000;
 export const DEFAULT_KNOWN_NODE_DIR = path.join(process.cwd(), "data");
 
 export function nowIso() {
