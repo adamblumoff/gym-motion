@@ -1,15 +1,19 @@
-import { getDb } from "../db";
+import { desc, eq } from "drizzle-orm";
+import { getDb, getDrizzleDb } from "../db";
 import type {
   DeviceActivitySummary,
   DeviceLogInput,
   DeviceLogSummary,
 } from "../motion";
+import { deviceLogs, motionEvents } from "../schema";
 import {
   type DeviceLogRow,
-  type MotionEventRow,
+  mapDeviceLogRecord,
   mapDeviceLogRow,
   mapDeviceLogToActivity,
   mapMotionEventRow,
+  mapMotionEventRecord,
+  type MotionEventRow,
   mapMotionEventToActivity,
   sortActivities,
 } from "./shared";
@@ -104,48 +108,18 @@ export async function listDeviceLogs(options?: {
 }): Promise<DeviceLogSummary[]> {
   const limit = Math.min(Math.max(options?.limit ?? 100, 1), 250);
 
-  const result = options?.deviceId
-    ? await getDb().query<DeviceLogRow>(
-        `select
-           id,
-           device_id,
-           sequence,
-           level,
-           code,
-           message,
-           boot_id,
-           firmware_version,
-           hardware_id,
-           device_timestamp,
-           metadata,
-           received_at
-         from device_logs
-         where device_id = $1
-         order by received_at desc, id desc
-         limit $2`,
-        [options.deviceId, limit],
-      )
-    : await getDb().query<DeviceLogRow>(
-        `select
-           id,
-           device_id,
-           sequence,
-           level,
-           code,
-           message,
-           boot_id,
-           firmware_version,
-           hardware_id,
-           device_timestamp,
-           metadata,
-           received_at
-         from device_logs
-         order by received_at desc, id desc
-         limit $1`,
-        [limit],
-      );
+  const records = options?.deviceId
+    ? await getDrizzleDb().query.deviceLogs.findMany({
+        where: eq(deviceLogs.deviceId, options.deviceId),
+        orderBy: [desc(deviceLogs.receivedAt), desc(deviceLogs.id)],
+        limit,
+      })
+    : await getDrizzleDb().query.deviceLogs.findMany({
+        orderBy: [desc(deviceLogs.receivedAt), desc(deviceLogs.id)],
+        limit,
+      });
 
-  return result.rows.map(mapDeviceLogRow);
+  return records.map(mapDeviceLogRecord);
 }
 
 export async function listDeviceActivity(options: {
@@ -154,50 +128,22 @@ export async function listDeviceActivity(options: {
 }): Promise<DeviceActivitySummary[]> {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 250);
   const [events, logs] = await Promise.all([
-    getDb().query<MotionEventRow>(
-      `select
-         id,
-         device_id,
-         sequence,
-         state,
-         delta,
-         event_timestamp,
-         received_at,
-         boot_id,
-         firmware_version,
-         hardware_id
-       from motion_events
-       where device_id = $1
-       order by received_at desc, id desc
-       limit $2`,
-      [options.deviceId, limit],
-    ),
-    getDb().query<DeviceLogRow>(
-      `select
-         id,
-         device_id,
-         sequence,
-         level,
-         code,
-         message,
-         boot_id,
-         firmware_version,
-         hardware_id,
-         device_timestamp,
-         metadata,
-         received_at
-       from device_logs
-       where device_id = $1
-       order by received_at desc, id desc
-       limit $2`,
-      [options.deviceId, limit],
-    ),
+    getDrizzleDb().query.motionEvents.findMany({
+      where: eq(motionEvents.deviceId, options.deviceId),
+      orderBy: [desc(motionEvents.receivedAt), desc(motionEvents.id)],
+      limit,
+    }),
+    getDrizzleDb().query.deviceLogs.findMany({
+      where: eq(deviceLogs.deviceId, options.deviceId),
+      orderBy: [desc(deviceLogs.receivedAt), desc(deviceLogs.id)],
+      limit,
+    }),
   ]);
 
   return sortActivities(
     [
-      ...events.rows.map(mapMotionEventRow).map(mapMotionEventToActivity),
-      ...logs.rows.map(mapDeviceLogRow).map(mapDeviceLogToActivity),
+      ...events.map(mapMotionEventRecord).map(mapMotionEventToActivity),
+      ...logs.map(mapDeviceLogRecord).map(mapDeviceLogToActivity),
     ],
     limit,
   );

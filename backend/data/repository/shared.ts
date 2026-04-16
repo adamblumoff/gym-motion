@@ -8,6 +8,12 @@ import type {
   ProvisioningState,
   UpdateStatus,
 } from "../motion";
+import type {
+  deviceLogs,
+  devices,
+  firmwareReleases,
+  motionEvents,
+} from "../schema";
 
 export type DeviceRow = {
   id: string;
@@ -73,6 +79,11 @@ export type FirmwareCheckInput = {
   firmwareVersion: string | null;
 };
 
+export type DeviceRecord = typeof devices.$inferSelect;
+export type MotionEventRecord = typeof motionEvents.$inferSelect;
+export type DeviceLogRecord = typeof deviceLogs.$inferSelect;
+export type FirmwareReleaseRecord = typeof firmwareReleases.$inferSelect;
+
 export const DEVICE_SELECT_COLUMNS = `id,
        last_state,
        last_seen_at,
@@ -126,6 +137,31 @@ export function mapDeviceRow(row: DeviceRow): DeviceSummary {
   };
 }
 
+export function mapDeviceRecord(row: DeviceRecord): DeviceSummary {
+  const lastContactAt = row.lastHeartbeatAt ?? row.lastEventReceivedAt;
+
+  return {
+    id: row.id,
+    lastState: row.lastState as DeviceSummary["lastState"],
+    lastSeenAt: row.lastSeenAt,
+    lastDelta: row.lastDelta,
+    updatedAt: row.updatedAt.toISOString(),
+    hardwareId: row.hardwareId,
+    bootId: row.bootId,
+    firmwareVersion: row.firmwareVersion,
+    machineLabel: row.machineLabel,
+    siteId: row.siteId,
+    provisioningState: row.provisioningState as DeviceSummary["provisioningState"],
+    updateStatus: row.updateStatus as DeviceSummary["updateStatus"],
+    updateTargetVersion: row.updateTargetVersion,
+    updateDetail: row.updateDetail,
+    updateUpdatedAt: row.updateReportedAt?.toISOString() ?? null,
+    lastHeartbeatAt: row.lastHeartbeatAt?.toISOString() ?? null,
+    lastEventReceivedAt: row.lastEventReceivedAt?.toISOString() ?? null,
+    healthStatus: deriveHealthStatus(lastContactAt?.toISOString() ?? null),
+  };
+}
+
 export function mapMotionEventRow(row: MotionEventRow): MotionEventSummary {
   return {
     id: toSafeNumber(row.id),
@@ -138,6 +174,21 @@ export function mapMotionEventRow(row: MotionEventRow): MotionEventSummary {
     bootId: row.boot_id,
     firmwareVersion: row.firmware_version,
     hardwareId: row.hardware_id,
+  };
+}
+
+export function mapMotionEventRecord(row: MotionEventRecord): MotionEventSummary {
+  return {
+    id: row.id,
+    deviceId: row.deviceId,
+    sequence: row.sequence,
+    state: row.state as MotionEventSummary["state"],
+    delta: row.delta,
+    eventTimestamp: row.eventTimestamp,
+    receivedAt: row.receivedAt.toISOString(),
+    bootId: row.bootId,
+    firmwareVersion: row.firmwareVersion,
+    hardwareId: row.hardwareId,
   };
 }
 
@@ -159,6 +210,23 @@ export function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
   };
 }
 
+export function mapDeviceLogRecord(row: DeviceLogRecord): DeviceLogSummary {
+  return {
+    id: row.id,
+    deviceId: row.deviceId,
+    sequence: row.sequence,
+    level: row.level as DeviceLogSummary["level"],
+    code: row.code,
+    message: row.message,
+    bootId: row.bootId,
+    firmwareVersion: row.firmwareVersion,
+    hardwareId: row.hardwareId,
+    deviceTimestamp: row.deviceTimestamp,
+    metadata: (row.metadata as DeviceLogSummary["metadata"]) ?? null,
+    receivedAt: row.receivedAt.toISOString(),
+  };
+}
+
 export function mapFirmwareReleaseRow(row: FirmwareReleaseRow): FirmwareReleaseSummary {
   return {
     version: row.version,
@@ -169,6 +237,19 @@ export function mapFirmwareReleaseRow(row: FirmwareReleaseRow): FirmwareReleaseS
     sizeBytes: toSafeNumber(row.size_bytes),
     rolloutState: row.rollout_state,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+export function mapFirmwareReleaseRecord(row: FirmwareReleaseRecord): FirmwareReleaseSummary {
+  return {
+    version: row.version,
+    gitSha: row.gitSha,
+    assetUrl: row.assetUrl,
+    sha256: row.sha256,
+    md5: row.md5,
+    sizeBytes: row.sizeBytes,
+    rolloutState: row.rolloutState as FirmwareReleaseSummary["rolloutState"],
+    createdAt: row.createdAt.toISOString(),
   };
 }
 

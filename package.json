@@ -7,6 +7,9 @@
   "author": "Gym Motion",
   "scripts": {
     "db:setup": "bun run ./scripts/setup-db.ts",
+    "db:drizzle:generate": "drizzle-kit generate",
+    "db:drizzle:migrate": "drizzle-kit migrate",
+    "db:drizzle:pull": "drizzle-kit pull --config drizzle.config.ts",
     "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
     "db:rebuild:motion-rollups": "bun run ./scripts/rebuild-motion-rollups.ts",
     "worktree:create:t3": "bun run ./scripts/create-t3-worktree.ts",
@@ -44,6 +47,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.45.2",
     "lucide-react": "^0.577.0",
     "pg": "^8.16.3",
     "react": "^19.2.0",
@@ -56,13 +60,14 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@playwright/test": "^1.55.1",
     "@eslint/js": "^9.23.0",
+    "@playwright/test": "^1.55.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/node": "^24.5.2",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.2",
+    "drizzle-kit": "^0.31.10",
     "electron": "^36.3.1",
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.1.0",

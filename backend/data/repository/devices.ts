@@ -1,156 +1,121 @@
-import { getDb } from "../db";
+import { eq, sql } from "drizzle-orm";
+import { getDrizzleDb } from "../db";
 import type {
   DeviceAssignmentInput,
   DeviceCleanupResult,
   DeviceRegistrationInput,
   DeviceSummary,
 } from "../motion";
-import { DEVICE_SELECT_COLUMNS, type DeviceRow, mapDeviceRow } from "./shared";
+import { deviceLogs, devices, motionEvents } from "../schema";
+import { mapDeviceRecord } from "./shared";
 
 export async function createOrUpdateDeviceRegistration(
   input: DeviceRegistrationInput,
 ): Promise<DeviceSummary> {
-  const result = await getDb().query<DeviceRow>(
-    `insert into devices (
-       id,
-       last_state,
-       last_seen_at,
-       last_delta,
-       updated_at,
-       hardware_id,
-       firmware_version,
-       machine_label,
-       site_id,
-       provisioning_state
-     )
-     values ($1, 'still', 0, null, now(), $2, 'unknown', $3, $4, $5)
-     on conflict (id) do update
-     set updated_at = now(),
-         hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
-         machine_label = coalesce(excluded.machine_label, devices.machine_label),
-         site_id = coalesce(excluded.site_id, devices.site_id),
-         provisioning_state = excluded.provisioning_state
-     returning
-       ${DEVICE_SELECT_COLUMNS}`,
-    [
-      input.deviceId,
-      input.hardwareId ?? null,
-      input.machineLabel ?? null,
-      input.siteId ?? null,
-      input.provisioningState,
-    ],
-  );
+  const [record] = await getDrizzleDb()
+    .insert(devices)
+    .values({
+      id: input.deviceId,
+      lastState: "still",
+      lastSeenAt: 0,
+      lastDelta: null,
+      hardwareId: input.hardwareId ?? null,
+      firmwareVersion: "unknown",
+      machineLabel: input.machineLabel ?? null,
+      siteId: input.siteId ?? null,
+      provisioningState: input.provisioningState,
+    })
+    .onConflictDoUpdate({
+      target: devices.id,
+      set: {
+        updatedAt: new Date(),
+        hardwareId: sql`coalesce(excluded.hardware_id, ${devices.hardwareId})`,
+        machineLabel: sql`coalesce(excluded.machine_label, ${devices.machineLabel})`,
+        siteId: sql`coalesce(excluded.site_id, ${devices.siteId})`,
+        provisioningState: sql`excluded.provisioning_state`,
+      },
+    })
+    .returning();
 
-  return mapDeviceRow(result.rows[0]);
+  return mapDeviceRecord(record);
 }
 
 export async function updateDeviceAssignment(
   deviceId: string,
   input: DeviceAssignmentInput,
 ): Promise<DeviceSummary | null> {
-  const fields = [];
-  const values: Array<string | null> = [deviceId];
-  let index = values.length;
+  if (
+    input.machineLabel === undefined &&
+    input.siteId === undefined &&
+    input.hardwareId === undefined &&
+    input.provisioningState === undefined
+  ) {
+    const existing = await getDrizzleDb().query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+    });
+
+    return existing ? mapDeviceRecord(existing) : null;
+  }
+
+  const updatePatch: Record<string, unknown> = {
+    updatedAt: new Date(),
+  };
 
   if (input.machineLabel !== undefined) {
-    fields.push(`machine_label = $${++index}`);
-    values.push(input.machineLabel ?? null);
+    updatePatch.machineLabel = input.machineLabel ?? null;
   }
 
   if (input.siteId !== undefined) {
-    fields.push(`site_id = $${++index}`);
-    values.push(input.siteId ?? null);
+    updatePatch.siteId = input.siteId ?? null;
   }
 
   if (input.hardwareId !== undefined) {
-    fields.push(`hardware_id = $${++index}`);
-    values.push(input.hardwareId ?? null);
+    updatePatch.hardwareId = input.hardwareId ?? null;
   }
 
   if (input.provisioningState !== undefined) {
-    fields.push(`provisioning_state = $${++index}`);
-    values.push(input.provisioningState);
+    updatePatch.provisioningState = input.provisioningState;
   }
 
-  if (fields.length === 0) {
-    const existing = await getDb().query<DeviceRow>(
-      `select
-         ${DEVICE_SELECT_COLUMNS}
-       from devices
-       where id = $1`,
-      [deviceId],
-    );
-
-    return existing.rows[0] ? mapDeviceRow(existing.rows[0]) : null;
-  }
-
-  fields.push("updated_at = now()");
   if (input.provisioningState === "provisioned") {
-    fields.push("wifi_provisioned_at = coalesce(wifi_provisioned_at, now())");
+    updatePatch.wifiProvisionedAt = sql`coalesce(${devices.wifiProvisionedAt}, now())`;
   }
 
-  const result = await getDb().query<DeviceRow>(
-    `update devices
-     set ${fields.join(", ")}
-     where id = $1
-     returning
-       ${DEVICE_SELECT_COLUMNS}`,
-    values,
-  );
+  const [record] = await getDrizzleDb()
+    .update(devices)
+    .set(updatePatch as any)
+    .where(eq(devices.id, deviceId))
+    .returning();
 
-  return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;
+  return record ? mapDeviceRecord(record) : null;
 }
 
 export async function getDevice(deviceId: string): Promise<DeviceSummary | null> {
-  const result = await getDb().query<DeviceRow>(
-    `select
-       ${DEVICE_SELECT_COLUMNS}
-     from devices
-     where id = $1
-     limit 1`,
-    [deviceId],
-  );
+  const record = await getDrizzleDb().query.devices.findFirst({
+    where: eq(devices.id, deviceId),
+  });
 
-  return result.rows[0] ? mapDeviceRow(result.rows[0]) : null;
+  return record ? mapDeviceRecord(record) : null;
 }
 
 export async function purgeDeviceData(deviceId: string): Promise<DeviceCleanupResult> {
-  const client = await getDb().connect();
+  return getDrizzleDb().transaction(async (tx) => {
+    const deletedEvents = await tx
+      .delete(motionEvents)
+      .where(eq(motionEvents.deviceId, deviceId))
+      .returning({ count: sql<number>`1` });
 
-  try {
-    await client.query("BEGIN");
+    await tx.delete(deviceLogs).where(eq(deviceLogs.deviceId, deviceId));
 
-    const deletedEvents = await client.query<{ count: string }>(
-      `delete from motion_events
-       where device_id = $1
-       returning 1 as count`,
-      [deviceId],
-    );
-
-    await client.query(
-      `delete from device_logs
-       where device_id = $1`,
-      [deviceId],
-    );
-
-    const deletedDevices = await client.query<{ count: string }>(
-      `delete from devices
-       where id = $1
-       returning 1 as count`,
-      [deviceId],
-    );
-
-    await client.query("COMMIT");
+    const deletedDevices = await tx
+      .delete(devices)
+      .where(eq(devices.id, deviceId))
+      .returning({ count: sql<number>`1` });
 
     return {
       deviceId,
-      deletedEvents: deletedEvents.rowCount ?? 0,
-      deletedDevices: deletedDevices.rowCount ?? 0,
+      deletedEvents: deletedEvents.length,
+      deletedDevices: deletedDevices.length,
     };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

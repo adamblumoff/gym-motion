@@ -1,8 +1,12 @@
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, types } from "pg";
+import type { DrizzleDbSchema } from "./schema";
+import { schema } from "./schema";
 
 declare global {
   var pgPool: Pool | undefined;
   var pgTypesConfigured: boolean | undefined;
+  var drizzleDb: NodePgDatabase<DrizzleDbSchema> | undefined;
 }
 
 const PG_TIMESTAMP_OID = 1114;
@@ -44,4 +48,14 @@ export function getDb() {
   }
 
   return globalThis.pgPool;
+}
+
+export function getDrizzleDb() {
+  configurePgTypes();
+
+  if (!globalThis.drizzleDb) {
+    globalThis.drizzleDb = drizzle(getDb(), { schema });
+  }
+
+  return globalThis.drizzleDb;
 }
