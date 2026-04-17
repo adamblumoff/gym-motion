@@ -190,19 +190,12 @@ void markNodeConnected();
 void markNodeBleFailure();
 
 void sendRuntimeStatus(const String& phase, const String& message, const String& version = "");
-void enqueueBoardLogStatus(
-  const String& tag,
-  const String& message,
-  const String& level = "info"
-);
 void sendTelemetry(
   int delta,
   unsigned long timestamp,
   bool force = false,
   bool stateChanged = false
 );
-bool enqueueRuntimeNotification(BLECharacteristic* characteristic, const String& payload);
-bool enqueueRuntimeNotificationChunked(BLECharacteristic* characteristic, const String& payload);
 bool enqueueRuntimeStatusPayload(const String& payload);
 void processBleNotificationQueues();
 

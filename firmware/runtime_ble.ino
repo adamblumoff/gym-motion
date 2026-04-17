@@ -298,12 +298,6 @@ void sendRuntimeStatus(const String& phase, const String& message, const String&
   );
 }
 
-void enqueueBoardLogStatus(const String& tag, const String& message, const String& level) {
-  (void)tag;
-  (void)message;
-  (void)level;
-}
-
 void notifyCurrentRuntimeStatus() {
   sendConnectedNotification(
     runtimeStatusCharacteristic,
@@ -361,10 +355,6 @@ void sendRuntimeAppSessionOnline(
   (void)notifyConnHandle;
   String payload = createRuntimeAppSessionOnlinePayload(sessionId, sessionNonce);
   publishRuntimeStatusPayload(payload);
-}
-
-void logRuntimeTransportEvent(const String& message) {
-  (void)message;
 }
 
 void logRuntimeControlFrame(const String& stage, const String& payload) {
@@ -468,16 +458,11 @@ void startRuntimeAdvertising(const String& reason) {
   configureRuntimeAdvertisingPayload();
   if (!Bluefruit.Advertising.start(0)) {
     markNodeBleFailure();
-    logRuntimeTransportEvent("BLE advertising failed to start.");
     return;
   }
 
   markNodeAdvertising();
   lastDisconnectedAdvertisingLogAt = millis();
-  logRuntimeTransportEvent(
-    "Advertising for Windows app reconnect (" + reason + ") as " +
-    createBleDeviceName() + "."
-  );
 }
 
 void logRuntimeLeaseState(const char* reason, unsigned long now) {
@@ -554,7 +539,6 @@ void armRuntimeBootstrapWatchdog(const String& message) {
   }
 
   applyRuntimeAppSessionState(state);
-  logRuntimeTransportEvent(message);
 }
 
 void disarmRuntimeBootstrapWatchdog() {
@@ -593,13 +577,7 @@ void markRuntimeAppSessionOnline(
   }
 
   if (update.sessionChanged) {
-    logRuntimeTransportEvent(
-      "Windows app session lease is active for session " + sessionId + "."
-    );
   } else {
-    logRuntimeTransportEvent(
-      "Re-sending Windows app session online ack for session " + sessionId + "."
-    );
   }
   sendRuntimeAppSessionOnline(sessionId, sessionNonce, notifyConnHandle);
 
@@ -614,10 +592,6 @@ void noteRuntimeAppSessionExpired(unsigned long timestamp) {
     return;
   }
 
-  logRuntimeTransportEvent(
-    "Windows app session lease expired; dropping BLE client and resuming advertising."
-  );
-
   (void)timestamp;
 }
 
@@ -626,12 +600,6 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
   runtimeDisconnectCount += 1;
   runtimeBleConnIdKnown = false;
   runtimeBleConnId = 0;
-
-  logRuntimeTransportEvent(
-    hadSession
-      ? "BLE runtime transport disconnected from the Windows app; keeping the app session alive until the lease expires."
-      : "BLE runtime transport disconnected from the Windows app."
-  );
 
   if (!hadSession) {
     return;
@@ -657,9 +625,6 @@ void enforceRuntimeAppSessionLease() {
 
   if (result.kind == firmware_runtime::LeaseEnforcementResultKind::BootstrapTimedOut) {
     logRuntimeLeaseState("Bootstrap lease timeout fired.", now);
-    logRuntimeTransportEvent(
-      "BLE client never started a runtime session; dropping stale client."
-    );
     resetRuntimeAppSessionState();
 
     if (runtimeBleConnIdKnown) {
@@ -780,10 +745,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       return;
     }
 
-    logRuntimeTransportEvent(
-      "Applying app-session-begin for session " + sessionId +
-      " (previous=" + (runtimeAppSessionId.length() > 0 ? runtimeAppSessionId : "(none)") + ")."
-    );
     markRuntimeAppSessionOnline(
       sessionId,
       sessionNonce,
@@ -815,11 +776,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
       : runtimeAppSessionId == sessionId;
 
     if (!sessionMatches) {
-      logRuntimeTransportEvent(
-        "Rejected app-session-lease for session " + sessionId +
-        " because active session is " +
-        (runtimeAppSessionId.length() > 0 ? runtimeAppSessionId : "(none)") + "."
-      );
       return;
     }
 
@@ -848,9 +804,6 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
         !sessionMatches) {
       return;
     }
-    logRuntimeTransportEvent(
-      "Windows app requested runtime session teardown; disconnecting BLE transport."
-    );
     resetRuntimeAppSessionState();
 
     if (runtimeBleConnIdKnown) {
@@ -1218,7 +1171,4 @@ void setupBle() {
   configureRuntimeAdvertisingPayload();
   Bluefruit.Advertising.start(0);
   lastDisconnectedAdvertisingLogAt = millis();
-  logRuntimeTransportEvent(
-    "BLE advertising started as " + createBleDeviceName() + "."
-  );
 }

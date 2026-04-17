@@ -553,11 +553,6 @@ void logConnectedRuntimeHeartbeat() {
 
   lastConnectedRuntimeDebugAt = now;
   logRuntimeLeaseState("Connected heartbeat.", now);
-  enqueueBoardLogStatus(
-    "runtime-heartbeat",
-    "Connected heartbeat. appSession=" + String(runtimeAppSessionConnected ? 1 : 0) +
-      " notifyMask=" + String(runtimeNotifyMask)
-  );
 }
 
 void logDisconnectedAdvertisingHeartbeat() {
@@ -575,7 +570,4 @@ void logDisconnectedAdvertisingHeartbeat() {
   }
 
   lastDisconnectedAdvertisingLogAt = now;
-  logRuntimeTransportEvent(
-    "Still waiting for the Windows app; BLE advertising is active."
-  );
 }
