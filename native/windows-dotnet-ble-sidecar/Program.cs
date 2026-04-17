@@ -23,6 +23,7 @@ internal static class Program
 internal sealed class SidecarApp
 {
     private const uint ProtocolVersion = 1;
+    private static readonly TimeSpan ReconnectRetryDelay = TimeSpan.FromSeconds(1);
     private sealed record AdapterSnapshot(string Id, string Label, bool IsAvailable, string? Issue, string[] Details);
 
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -32,7 +33,8 @@ internal sealed class SidecarApp
 
     private readonly SemaphoreSlim _stdoutLock = new(1, 1);
     private readonly Config _config = Config.FromEnvironment();
-    private readonly Dictionary<string, AllowedNodeRule> _allowedRulesById = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, AllowedNodeRule> _allowedRulesById =
+        new Dictionary<string, AllowedNodeRule>(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<ulong, DiscoveredNodeInfo> _discoveredNodes = new();
     private readonly ConcurrentDictionary<string, NodeConnection> _connectionsByRuleId = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
@@ -106,7 +108,7 @@ internal sealed class SidecarApp
                 await EmitAdapterListAsync();
                 break;
             case "set_allowed_nodes":
-                UpdateAllowedNodes(root);
+                await UpdateAllowedNodesAsync(root);
                 if (_sessionStarted)
                 {
                     TryConnectApprovedNodes();
@@ -142,13 +144,20 @@ internal sealed class SidecarApp
         TryConnectApprovedNodes();
     }
 
-    private void UpdateAllowedNodes(JsonElement root)
+    private async Task UpdateAllowedNodesAsync(JsonElement root)
     {
-        _allowedRulesById.Clear();
+        var nextRulesById = ParseAllowedNodes(root);
+        _allowedRulesById = nextRulesById;
+        RemapDiscoveredNodes(nextRulesById);
+        await DisposeStaleConnectionsAsync(nextRulesById);
+    }
 
+    private static Dictionary<string, AllowedNodeRule> ParseAllowedNodes(JsonElement root)
+    {
+        var rulesById = new Dictionary<string, AllowedNodeRule>(StringComparer.Ordinal);
         if (!root.TryGetProperty("nodes", out var nodesElement) || nodesElement.ValueKind != JsonValueKind.Array)
         {
-            return;
+            return rulesById;
         }
 
         foreach (var node in nodesElement.EnumerateArray())
@@ -161,7 +170,61 @@ internal sealed class SidecarApp
                 LocalName: GetString(node, "local_name"),
                 KnownDeviceId: GetString(node, "known_device_id"));
 
-            _allowedRulesById[rule.Id] = rule;
+            rulesById[rule.Id] = rule;
+        }
+
+        return rulesById;
+    }
+
+    private void RemapDiscoveredNodes(IReadOnlyDictionary<string, AllowedNodeRule> rulesById)
+    {
+        var rules = rulesById.Values.ToArray();
+        foreach (var entry in _discoveredNodes.ToArray())
+        {
+            var remapped = RemapDiscoveredNode(entry.Value, rules);
+            if (remapped is null)
+            {
+                _discoveredNodes.TryRemove(entry.Key, out _);
+                continue;
+            }
+
+            _discoveredNodes[entry.Key] = remapped;
+        }
+    }
+
+    private static DiscoveredNodeInfo? RemapDiscoveredNode(
+        DiscoveredNodeInfo discovered,
+        IReadOnlyCollection<AllowedNodeRule> rules)
+    {
+        var matchedRule = MatchRule(rules, discovered.LocalName, discovered.Address);
+        if (matchedRule is null)
+        {
+            return null;
+        }
+
+        return discovered with
+        {
+            Label = matchedRule.Label,
+            KnownDeviceId = matchedRule.KnownDeviceId,
+            MatchedRule = matchedRule,
+        };
+    }
+
+    private async Task DisposeStaleConnectionsAsync(IReadOnlyDictionary<string, AllowedNodeRule> rulesById)
+    {
+        foreach (var entry in _connectionsByRuleId.ToArray())
+        {
+            if (rulesById.TryGetValue(entry.Key, out var nextRule) && Equals(entry.Value.Rule, nextRule))
+            {
+                continue;
+            }
+
+            if (!_connectionsByRuleId.TryRemove(entry.Key, out var connection))
+            {
+                continue;
+            }
+
+            await connection.DisposeAsync();
         }
     }
 
@@ -439,7 +502,7 @@ internal sealed class SidecarApp
     {
         var localName = args.Advertisement.LocalName;
         var address = FormatBluetoothAddress(args.BluetoothAddress);
-        var matchedRule = _allowedRulesById.Values.FirstOrDefault(rule => RuleMatches(rule, localName, address));
+        var matchedRule = MatchRule(_allowedRulesById.Values, localName, address);
 
         if (matchedRule is null)
         {
@@ -487,6 +550,52 @@ internal sealed class SidecarApp
         }
 
         return false;
+    }
+
+    private static AllowedNodeRule? MatchRule(
+        IEnumerable<AllowedNodeRule> rules,
+        string? localName,
+        string address)
+        => rules.FirstOrDefault(rule => RuleMatches(rule, localName, address));
+
+    internal void ScheduleReconnect(DiscoveredNodeInfo discovered, string reason)
+    {
+        if (_shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(ReconnectRetryDelay, _shutdown.Token);
+
+                if (_shutdown.IsCancellationRequested || !_sessionStarted)
+                {
+                    return;
+                }
+
+                var reconnectTarget = _discoveredNodes.TryGetValue(discovered.BluetoothAddress, out var current)
+                    ? current
+                    : discovered;
+
+                if (reconnectTarget.MatchedRule is null)
+                {
+                    return;
+                }
+
+                await EmitLogAsync("info", "Retrying approved node connection after disconnect.", new
+                {
+                    node = reconnectTarget.NodeId,
+                    reason,
+                });
+                await EnsureConnectedAsync(reconnectTarget);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, _shutdown.Token);
     }
 
     private static string? GetString(JsonElement root, string propertyName)
@@ -554,6 +663,7 @@ internal sealed class NodeConnection
     }
 
     public string? DeviceId { get; private set; }
+    public AllowedNodeRule Rule => _rule;
 
     public void UpdateDiscovered(DiscoveredNodeInfo discovered)
     {
@@ -669,6 +779,7 @@ internal sealed class NodeConnection
                     error = error.Message,
                 });
                 await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: error.Message);
+                _app.ScheduleReconnect(discovered, "connect_failed");
             }
 
             ResetConnectionState();
@@ -801,6 +912,7 @@ internal sealed class NodeConnection
                 {
                     await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: "Session lease write failed.");
                     ResetConnectionState();
+                    _app.ScheduleReconnect(discovered, "lease_write_failed");
                     return;
                 }
             }
@@ -825,6 +937,7 @@ internal sealed class NodeConnection
         if (discovered is not null)
         {
             await _app.EmitNodeConnectionStateAsync(discovered, "disconnected", bootId: null, reason: "Bluetooth connection dropped.");
+            _app.ScheduleReconnect(discovered, "connection_dropped");
         }
     }
 
