@@ -511,13 +511,7 @@ void logRuntimeLeaseState(const char* reason, unsigned long now) {
 void resetRuntimeAppSessionState() {
   const firmware_runtime::AppSessionState state =
     firmware_runtime::createResetAppSessionState(APP_SESSION_LEASE_DEFAULT_MS);
-  runtimeAppSessionConnected = state.runtimeAppSessionConnected;
-  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
-  runtimeAppSessionId = state.runtimeAppSessionId.c_str();
-  runtimeAppSessionNonce = state.runtimeAppSessionNonce.c_str();
-  lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
-  lastRuntimeControlAt = state.lastRuntimeControlAt;
-  appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
+  applyRuntimeAppSessionState(state);
   resetRuntimeTransportBuffers();
   writeCurrentRuntimeStatusSnapshot();
 }
@@ -527,25 +521,46 @@ void resetRuntimeTransportBuffers() {
   runtimeCommandFramed = false;
 }
 
-void armRuntimeBootstrapWatchdog(const String& message) {
+firmware_runtime::AppSessionState captureRuntimeAppSessionState() {
   firmware_runtime::AppSessionState state;
   state.runtimeBleConnected = runtimeBleConnected;
   state.runtimeAppSessionConnected = runtimeAppSessionConnected;
   state.runtimeBootstrapLeasePending = runtimeBootstrapLeasePending;
+  state.runtimeBleConnectedAt = runtimeBleConnectedAt;
+  state.lastAppSessionLeaseAt = lastAppSessionLeaseAt;
+  state.lastRuntimeControlAt = lastRuntimeControlAt;
+  state.appSessionLeaseTimeoutMs = appSessionLeaseTimeoutMs;
+  state.runtimeAppSessionId = runtimeAppSessionId.c_str();
+  state.runtimeAppSessionNonce = runtimeAppSessionNonce.c_str();
+  return state;
+}
 
+void applyRuntimeAppSessionState(const firmware_runtime::AppSessionState& state) {
+  runtimeBleConnected = state.runtimeBleConnected;
+  runtimeAppSessionConnected = state.runtimeAppSessionConnected;
+  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
+  runtimeBleConnectedAt = state.runtimeBleConnectedAt;
+  runtimeAppSessionId = state.runtimeAppSessionId.c_str();
+  runtimeAppSessionNonce = state.runtimeAppSessionNonce.c_str();
+  lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
+  lastRuntimeControlAt = state.lastRuntimeControlAt;
+  appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
+}
+
+void armRuntimeBootstrapWatchdog(const String& message) {
+  firmware_runtime::AppSessionState state = captureRuntimeAppSessionState();
   if (!firmware_runtime::armBootstrapWatchdog(state)) {
     return;
   }
 
-  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
+  applyRuntimeAppSessionState(state);
   logRuntimeTransportEvent(message);
 }
 
 void disarmRuntimeBootstrapWatchdog() {
-  firmware_runtime::AppSessionState state;
-  state.runtimeBootstrapLeasePending = runtimeBootstrapLeasePending;
+  firmware_runtime::AppSessionState state = captureRuntimeAppSessionState();
   firmware_runtime::disarmBootstrapWatchdog(state);
-  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
+  applyRuntimeAppSessionState(state);
 }
 
 void markRuntimeAppSessionOnline(
@@ -558,13 +573,7 @@ void markRuntimeAppSessionOnline(
 ) {
   disarmRuntimeBootstrapWatchdog();
 
-  firmware_runtime::AppSessionState state;
-  state.runtimeAppSessionConnected = runtimeAppSessionConnected;
-  state.runtimeAppSessionId = runtimeAppSessionId.c_str();
-  state.runtimeAppSessionNonce = runtimeAppSessionNonce.c_str();
-  state.lastAppSessionLeaseAt = lastAppSessionLeaseAt;
-  state.lastRuntimeControlAt = lastRuntimeControlAt;
-  state.appSessionLeaseTimeoutMs = appSessionLeaseTimeoutMs;
+  firmware_runtime::AppSessionState state = captureRuntimeAppSessionState();
 
   const firmware_runtime::SessionOnlineUpdate update =
     firmware_runtime::markAppSessionOnline(
@@ -576,13 +585,7 @@ void markRuntimeAppSessionOnline(
       APP_SESSION_LEASE_DEFAULT_MS
     );
 
-  runtimeAppSessionConnected = state.runtimeAppSessionConnected;
-  runtimeAppSessionId = state.runtimeAppSessionId.c_str();
-  runtimeAppSessionNonce = state.runtimeAppSessionNonce.c_str();
-  lastAppSessionLeaseAt = state.lastAppSessionLeaseAt;
-  lastRuntimeControlAt = state.lastRuntimeControlAt;
-  appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
-  runtimeBootstrapLeasePending = state.runtimeBootstrapLeasePending;
+  applyRuntimeAppSessionState(state);
 
   if (!update.sessionChanged && !forceStatusEmit) {
     logRuntimeLeaseState("Lease refreshed.", timestamp);
@@ -639,16 +642,7 @@ void noteRuntimeTransportDisconnected(unsigned long timestamp) {
 
 void enforceRuntimeAppSessionLease() {
   const unsigned long now = millis();
-  firmware_runtime::AppSessionState state;
-  state.runtimeBleConnected = runtimeBleConnected;
-  state.runtimeAppSessionConnected = runtimeAppSessionConnected;
-  state.runtimeBootstrapLeasePending = runtimeBootstrapLeasePending;
-  state.runtimeBleConnectedAt = runtimeBleConnectedAt;
-  state.lastAppSessionLeaseAt = lastAppSessionLeaseAt;
-  state.lastRuntimeControlAt = lastRuntimeControlAt;
-  state.appSessionLeaseTimeoutMs = appSessionLeaseTimeoutMs;
-  state.runtimeAppSessionId = runtimeAppSessionId.c_str();
-  state.runtimeAppSessionNonce = runtimeAppSessionNonce.c_str();
+  firmware_runtime::AppSessionState state = captureRuntimeAppSessionState();
 
   const firmware_runtime::LeaseEnforcementResult result =
     firmware_runtime::evaluateAppSessionLease(
