@@ -1,81 +1,8 @@
 #include "runtime_host_protocol.hpp"
-
-#include <cctype>
-#include <cstdlib>
+#include "json_object_reader.hpp"
 
 namespace firmware_runtime {
 namespace {
-
-std::string extractJsonString(const std::string& json, const char* key) {
-  const std::string token = "\"" + std::string(key) + "\":\"";
-  const std::size_t start = json.find(token);
-
-  if (start == std::string::npos) {
-    return "";
-  }
-
-  const std::size_t valueStart = start + token.size();
-  std::size_t valueEnd = valueStart;
-
-  while (valueEnd < json.size()) {
-    if (json[valueEnd] == '"' && (valueEnd == valueStart || json[valueEnd - 1] != '\\')) {
-      break;
-    }
-
-    valueEnd += 1;
-  }
-
-  std::string value = json.substr(valueStart, valueEnd - valueStart);
-
-  std::size_t replaceAt = value.find("\\/");
-  while (replaceAt != std::string::npos) {
-    value.replace(replaceAt, 2, "/");
-    replaceAt = value.find("\\/", replaceAt + 1);
-  }
-
-  replaceAt = value.find("\\\"");
-  while (replaceAt != std::string::npos) {
-    value.replace(replaceAt, 2, "\"");
-    replaceAt = value.find("\\\"", replaceAt + 1);
-  }
-
-  return value;
-}
-
-std::size_t extractJsonSize(const std::string& json, const char* key, std::size_t fallback) {
-  const std::string token = "\"" + std::string(key) + "\":";
-  const std::size_t start = json.find(token);
-
-  if (start == std::string::npos) {
-    return fallback;
-  }
-
-  std::size_t valueStart = start + token.size();
-  while (valueStart < json.size() && std::isspace(static_cast<unsigned char>(json[valueStart]))) {
-    valueStart += 1;
-  }
-
-  std::size_t valueEnd = valueStart;
-  while (valueEnd < json.size() && std::isdigit(static_cast<unsigned char>(json[valueEnd]))) {
-    valueEnd += 1;
-  }
-
-  if (valueEnd == valueStart) {
-    return fallback;
-  }
-
-  return static_cast<std::size_t>(
-    std::strtoull(json.substr(valueStart, valueEnd - valueStart).c_str(), nullptr, 10)
-  );
-}
-
-unsigned long extractJsonUnsignedLong(
-  const std::string& json,
-  const char* key,
-  unsigned long fallback
-) {
-  return static_cast<unsigned long>(extractJsonSize(json, key, fallback));
-}
 
 }  // namespace
 
@@ -172,28 +99,34 @@ ControlCommand parseRuntimeControlCommand(
   unsigned long defaultLeaseTimeoutMs
 ) {
   ControlCommand command;
-  const std::string type = extractJsonString(payload, "type");
+  json::ObjectReader reader(payload);
+  if (!reader.isObject()) {
+    return command;
+  }
+
+  std::string type;
+  if (!reader.readString("type", type)) {
+    return command;
+  }
 
   if (type == "app-session-begin") {
     command.type = ControlCommandType::AppSessionBegin;
-    command.sessionId = extractJsonString(payload, "sessionId");
-    command.sessionNonce = extractJsonString(payload, "sessionNonce");
-    command.expiresInMs =
-      extractJsonUnsignedLong(payload, "expiresInMs", defaultLeaseTimeoutMs);
+    reader.readString("sessionId", command.sessionId);
+    reader.readString("sessionNonce", command.sessionNonce);
+    command.expiresInMs = reader.readUnsignedLong("expiresInMs", defaultLeaseTimeoutMs);
     return command;
   }
 
   if (type == "app-session-lease") {
     command.type = ControlCommandType::AppSessionLease;
-    command.sessionId = extractJsonString(payload, "sessionId");
-    command.expiresInMs =
-      extractJsonUnsignedLong(payload, "expiresInMs", defaultLeaseTimeoutMs);
+    reader.readString("sessionId", command.sessionId);
+    command.expiresInMs = reader.readUnsignedLong("expiresInMs", defaultLeaseTimeoutMs);
     return command;
   }
 
   if (type == "app-session-end") {
     command.type = ControlCommandType::AppSessionEnd;
-    command.sessionId = extractJsonString(payload, "sessionId");
+    reader.readString("sessionId", command.sessionId);
     return command;
   }
 

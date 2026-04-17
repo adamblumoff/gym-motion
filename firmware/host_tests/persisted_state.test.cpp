@@ -17,6 +17,23 @@ TEST_CASE("parsePersistedStatePayload accepts a fully populated snapshot") {
   CHECK(snapshot.machineLabel == "Leg Press");
 }
 
+TEST_CASE("parsePersistedStatePayload accepts whitespace and escaped characters") {
+  PersistedStateSnapshot snapshot;
+  const bool parsed = parsePersistedStatePayload(
+    "{\n"
+    "  \"machine_label\" : \"Leg \\\"Press\\\"\",\n"
+    "  \"site_id\" : \"gym\\/a\",\n"
+    "  \"device_id\" : \"node-1\"\n"
+    "}",
+    snapshot
+  );
+
+  CHECK(parsed);
+  CHECK(snapshot.deviceId == "node-1");
+  CHECK(snapshot.siteId == "gym/a");
+  CHECK(snapshot.machineLabel == "Leg \"Press\"");
+}
+
 TEST_CASE("parsePersistedStatePayload rejects malformed or partial snapshots") {
   PersistedStateSnapshot snapshot;
 
@@ -27,6 +44,14 @@ TEST_CASE("parsePersistedStatePayload rejects malformed or partial snapshots") {
   ));
   CHECK_FALSE(parsePersistedStatePayload(
     R"({"device_id":"","site_id":"","machine_label":""})",
+    snapshot
+  ));
+  CHECK_FALSE(parsePersistedStatePayload(
+    R"({"device_id":"node-1","site_id":"gym-a","machine_label":42})",
+    snapshot
+  ));
+  CHECK_FALSE(parsePersistedStatePayload(
+    R"({"device_id":"node-1","site_id":"gym-a","machine_label":"Leg Press")",
     snapshot
   ));
 }

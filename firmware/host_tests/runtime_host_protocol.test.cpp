@@ -97,3 +97,35 @@ TEST_CASE("parseRuntimeControlCommand validates runtime session payload defaults
   CHECK(end.sessionId == "session-1");
   CHECK(end.expiresInMs == 0);
 }
+
+TEST_CASE("parseRuntimeControlCommand accepts whitespace and ignores unrelated fields") {
+  const auto begin = parseRuntimeControlCommand(
+    "{\n"
+    "  \"meta\": { \"ignored\": true },\n"
+    "  \"type\" : \"app-session-begin\",\n"
+    "  \"sessionNonce\" : \"nonce-1\",\n"
+    "  \"sessionId\" : \"session-1\",\n"
+    "  \"expiresInMs\" : 9000\n"
+    "}",
+    15'000
+  );
+
+  CHECK(begin.type == ControlCommandType::AppSessionBegin);
+  CHECK(begin.sessionId == "session-1");
+  CHECK(begin.sessionNonce == "nonce-1");
+  CHECK(begin.expiresInMs == 9'000);
+}
+
+TEST_CASE("parseRuntimeControlCommand rejects malformed JSON") {
+  const auto malformed = parseRuntimeControlCommand(
+    R"({"type":"app-session-begin","sessionId":"session-1","sessionNonce":"nonce-1")",
+    15'000
+  );
+  CHECK(malformed.type == ControlCommandType::Unknown);
+
+  const auto wrongType = parseRuntimeControlCommand(
+    R"({"type":42,"sessionId":"session-1"})",
+    15'000
+  );
+  CHECK(wrongType.type == ControlCommandType::Unknown);
+}
