@@ -5,14 +5,35 @@ void finishPendingRestart() {
 
   pendingRebootAt = 0;
 
-  if (!pendingOtaDfuRestart) {
+  if (pendingRestartMode == PendingRestartMode::None) {
     return;
   }
 
-  pendingOtaDfuRestart = false;
+  const PendingRestartMode restartMode = pendingRestartMode;
+  pendingRestartMode = PendingRestartMode::None;
+
   Bluefruit.Advertising.stop();
+  if (runtimeBleConnIdKnown) {
+    Bluefruit.disconnect(runtimeBleConnId);
+  }
   delay(200);
-  enterOTADfu();
+
+  if (restartMode == PendingRestartMode::OtaDfu) {
+    enterOTADfu();
+    return;
+  }
+
+  if (restartMode != PendingRestartMode::ProvisioningReboot) {
+    return;
+  }
+
+  if (!flushPersistedStateNow()) {
+    markNodeBleFailure();
+    startRuntimeAdvertising("provisioning save failed");
+    return;
+  }
+
+  NVIC_SystemReset();
 }
 
 void resetOtaTransferState() {
@@ -24,7 +45,7 @@ void resetOtaTransferState() {
 }
 
 void abortOtaTransfer(const String& reason) {
-  pendingOtaDfuRestart = false;
+  pendingRestartMode = PendingRestartMode::None;
   pendingRebootAt = 0;
   resetOtaTransferState();
   sendRuntimeStatus("error", reason);
@@ -44,7 +65,7 @@ void beginOtaTransfer(const String& payload) {
     return;
   }
 
-  pendingOtaDfuRestart = false;
+  pendingRestartMode = PendingRestartMode::None;
   pendingRebootAt = 0;
   otaTransfer.active = true;
   otaTransfer.targetVersion = targetVersion;
@@ -80,7 +101,7 @@ void completeOtaTransfer() {
     return;
   }
 
-  pendingOtaDfuRestart = true;
+  pendingRestartMode = PendingRestartMode::OtaDfu;
   pendingRebootAt = millis() + OTA_DFU_HANDOFF_DELAY_MS;
   sendRuntimeStatus("handoff", "ota-entering-dfu", otaTransfer.targetVersion);
   resetOtaTransferState();

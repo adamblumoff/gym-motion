@@ -720,6 +720,8 @@ void handleProvisioningCommand(const String& payload) {
     "{\"type\":\"phase\",\"phase\":\"saving\",\"message\":\"Saving BLE device identity.\"}"
   );
   saveProvisioningConfig(nextDeviceId, nextSiteId, nextMachineLabel);
+  pendingRestartMode = PendingRestartMode::ProvisioningReboot;
+  pendingRebootAt = millis() + PROVISIONING_RESTART_DELAY_MS;
   sendProvisioningStatus(
     "{\"type\":\"provisioned\",\"deviceId\":\"" + escapeJsonString(nextDeviceId) +
     "\",\"siteId\":\"" + escapeJsonString(nextSiteId) + "\"}"

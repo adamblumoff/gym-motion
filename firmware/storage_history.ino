@@ -198,6 +198,16 @@ bool flushPersistedStateNowImpl() {
   return true;
 }
 
+bool flushPersistedStateNow() {
+  persistedStateDirty = false;
+  const bool saved = flushPersistedStateNowImpl();
+  if (!saved) {
+    persistedStateDirty = true;
+    persistedStateLastDirtyAt = millis();
+  }
+  return saved;
+}
+
 void savePersistedState() {
   persistedStateDirty = true;
   persistedStateLastDirtyAt = millis();

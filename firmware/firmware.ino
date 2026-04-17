@@ -69,6 +69,7 @@ const int MOTION_DELTA_START_THRESHOLD = 1000;
 const int MOTION_DELTA_STOP_THRESHOLD = 700;
 const unsigned long MOTION_DELTA_STOP_HOLD_MS = 900;
 const unsigned long OTA_DFU_HANDOFF_DELAY_MS = 750;
+const unsigned long PROVISIONING_RESTART_DELAY_MS = 500;
 // The current desktop runtime talks to this node through the Windows WinRT
 // sidecar handshake. Allow a little extra time for service discovery and the
 // first bootstrap/control writes before we tear the client down as stale.
@@ -97,6 +98,7 @@ void ensureFilesystemReady();
 void loadPersistedState();
 void savePersistedState();
 void flushPersistedStateIfNeeded();
+bool flushPersistedStateNow();
 String escapeJsonString(const String& value);
 String extractJsonString(const String& json, const char* key);
 unsigned long extractJsonUnsignedLong(
@@ -141,7 +143,6 @@ bool runtimeBootstrapLeasePending = false;
 bool runtimeBleConnIdKnown = false;
 uint8_t runtimeNotifyMask = 0;
 bool pendingMotionUpdate = false;
-bool pendingOtaDfuRestart = false;
 unsigned long pendingRebootAt = 0;
 unsigned long runtimeConnectionEpoch = 0;
 unsigned long runtimeDisconnectCount = 0;
@@ -156,6 +157,13 @@ unsigned long appSessionLeaseTimeoutMs = APP_SESSION_LEASE_DEFAULT_MS;
 uint16_t runtimeBleConnId = 0;
 String runtimeAppSessionId;
 String runtimeAppSessionNonce;
+enum class PendingRestartMode : uint8_t {
+  None = 0,
+  OtaDfu,
+  ProvisioningReboot,
+};
+
+PendingRestartMode pendingRestartMode = PendingRestartMode::None;
 struct BleTxMessage {
   BLECharacteristic* characteristic = nullptr;
   bool* connectedFlag = nullptr;
