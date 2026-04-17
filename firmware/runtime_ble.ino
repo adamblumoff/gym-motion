@@ -305,34 +305,18 @@ void enqueueBoardLogStatus(const String& tag, const String& message, const Strin
 }
 
 void notifyCurrentRuntimeStatus() {
-  if (runtimeAppSessionConnected &&
-      runtimeAppSessionId.length() > 0 &&
-      runtimeAppSessionNonce.length() > 0) {
-    sendRuntimeAppSessionOnline(runtimeAppSessionId, runtimeAppSessionNonce);
-    return;
-  }
-
   sendConnectedNotification(
     runtimeStatusCharacteristic,
     runtimeBleConnected,
     "BLE notify skipped (missing runtime characteristic): ",
     "BLE notify skipped (runtime client disconnected): ",
-    createRuntimeReadyPayload()
+    createCurrentRuntimeStatusPayload()
   );
 }
 
 void writeCurrentStatusSnapshots() {
   if (runtimeStatusCharacteristic != nullptr) {
-    if (runtimeAppSessionConnected &&
-        runtimeAppSessionId.length() > 0 &&
-        runtimeAppSessionNonce.length() > 0) {
-      writeCharacteristicValue(
-        runtimeStatusCharacteristic,
-        createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce)
-      );
-    } else {
-      writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
-    }
+    writeCharacteristicValue(runtimeStatusCharacteristic, createCurrentRuntimeStatusPayload());
   }
 }
 
@@ -347,6 +331,26 @@ String createRuntimeAppSessionOnlinePayload(
     "\",\"bootUptimeMs\":" + String(millis()) +
     ",\"notifyMask\":" + String(runtimeNotifyMask) +
     ",\"rcw\":" + String(runtimeControlWriteCount) + "}";
+}
+
+bool hasActiveRuntimeStatusSession() {
+  return runtimeAppSessionConnected &&
+    runtimeAppSessionId.length() > 0 &&
+    runtimeAppSessionNonce.length() > 0;
+}
+
+String createCurrentRuntimeStatusPayload() {
+  if (hasActiveRuntimeStatusSession()) {
+    return createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce);
+  }
+
+  return createRuntimeReadyPayload();
+}
+
+void writeCurrentRuntimeStatusSnapshot() {
+  if (runtimeStatusCharacteristic != nullptr) {
+    writeCharacteristicValue(runtimeStatusCharacteristic, createCurrentRuntimeStatusPayload());
+  }
 }
 
 void sendRuntimeAppSessionOnline(
@@ -515,9 +519,7 @@ void resetRuntimeAppSessionState() {
   lastRuntimeControlAt = state.lastRuntimeControlAt;
   appSessionLeaseTimeoutMs = state.appSessionLeaseTimeoutMs;
   resetRuntimeTransportBuffers();
-  if (runtimeStatusCharacteristic != nullptr) {
-    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
-  }
+  writeCurrentRuntimeStatusSnapshot();
 }
 
 void resetRuntimeTransportBuffers() {
@@ -1026,24 +1028,11 @@ void handleRuntimeStatusCccd(uint16_t conn_hdl, BLECharacteristic* characteristi
     return;
   }
 
-  if (runtimeAppSessionConnected &&
-      runtimeAppSessionId.length() > 0 &&
-      runtimeAppSessionNonce.length() > 0) {
-    const String payload =
-      createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce);
-    publishRuntimeStatusPayload(payload);
-    return;
-  }
-
-  const String payload = createRuntimeReadyPayload();
-  publishRuntimeStatusPayload(payload);
+  publishRuntimeStatusPayload(createCurrentRuntimeStatusPayload());
 }
 
 void initializeRuntimeConnection(uint16_t conn_handle) {
-  const bool hasActiveSession =
-    runtimeAppSessionConnected &&
-    runtimeAppSessionId.length() > 0 &&
-    runtimeAppSessionNonce.length() > 0;
+  const bool hasActiveSession = hasActiveRuntimeStatusSession();
   markNodeConnected();
   runtimeConnectionEpoch += 1;
   provisioningBleConnected = true;
@@ -1071,14 +1060,7 @@ void initializeRuntimeConnection(uint16_t conn_handle) {
   }
 
   sendProvisioningReady();
-  if (hasActiveSession) {
-    writeCharacteristicValue(
-      runtimeStatusCharacteristic,
-      createRuntimeAppSessionOnlinePayload(runtimeAppSessionId, runtimeAppSessionNonce)
-    );
-  } else {
-    writeCharacteristicValue(runtimeStatusCharacteristic, createRuntimeReadyPayload());
-  }
+  writeCurrentRuntimeStatusSnapshot();
   const unsigned long now = millis();
   const bool recentFreshSample =
     motionSensorReady &&
@@ -1229,7 +1211,7 @@ void setupBle() {
     Serial.println("BLE characteristic registration failed: runtime OTA data");
   }
   runtimeOtaDataCharacteristicImpl.setWriteCallback(handleRuntimeOtaDataWrite);
-  runtimeStatusCharacteristicImpl.write(createRuntimeReadyPayload().c_str());
+  runtimeStatusCharacteristicImpl.write(createCurrentRuntimeStatusPayload().c_str());
 
   provisioningControlCharacteristic = &provisioningControlCharacteristicImpl;
   provisioningStatusCharacteristic = &provisioningStatusCharacteristicImpl;
