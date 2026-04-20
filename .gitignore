@@ -57,3 +57,4 @@ target/
 # dotnet native helpers
 native/**/bin/
 native/**/obj/
+gym-motion.sln
