@@ -8,9 +8,11 @@ import { handleFirmwareRoutes } from "./routes/firmware";
 export function createBackendApiHandler({
   emit = () => {},
   getBaseUrl,
+  handleSse,
 }: {
   emit?: (event: unknown) => void;
   getBaseUrl: (request: http.IncomingMessage) => string;
+  handleSse?: (request: http.IncomingMessage, response: http.ServerResponse) => void;
 }) {
   return async function handleRequest(
     request: http.IncomingMessage,
@@ -22,6 +24,11 @@ export function createBackendApiHandler({
 
     if (method === "GET" && pathname === "/api/health") {
       json(response, 200, { ok: true });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/stream" && handleSse) {
+      handleSse(request, response);
       return;
     }
 
