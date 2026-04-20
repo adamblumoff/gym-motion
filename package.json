@@ -16,7 +16,7 @@
     "build:runtime": "tsc -p tsconfig.runtime.json",
     "backend:dev": "bun run ./backend/server/standalone.ts",
     "backend:start": "bun run build:runtime && node out/runtime/backend/server/standalone.js",
-    "gateway:linux": "bash ./scripts/run-linux-gateway.sh",
+    "gateway:linux": "bash ./scripts/linux-gateway/run.sh",
     "dev": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && GATEWAY_VERBOSE=0 electron-vite dev",
     "dev:logs": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && GATEWAY_VERBOSE=1 electron-vite dev",
     "build:desktop:test": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build",

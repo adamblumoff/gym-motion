@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 env_file="$script_dir/linux-ble-gateway.env"
 default_nodes_file="$script_dir/linux-ble-gateway.nodes.json"
 example_nodes_file="$script_dir/linux-ble-gateway.nodes.example.json"
@@ -21,7 +21,7 @@ adapter="${GYM_MOTION_GATEWAY_ADAPTER:-hci0}"
 
 if [[ -z "$gateway_id" ]]; then
   echo "Missing gateway id."
-  echo "Set GYM_MOTION_GATEWAY_ID in scripts/linux-ble-gateway.env or pass it as the first argument."
+  echo "Set GYM_MOTION_GATEWAY_ID in scripts/linux-gateway/linux-ble-gateway.env or pass it as the first argument."
   exit 1
 fi
 

@@ -58,3 +58,5 @@ target/
 native/**/bin/
 native/**/obj/
 gym-motion.sln
+scripts/linux-gateway/linux-ble-gateway.env
+scripts/linux-gateway/linux-ble-gateway.nodes.json
