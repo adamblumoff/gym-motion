@@ -2,10 +2,8 @@ import http from "node:http";
 
 import type { DeviceLogSummary, MotionStreamPayload } from "@core/contracts";
 
-import { notFound, json } from "./desktop-api/http";
-import { handleDeviceRoutes } from "./desktop-api/routes/devices";
-import { handleEventRoutes } from "./desktop-api/routes/events";
-import { handleFirmwareRoutes } from "./desktop-api/routes/firmware";
+import { createBackendApiHandler } from "../../backend/server/handler";
+import { json } from "../../backend/server/http";
 
 export type DesktopDataEvent =
   | {
@@ -32,64 +30,22 @@ type ServerHandle = {
 
 export function createDesktopApiServer(): ServerHandle {
   const listeners = new Set<(event: DesktopDataEvent) => void>();
+  let apiBaseUrl = "http://127.0.0.1:0";
+  const handleRequest = createBackendApiHandler({
+    emit: (event) => emit(event as DesktopDataEvent),
+    getBaseUrl: () => apiBaseUrl,
+  });
   const server = http.createServer((request, response) => {
     void handleRequest(request, response).catch((error) => {
       console.error("[desktop-api] request failed", error);
       json(response, 500, { ok: false, error: "Desktop API failed." });
     });
   });
-  let apiBaseUrl = "http://127.0.0.1:0";
 
   function emit(event: DesktopDataEvent) {
     for (const listener of listeners) {
       listener(event);
     }
-  }
-
-  async function handleRequest(
-    request: http.IncomingMessage,
-    response: http.ServerResponse,
-  ) {
-    const url = new URL(request.url ?? "/", apiBaseUrl);
-    const pathname = url.pathname;
-    const method = request.method ?? "GET";
-
-    if (method === "GET" && pathname === "/api/health") {
-      json(response, 200, { ok: true });
-      return;
-    }
-
-    if (
-      await handleDeviceRoutes({
-        request,
-        response,
-        pathname,
-        method,
-        url,
-        emit: (event) => emit(event as DesktopDataEvent),
-      })
-    ) {
-      return;
-    }
-
-    if (await handleEventRoutes({ response, pathname, method, url })) {
-      return;
-    }
-
-    if (
-      await handleFirmwareRoutes({
-        request,
-        response,
-        pathname,
-        method,
-        url,
-        emit: (event) => emit(event as DesktopDataEvent),
-      })
-    ) {
-      return;
-    }
-
-    notFound(response);
   }
 
   return {

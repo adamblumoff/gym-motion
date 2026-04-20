@@ -16,9 +16,11 @@ import {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "../../../../backend/data";
+} from "../../data";
 
 import { json, readJsonBody } from "../http";
+
+type EmitApiEvent = (event: unknown) => void;
 
 export async function handleDeviceRoutes(args: {
   request: http.IncomingMessage;
@@ -26,9 +28,9 @@ export async function handleDeviceRoutes(args: {
   pathname: string;
   method: string;
   url: URL;
-  emit: (event: unknown) => void;
+  emit?: EmitApiEvent;
 }) {
-  const { request, response, pathname, method, url, emit } = args;
+  const { request, response, pathname, method, url, emit = () => {} } = args;
 
   if (method === "GET" && pathname === "/api/devices") {
     json(response, 200, { devices: await listDevices() });

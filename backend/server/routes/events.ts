@@ -1,6 +1,6 @@
 import http from "node:http";
 
-import { listRecentEvents } from "../../../../backend/data";
+import { listRecentEvents } from "../../data";
 import { json } from "../http";
 
 export async function handleEventRoutes(args: {
