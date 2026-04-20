@@ -386,6 +386,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
             var heartbeat = new Dictionary<string, object?>
             {
                 ["deviceId"] = deviceId,
+                ["gatewayId"] = _config.GatewayId,
                 ["timestamp"] = timestamp.Value,
             };
             CopyOptionalString(payload, heartbeat, "bootId");
@@ -405,6 +406,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         var ingest = new Dictionary<string, object?>
         {
             ["deviceId"] = deviceId,
+            ["gatewayId"] = _config.GatewayId,
             ["state"] = state,
             ["timestamp"] = timestamp.Value,
             ["delta"] = GetInt64(payload, "delta"),
