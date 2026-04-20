@@ -35,15 +35,17 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          last_state,
          last_seen_at,
          last_delta,
-         updated_at,
-         hardware_id,
-         boot_id,
-         firmware_version,
-         provisioning_state,
-         update_status,
-         last_event_received_at
-       )
-       values ($1, $2, $3, $4, now(), $5, $6, $7, 'provisioned', 'idle', now())
+       updated_at,
+       hardware_id,
+       boot_id,
+       firmware_version,
+       last_gateway_id,
+       last_gateway_seen_at,
+       provisioning_state,
+       update_status,
+       last_event_received_at
+     )
+       values ($1, $2, $3, $4, now(), $5, $6, $7, $8, now(), 'provisioned', 'idle', now())
        on conflict (id) do update
        set last_state = excluded.last_state,
            last_seen_at = excluded.last_seen_at,
@@ -52,6 +54,11 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
            hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
            boot_id = coalesce(excluded.boot_id, devices.boot_id),
            firmware_version = excluded.firmware_version,
+           last_gateway_id = coalesce(excluded.last_gateway_id, devices.last_gateway_id),
+           last_gateway_seen_at = case
+             when excluded.last_gateway_id is null then devices.last_gateway_seen_at
+             else now()
+           end,
            provisioning_state = case
              when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
              else devices.provisioning_state
@@ -67,6 +74,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
         payload.hardwareId ?? null,
         payload.bootId ?? null,
         payload.firmwareVersion ?? "unknown",
+        payload.gatewayId ?? null,
       ],
     );
 
@@ -77,15 +85,17 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
          state,
          delta,
          event_timestamp,
+         gateway_id,
          boot_id,
          firmware_version,
          hardware_id
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        on conflict ${sequenceConflictClause()} do nothing
        returning
          id,
          device_id,
+         gateway_id,
          sequence,
          state,
          delta,
@@ -100,6 +110,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
         payload.state,
         delta,
         payload.timestamp,
+        payload.gatewayId ?? null,
         payload.bootId ?? null,
         payload.firmwareVersion ?? "unknown",
         payload.hardwareId ?? null,
@@ -115,6 +126,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
               `select
                  id,
                  device_id,
+                 gateway_id,
                  sequence,
                  state,
                  delta,
@@ -137,6 +149,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
         `select
            id,
            device_id,
+           gateway_id,
            sequence,
            state,
            delta,
@@ -156,6 +169,7 @@ export async function recordMotionEvent(payload: IngestPayload): Promise<MotionS
         `select
            id,
            device_id,
+           gateway_id,
            sequence,
            state,
            delta,
@@ -211,17 +225,24 @@ export async function recordHeartbeat(payload: HeartbeatPayload): Promise<Motion
        hardware_id,
        boot_id,
        firmware_version,
+       last_gateway_id,
+       last_gateway_seen_at,
        provisioning_state,
        update_status,
        last_heartbeat_at
      )
-     values ($1, 'still', $2, null, now(), $3, $4, $5, 'provisioned', 'idle', now())
+     values ($1, 'still', $2, null, now(), $3, $4, $5, $6, now(), 'provisioned', 'idle', now())
      on conflict (id) do update
      set last_seen_at = excluded.last_seen_at,
          updated_at = now(),
          hardware_id = coalesce(excluded.hardware_id, devices.hardware_id),
          boot_id = coalesce(excluded.boot_id, devices.boot_id),
          firmware_version = excluded.firmware_version,
+         last_gateway_id = coalesce(excluded.last_gateway_id, devices.last_gateway_id),
+         last_gateway_seen_at = case
+           when excluded.last_gateway_id is null then devices.last_gateway_seen_at
+           else now()
+         end,
          provisioning_state = case
            when devices.provisioning_state in ('unassigned', 'assigned') then 'provisioned'
            else devices.provisioning_state
@@ -235,6 +256,7 @@ export async function recordHeartbeat(payload: HeartbeatPayload): Promise<Motion
       payload.hardwareId ?? null,
       payload.bootId ?? null,
       payload.firmwareVersion ?? "unknown",
+      payload.gatewayId ?? null,
     ],
   );
 
@@ -259,6 +281,7 @@ export async function listRecentEvents(limit = 12): Promise<MotionEventSummary[]
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        state,
        delta,
@@ -285,6 +308,7 @@ export async function listDeviceRecentEvents(args: {
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        state,
        delta,
@@ -313,6 +337,7 @@ export async function listDeviceMotionEvents(args: {
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        state,
        delta,
@@ -342,6 +367,7 @@ export async function listDeviceMotionEventsByReceivedAt(args: {
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        state,
        delta,
@@ -369,6 +395,7 @@ export async function findLatestDeviceMotionEventBefore(args: {
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        state,
        delta,

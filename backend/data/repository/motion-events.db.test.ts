@@ -215,16 +215,18 @@ describeDb("motion event repository", () => {
   });
 
   it("orders received-at queries by receipt time and preserves heartbeat upserts", async () => {
-    await recordHeartbeat({
+    const heartbeat = await recordHeartbeat({
       deviceId: "stack-001",
+      gatewayId: "zone-a-gateway-1",
       timestamp: 50,
       bootId: "boot-1",
       firmwareVersion: "0.5.3",
       hardwareId: "hw-1",
     });
 
-    await recordMotionEvent({
+    const firstInsert = await recordMotionEvent({
       deviceId: "stack-001",
+      gatewayId: "zone-a-gateway-1",
       state: "moving",
       timestamp: 100,
       delta: 3,
@@ -238,6 +240,7 @@ describeDb("motion event repository", () => {
 
     await recordMotionEvent({
       deviceId: "stack-001",
+      gatewayId: "zone-b-gateway-2",
       state: "still",
       timestamp: 110,
       delta: 0,
@@ -257,6 +260,12 @@ describeDb("motion event repository", () => {
     });
 
     expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+    expect(heartbeat.device.lastGatewayId).toBe("zone-a-gateway-1");
+    expect(firstInsert.event?.gatewayId).toBe("zone-a-gateway-1");
+    expect(events.map((event) => event.gatewayId)).toEqual([
+      "zone-a-gateway-1",
+      "zone-b-gateway-2",
+    ]);
     expect(latestBeforeSecond).toMatchObject({
       sequence: 1,
       eventTimestamp: 100,
