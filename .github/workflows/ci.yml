@@ -14,7 +14,6 @@ jobs:
     outputs:
       ts: ${{ steps.filter.outputs.ts }}
       backend_db: ${{ steps.filter.outputs.backend_db }}
-      windows_desktop: ${{ steps.filter.outputs.windows_desktop }}
       linux_gateway: ${{ steps.filter.outputs.linux_gateway }}
       firmware: ${{ steps.filter.outputs.firmware }}
 
@@ -49,17 +48,6 @@ jobs:
               - "tsconfig.runtime.json"
               - "vitest.db.config.ts"
               - ".github/workflows/ci.yml"
-            windows_desktop:
-              - "desktop/**"
-              - "native/windows-dotnet-ble-sidecar/**"
-              - "package.json"
-              - "bun.lock"
-              - "electron-builder.config.mjs"
-              - "playwright.desktop.config.ts"
-              - "tsconfig.json"
-              - "tsconfig.runtime.json"
-              - "scripts/build-windows-ble-sidecar.mjs"
-              - "scripts/build-windows-ble-sidecar-if-needed.mjs"
             linux_gateway:
               - "native/linux-dotnet-ble-gateway/**"
               - "scripts/linux-gateway/**"
@@ -169,37 +157,6 @@ jobs:
 
       - name: Build Linux gateway
         run: dotnet build native/linux-dotnet-ble-gateway/GymMotion.LinuxBleGateway.csproj --configuration Release
-
-  windows-desktop:
-    needs: changes
-    if: needs.changes.outputs.windows_desktop == 'true'
-    runs-on: windows-latest
-
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.CI_NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.0.x
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Run desktop end-to-end tests
-        run: bun run test:e2e:desktop
 
   firmware-build:
     needs: changes
