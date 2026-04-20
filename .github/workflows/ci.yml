@@ -231,6 +231,9 @@ jobs:
       - name: Install Arduino CLI
         run: ./scripts/install-arduino-cli.sh
 
+      - name: Install Adafruit nrfutil
+        run: ./scripts/install-adafruit-nrfutil.sh
+
       - name: Install Seeed nRF52 core
         run: |
           arduino-cli config init --overwrite
