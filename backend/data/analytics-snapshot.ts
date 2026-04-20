@@ -3,14 +3,14 @@ import {
   hasMotionRollupTables,
   listDeviceMotionEventsByReceivedAt,
   listMotionRollupBuckets,
-} from "../../../backend/data";
+} from "./repository";
 import type {
   AnalyticsWindow,
   DeviceAnalyticsBucket,
   DeviceAnalyticsSnapshot,
   MotionEventSummary,
-} from "@core/contracts";
-import { getMotionEventTimelineTimestamp } from "@core/contracts";
+} from "../../shared/contracts";
+import { getMotionEventTimelineTimestamp } from "../../shared/contracts";
 
 export type WindowDefinition = {
   window: AnalyticsWindow;
@@ -226,24 +226,31 @@ export function summarizeMotionEventsInBuckets(args: {
 export async function buildAnalyticsSnapshot(args: {
   deviceId: string;
   window: AnalyticsWindow;
-  hasMotionRollupTables: typeof hasMotionRollupTables;
-  listMotionRollupBuckets: typeof listMotionRollupBuckets;
-  listDeviceMotionEventsByReceivedAt: typeof listDeviceMotionEventsByReceivedAt;
-  findLatestDeviceMotionEventBeforeReceivedAt: typeof findLatestDeviceMotionEventBeforeReceivedAt;
+  hasMotionRollupTables?: typeof hasMotionRollupTables;
+  listMotionRollupBuckets?: typeof listMotionRollupBuckets;
+  listDeviceMotionEventsByReceivedAt?: typeof listDeviceMotionEventsByReceivedAt;
+  findLatestDeviceMotionEventBeforeReceivedAt?: typeof findLatestDeviceMotionEventBeforeReceivedAt;
 }): Promise<DeviceAnalyticsSnapshot> {
   const definition = WINDOW_DEFINITIONS[args.window];
   const { start, end, buckets } = createBuckets(definition, Date.now());
   const windowStartAt = new Date(start).toISOString();
   const windowEndAt = new Date(end).toISOString();
+  const checkHasMotionRollups = args.hasMotionRollupTables ?? hasMotionRollupTables;
+  const loadMotionRollupBuckets = args.listMotionRollupBuckets ?? listMotionRollupBuckets;
+  const loadMotionEventsByReceivedAt =
+    args.listDeviceMotionEventsByReceivedAt ?? listDeviceMotionEventsByReceivedAt;
+  const loadLatestMotionEventBeforeReceivedAt =
+    args.findLatestDeviceMotionEventBeforeReceivedAt ??
+    findLatestDeviceMotionEventBeforeReceivedAt;
 
   const loadRawMotionSummary = async () => {
     const [events, precedingEvent] = await Promise.all([
-      args.listDeviceMotionEventsByReceivedAt({
+      loadMotionEventsByReceivedAt({
         deviceId: args.deviceId,
         startReceivedAt: windowStartAt,
         endReceivedAt: windowEndAt,
       }),
-      args.findLatestDeviceMotionEventBeforeReceivedAt({
+      loadLatestMotionEventBeforeReceivedAt({
         deviceId: args.deviceId,
         beforeReceivedAt: windowStartAt,
       }),
@@ -267,8 +274,8 @@ export async function buildAnalyticsSnapshot(args: {
     | ReturnType<typeof summarizeMotionEventsInBuckets>
     | ReturnType<typeof summarizeMotionRollupBuckets>;
 
-  if (await args.hasMotionRollupTables()) {
-    const rollupBuckets = await args.listMotionRollupBuckets({
+  if (await checkHasMotionRollups()) {
+    const rollupBuckets = await loadMotionRollupBuckets({
       deviceId: args.deviceId,
       window: args.window,
       startBucket: start,

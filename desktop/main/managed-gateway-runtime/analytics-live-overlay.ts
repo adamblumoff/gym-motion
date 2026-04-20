@@ -1,6 +1,6 @@
 import type { AnalyticsWindow, DeviceAnalyticsSnapshot, MotionEventSummary } from "@core/contracts";
 import { getMotionEventTimelineTimestamp } from "@core/contracts";
-import { summarizeMotionEventsInBuckets, WINDOW_DEFINITIONS } from "./analytics-snapshot-builder";
+import { summarizeMotionEventsInBuckets, WINDOW_DEFINITIONS } from "../../../backend/data";
 
 export type LiveMotionEventMap = Map<string, MotionEventSummary[]>;
 
