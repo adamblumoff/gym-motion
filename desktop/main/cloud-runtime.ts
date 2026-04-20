@@ -17,8 +17,9 @@ import {
   offlineGatewaySnapshot,
 } from "./managed-gateway-runtime/snapshot";
 
-const POLL_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const SSE_RECONNECT_DELAY_MS = 2_000;
+const FALLBACK_POLL_INTERVAL_MS = 30_000;
 const CLOUD_SETUP_MESSAGE =
   "Cloud mode is active. Sensor setup now lives on Linux gateways, so this desktop build is read-only for BLE pairing.";
 
@@ -192,6 +193,9 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
   const listeners = new Set<(event: DesktopRuntimeEvent) => void>();
   const normalizedBaseUrl = new URL(baseUrl).toString();
   let pollTimer: NodeJS.Timeout | null = null;
+  let eventStreamAbort: AbortController | null = null;
+  let eventStreamTask: Promise<void> | null = null;
+  let stopped = false;
   let devices: DeviceSummary[] = [];
   let snapshot = buildCloudSnapshot(normalizedBaseUrl, [], {
     events: [],
@@ -272,22 +276,118 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
 
     pollTimer = setInterval(() => {
       void refresh();
-    }, POLL_INTERVAL_MS);
+    }, FALLBACK_POLL_INTERVAL_MS);
     pollTimer.unref?.();
+  }
+
+  async function readEventStream(signal: AbortSignal) {
+    const response = await fetch(new URL("/api/stream", normalizedBaseUrl), {
+      cache: "no-store",
+      headers: {
+        Accept: "text/event-stream",
+        "Cache-Control": "no-store",
+      },
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`/api/stream -> ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("/api/stream did not provide a response body.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const normalizedBuffer = buffer.replace(/\r\n/g, "\n");
+        const boundary = normalizedBuffer.indexOf("\n\n");
+        if (boundary < 0) {
+          buffer = normalizedBuffer;
+          break;
+        }
+
+        const rawEvent = normalizedBuffer.slice(0, boundary);
+        buffer = normalizedBuffer.slice(boundary + 2);
+        const lines = rawEvent
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const eventType =
+          lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim() ??
+          "message";
+
+        if (eventType === "invalidate") {
+          void refresh();
+        }
+      }
+    }
+  }
+
+  function startEventStream() {
+    if (eventStreamTask) {
+      return;
+    }
+
+    const run = async () => {
+      while (!stopped) {
+        const abortController = new AbortController();
+        eventStreamAbort = abortController;
+
+        try {
+          await readEventStream(abortController.signal);
+        } catch (error) {
+          if (!abortController.signal.aborted && !stopped) {
+            console.warn("[cloud-runtime] event stream disconnected", error);
+          }
+        } finally {
+          if (eventStreamAbort === abortController) {
+            eventStreamAbort = null;
+          }
+        }
+
+        if (stopped) {
+          break;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, SSE_RECONNECT_DELAY_MS));
+      }
+    };
+
+    eventStreamTask = run().finally(() => {
+      eventStreamTask = null;
+    });
   }
 
   return {
     async start() {
+      stopped = false;
       await refresh(true);
       startPolling();
+      startEventStream();
     },
     async stop() {
+      stopped = true;
       if (!pollTimer) {
-        return;
+        eventStreamAbort?.abort();
+      } else {
+        clearInterval(pollTimer);
+        pollTimer = null;
       }
 
-      clearInterval(pollTimer);
-      pollTimer = null;
+      eventStreamAbort?.abort();
+      await eventStreamTask;
     },
     async restart() {
       await refresh(true);
