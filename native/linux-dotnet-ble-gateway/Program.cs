@@ -715,6 +715,8 @@ internal sealed class Config
     public required string NodesFile { get; init; }
     public string? AdapterName { get; init; }
 
+    private const string DefaultBackendUrl = "https://gym-motion-production.up.railway.app";
+
     public static Config Parse(string[] args)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -735,12 +737,31 @@ internal sealed class Config
             values[current[2..]] = args[++index];
         }
 
-        if (!values.TryGetValue("backend-url", out var backendUrl) ||
-            !values.TryGetValue("gateway-id", out var gatewayId) ||
-            !values.TryGetValue("nodes-file", out var nodesFile))
+        var backendUrl =
+            values.GetValueOrDefault("backend-url") ??
+            Environment.GetEnvironmentVariable("GYM_MOTION_CLOUD_API_BASE_URL") ??
+            Environment.GetEnvironmentVariable("GATEWAY_BACKEND_URL") ??
+            DefaultBackendUrl;
+        var gatewayId =
+            values.GetValueOrDefault("gateway-id") ??
+            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_ID") ??
+            Environment.GetEnvironmentVariable("GATEWAY_ID");
+        var nodesFile =
+            values.GetValueOrDefault("nodes-file") ??
+            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_NODES_FILE") ??
+            Environment.GetEnvironmentVariable("GATEWAY_NODES_FILE");
+        var adapterName =
+            values.GetValueOrDefault("adapter") ??
+            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_ADAPTER") ??
+            Environment.GetEnvironmentVariable("GATEWAY_ADAPTER") ??
+            "hci0";
+
+        if (string.IsNullOrWhiteSpace(gatewayId) || string.IsNullOrWhiteSpace(nodesFile))
         {
             throw new ArgumentException(
-                "Usage: --backend-url <url> --gateway-id <id> --nodes-file <path> [--adapter <hci0>]");
+                "Usage: --gateway-id <id> --nodes-file <path> [--backend-url <url>] [--adapter <hci0>]. " +
+                "You can also set GYM_MOTION_GATEWAY_ID, GYM_MOTION_GATEWAY_NODES_FILE, " +
+                "GYM_MOTION_CLOUD_API_BASE_URL, and GYM_MOTION_GATEWAY_ADAPTER.");
         }
 
         return new Config
@@ -748,7 +769,7 @@ internal sealed class Config
             BackendUrl = backendUrl.TrimEnd('/'),
             GatewayId = gatewayId,
             NodesFile = nodesFile,
-            AdapterName = values.GetValueOrDefault("adapter"),
+            AdapterName = adapterName,
         };
     }
 }
