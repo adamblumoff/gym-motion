@@ -55,7 +55,7 @@ jobs:
         run: ./scripts/install-arduino-cli.sh
 
       - name: Install Adafruit nrfutil
-        run: ./scripts/install-adafruit-nrfutil.sh
+        run: bash ./scripts/install-adafruit-nrfutil.sh
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
