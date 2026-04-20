@@ -44,6 +44,17 @@ Windows packaging:
 bun run build:win
 ```
 
+Linux gateway:
+
+```bash
+bun run gateway:linux
+bun run gateway:linux:install
+bun run gateway:linux:start
+bun run gateway:linux:stop
+bun run gateway:linux:status
+bun run gateway:linux:logs
+```
+
 WSL launch helper for a built Windows `.exe`:
 
 ```bash

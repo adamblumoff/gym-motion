@@ -17,6 +17,12 @@
     "backend:dev": "bun run ./backend/server/standalone.ts",
     "backend:start": "bun run build:runtime && node out/runtime/backend/server/standalone.js",
     "gateway:linux": "bash ./scripts/linux-gateway/run.sh",
+    "gateway:linux:install": "bash ./scripts/linux-gateway/control.sh install",
+    "gateway:linux:start": "bash ./scripts/linux-gateway/control.sh start",
+    "gateway:linux:stop": "bash ./scripts/linux-gateway/control.sh stop",
+    "gateway:linux:restart": "bash ./scripts/linux-gateway/control.sh restart",
+    "gateway:linux:status": "bash ./scripts/linux-gateway/control.sh status",
+    "gateway:linux:logs": "bash ./scripts/linux-gateway/control.sh logs",
     "dev": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && GATEWAY_VERBOSE=0 electron-vite dev",
     "dev:logs": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && GATEWAY_VERBOSE=1 electron-vite dev",
     "build:desktop:test": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build",
@@ -37,7 +43,6 @@
     "test": "bun run test:boundaries && bun run test:ts",
     "test:e2e:desktop": "bun run build:desktop:test && playwright test -c playwright.desktop.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.runtime.json",
-    "smoke:windows-desktop": "./scripts/test-windows-desktop.sh",
     "test:windows-desktop": "bun run test:e2e:desktop"
   },
   "dependencies": {
