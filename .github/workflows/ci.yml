@@ -51,8 +51,6 @@ jobs:
               - ".github/workflows/ci.yml"
             windows_desktop:
               - "desktop/**"
-              - "backend/**"
-              - "shared/**"
               - "native/windows-dotnet-ble-sidecar/**"
               - "package.json"
               - "bun.lock"
@@ -62,21 +60,19 @@ jobs:
               - "tsconfig.runtime.json"
               - "scripts/build-windows-ble-sidecar.mjs"
               - "scripts/build-windows-ble-sidecar-if-needed.mjs"
-              - ".github/workflows/ci.yml"
             linux_gateway:
               - "native/linux-dotnet-ble-gateway/**"
               - "scripts/linux-gateway/**"
               - "package.json"
               - "bun.lock"
-              - ".github/workflows/ci.yml"
             firmware:
               - "firmware/**"
               - "scripts/build-firmware.sh"
+              - "scripts/install-adafruit-nrfutil.sh"
               - "scripts/install-arduino-cli.sh"
               - "scripts/test-firmware-host.py"
               - "package.json"
               - "bun.lock"
-              - ".github/workflows/ci.yml"
 
   ts-fast:
     needs: changes
@@ -232,7 +228,7 @@ jobs:
         run: ./scripts/install-arduino-cli.sh
 
       - name: Install Adafruit nrfutil
-        run: ./scripts/install-adafruit-nrfutil.sh
+        run: bash ./scripts/install-adafruit-nrfutil.sh
 
       - name: Install Seeed nRF52 core
         run: |
