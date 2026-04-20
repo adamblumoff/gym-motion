@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {
+      "id": "zone-a-left",
+      "label": "Zone A Left",
+      "knownDeviceId": "nrf52-61f477409dac12c0",
+      "address": "AA:BB:CC:DD:EE:FF",
+      "localName": "gym-motion-node"
+    }
+  ]
+}
