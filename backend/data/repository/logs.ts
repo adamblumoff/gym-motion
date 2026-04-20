@@ -26,6 +26,7 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
   const result = await getDb().query<DeviceLogRow>(
     `insert into device_logs (
        device_id,
+       gateway_id,
        sequence,
        level,
        code,
@@ -36,11 +37,12 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
        device_timestamp,
        metadata
      )
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict ${sequenceConflictClause()} do nothing
      returning
        id,
        device_id,
+       gateway_id,
        sequence,
        level,
        code,
@@ -53,6 +55,7 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
        received_at`,
     [
       input.deviceId,
+      input.gatewayId ?? null,
       input.sequence ?? null,
       input.level,
       input.code,
@@ -77,6 +80,7 @@ export async function recordDeviceLog(input: DeviceLogInput): Promise<DeviceLogS
     `select
        id,
        device_id,
+       gateway_id,
        sequence,
        level,
        code,
@@ -161,6 +165,7 @@ export async function listRecentActivity(limit = 30): Promise<DeviceActivitySumm
          'motion' as activity_kind,
          id,
          device_id,
+         gateway_id,
          sequence,
          state,
          delta,
@@ -180,6 +185,7 @@ export async function listRecentActivity(limit = 30): Promise<DeviceActivitySumm
          'lifecycle' as activity_kind,
          id,
          device_id,
+         gateway_id,
          sequence,
          null::text as state,
          null::integer as delta,

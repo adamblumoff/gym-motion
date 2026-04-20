@@ -43,6 +43,7 @@ export const resolvedThemeSchema = z.enum(["dark", "light"]);
 
 export const ingestPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
+  gatewayId: z.string().trim().min(1).max(120).optional(),
   state: motionStateSchema,
   timestamp: z.number().int().positive(),
   delta: z.number().int().nullable().optional(),
@@ -55,6 +56,7 @@ export const ingestPayloadSchema = z.object({
 
 export const heartbeatPayloadSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
+  gatewayId: z.string().trim().min(1).max(120).optional(),
   timestamp: z.number().int().positive(),
   bootId: z.string().trim().min(1).max(120).optional(),
   firmwareVersion: z.string().trim().min(1).max(120).optional(),
@@ -95,6 +97,7 @@ export const firmwareReportSchema = z.object({
 
 export const deviceLogSchema = z.object({
   deviceId: z.string().trim().min(1).max(120),
+  gatewayId: z.string().trim().min(1).max(120).optional(),
   level: deviceLogLevelSchema,
   code: z.string().trim().min(1).max(120),
   message: z.string().trim().min(1).max(280),

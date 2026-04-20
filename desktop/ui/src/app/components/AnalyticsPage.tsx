@@ -104,6 +104,10 @@ function signalLabel(signalStrength: number | null) {
   return `Signal ${signalStrength}%`;
 }
 
+function gatewaySourceLabel(gatewayId: string | null | undefined) {
+  return gatewayId ?? "Gateway unknown";
+}
+
 type SummaryMetricCardProps = {
   icon: LucideIcon;
   iconClassName: string;
@@ -233,6 +237,10 @@ export function AnalyticsPage() {
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   );
+  const selectedRuntimeDevice = useMemo(
+    () => snapshot?.devices.find((device) => device.id === selectedNodeId) ?? null,
+    [selectedNodeId, snapshot?.devices],
+  );
   const chartData = useMemo(
     () => buildAnalyticsChartData(currentAnalytics),
     [currentAnalytics],
@@ -260,6 +268,7 @@ export function AnalyticsPage() {
       timestamp: new Date(activity.receivedAt),
       message: activity.message,
       isMoving: activity.state === "moving",
+      gatewayId: activity.gatewayId,
     }));
   }, [deviceActivities, selectedNodeId, snapshot?.activities]);
   const utilizationSummary = useMemo(() => {
@@ -462,6 +471,21 @@ export function AnalyticsPage() {
                 >
                   {signalLabel(selectedNode.signalStrength)}
                 </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 font-mono text-zinc-300"
+                >
+                  {gatewaySourceLabel(selectedRuntimeDevice?.lastGatewayId)}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
+                >
+                  Gateway update{" "}
+                  {selectedRuntimeDevice?.lastGatewaySeenAt
+                    ? new Date(selectedRuntimeDevice.lastGatewaySeenAt).toLocaleString()
+                    : "unavailable"}
+                </Badge>
               </div>
             </div>
           </Card>
@@ -575,6 +599,9 @@ export function AnalyticsPage() {
                       </span>
                       <span className={log.isMoving ? "text-blue-300" : "text-zinc-400"}>
                         {log.message}
+                      </span>
+                      <span className="shrink-0 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 font-mono text-[10px] text-zinc-500">
+                        {gatewaySourceLabel(log.gatewayId)}
                       </span>
                     </div>
                   ))

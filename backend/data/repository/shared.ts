@@ -26,6 +26,8 @@ export type DeviceRow = {
   firmware_version: string;
   machine_label: string | null;
   site_id: string | null;
+  last_gateway_id: string | null;
+  last_gateway_seen_at: Date | null;
   provisioning_state: ProvisioningState;
   update_status: UpdateStatus;
   update_target_version: string | null;
@@ -38,6 +40,7 @@ export type DeviceRow = {
 export type MotionEventRow = {
   id: string | number;
   device_id: string;
+  gateway_id: string | null;
   sequence: string | number | null;
   state: MotionEventSummary["state"];
   delta: number | null;
@@ -51,6 +54,7 @@ export type MotionEventRow = {
 export type DeviceLogRow = {
   id: string | number;
   device_id: string;
+  gateway_id: string | null;
   sequence: string | number | null;
   level: DeviceLogSummary["level"];
   code: string;
@@ -94,6 +98,8 @@ export const DEVICE_SELECT_COLUMNS = `id,
        firmware_version,
        machine_label,
        site_id,
+       last_gateway_id,
+       last_gateway_seen_at,
        provisioning_state,
        update_status,
        update_target_version,
@@ -126,6 +132,8 @@ export function mapDeviceRow(row: DeviceRow): DeviceSummary {
     firmwareVersion: row.firmware_version,
     machineLabel: row.machine_label,
     siteId: row.site_id,
+    lastGatewayId: row.last_gateway_id,
+    lastGatewaySeenAt: row.last_gateway_seen_at?.toISOString() ?? null,
     provisioningState: row.provisioning_state,
     updateStatus: row.update_status,
     updateTargetVersion: row.update_target_version,
@@ -151,6 +159,8 @@ export function mapDeviceRecord(row: DeviceRecord): DeviceSummary {
     firmwareVersion: row.firmwareVersion,
     machineLabel: row.machineLabel,
     siteId: row.siteId,
+    lastGatewayId: row.lastGatewayId,
+    lastGatewaySeenAt: row.lastGatewaySeenAt?.toISOString() ?? null,
     provisioningState: row.provisioningState as DeviceSummary["provisioningState"],
     updateStatus: row.updateStatus as DeviceSummary["updateStatus"],
     updateTargetVersion: row.updateTargetVersion,
@@ -166,6 +176,7 @@ export function mapMotionEventRow(row: MotionEventRow): MotionEventSummary {
   return {
     id: toSafeNumber(row.id),
     deviceId: row.device_id,
+    gatewayId: row.gateway_id,
     sequence: row.sequence === null ? null : toSafeNumber(row.sequence),
     state: row.state,
     delta: row.delta,
@@ -181,6 +192,7 @@ export function mapMotionEventRecord(row: MotionEventRecord): MotionEventSummary
   return {
     id: row.id,
     deviceId: row.deviceId,
+    gatewayId: row.gatewayId,
     sequence: row.sequence,
     state: row.state as MotionEventSummary["state"],
     delta: row.delta,
@@ -196,6 +208,7 @@ export function mapDeviceLogRow(row: DeviceLogRow): DeviceLogSummary {
   return {
     id: toSafeNumber(row.id),
     deviceId: row.device_id,
+    gatewayId: row.gateway_id,
     sequence: row.sequence === null ? null : toSafeNumber(row.sequence),
     level: row.level,
     code: row.code,
@@ -214,6 +227,7 @@ export function mapDeviceLogRecord(row: DeviceLogRecord): DeviceLogSummary {
   return {
     id: row.id,
     deviceId: row.deviceId,
+    gatewayId: row.gatewayId,
     sequence: row.sequence,
     level: row.level as DeviceLogSummary["level"],
     code: row.code,
@@ -257,6 +271,7 @@ export function mapMotionEventToActivity(event: MotionEventSummary): DeviceActiv
   return {
     id: `motion-${event.id}`,
     deviceId: event.deviceId,
+    gatewayId: event.gatewayId,
     sequence: event.sequence,
     kind: "motion",
     title: event.state.toUpperCase(),
@@ -278,6 +293,7 @@ export function mapDeviceLogToActivity(log: DeviceLogSummary): DeviceActivitySum
   return {
     id: `log-${log.id}`,
     deviceId: log.deviceId,
+    gatewayId: log.gatewayId,
     sequence: log.sequence,
     kind: "lifecycle",
     title: log.code ?? log.level.toUpperCase(),

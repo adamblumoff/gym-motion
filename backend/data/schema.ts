@@ -26,6 +26,11 @@ export const devices = pgTable(
     firmwareVersion: text("firmware_version").notNull().default("unknown"),
     machineLabel: text("machine_label"),
     siteId: text("site_id"),
+    lastGatewayId: text("last_gateway_id"),
+    lastGatewaySeenAt: timestamp("last_gateway_seen_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
     provisioningState: text("provisioning_state").notNull().default("unassigned"),
     updateStatus: text("update_status").notNull().default("idle"),
     updateTargetVersion: text("update_target_version"),
@@ -41,6 +46,7 @@ export const devices = pgTable(
   (table) => [
     index("devices_updated_at_idx").on(table.updatedAt),
     index("devices_site_id_idx").on(table.siteId, table.machineLabel),
+    index("devices_last_gateway_id_idx").on(table.lastGatewayId, table.lastGatewaySeenAt),
   ],
 );
 
@@ -58,6 +64,7 @@ export const motionEvents = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
+    gatewayId: text("gateway_id"),
     bootId: text("boot_id"),
     firmwareVersion: text("firmware_version"),
     hardwareId: text("hardware_id"),
@@ -65,6 +72,7 @@ export const motionEvents = pgTable(
   (table) => [
     index("motion_events_device_id_idx").on(table.deviceId, table.receivedAt),
     index("motion_events_device_event_timestamp_idx").on(table.deviceId, table.eventTimestamp),
+    index("motion_events_gateway_id_idx").on(table.gatewayId, table.receivedAt),
     uniqueIndex("motion_events_device_boot_sequence_idx")
       .on(table.deviceId, sql`coalesce(${table.bootId}, '')`, table.sequence)
       .where(sql`${table.sequence} is not null`),
@@ -105,10 +113,12 @@ export const deviceLogs = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
+    gatewayId: text("gateway_id"),
   },
   (table) => [
     index("device_logs_device_id_idx").on(table.deviceId, table.receivedAt),
     index("device_logs_received_at_idx").on(table.receivedAt),
+    index("device_logs_gateway_id_idx").on(table.gatewayId, table.receivedAt),
     uniqueIndex("device_logs_device_boot_sequence_idx")
       .on(table.deviceId, sql`coalesce(${table.bootId}, '')`, table.sequence)
       .where(sql`${table.sequence} is not null`),
