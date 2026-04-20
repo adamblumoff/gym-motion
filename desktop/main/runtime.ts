@@ -6,6 +6,7 @@ import {
   type DesktopRuntimeEvent,
   type DesktopTestStepName,
 } from "@core/services";
+import { createCloudRuntime } from "./cloud-runtime";
 import { createManagedGatewayRuntime } from "./managed-gateway-runtime";
 import type { PreferencesStore } from "./preferences-store";
 
@@ -13,7 +14,10 @@ export function registerRuntimeBridge(
   getWindows: () => BrowserWindow[],
   preferences: PreferencesStore,
 ) {
-  const runtime = createManagedGatewayRuntime(preferences);
+  const cloudApiBaseUrl = process.env.GYM_MOTION_CLOUD_API_BASE_URL?.trim();
+  const runtime = cloudApiBaseUrl
+    ? createCloudRuntime(cloudApiBaseUrl)
+    : createManagedGatewayRuntime(preferences);
 
   function broadcast(event: DesktopRuntimeEvent) {
     for (const window of getWindows()) {
