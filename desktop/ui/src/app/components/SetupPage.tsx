@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2, Play, Plus, RotateCcw, ShieldCheck, Square, Terminal, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  FolderOpen,
+  HardDrive,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Server,
+  ShieldCheck,
+  Square,
+  Terminal,
+  Trash2,
+  User,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type {
@@ -11,7 +28,7 @@ import type {
 } from "@core/services";
 
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent } from "./ui/card";
 
 const DEFAULT_SERVICE_NAME = "gym-motion-linux-gateway.service";
 const DEFAULT_PORT = 22;
@@ -45,7 +62,7 @@ function updateGateway(
 
 function formatTimestamp(value: string | null) {
   if (!value) {
-    return "Never";
+    return "never";
   }
 
   return new Date(value).toLocaleString();
@@ -54,15 +71,15 @@ function formatTimestamp(value: string | null) {
 function buildCommandTitle(command: GatewayAdminCommand) {
   switch (command) {
     case "status":
-      return "Service Status";
+      return "Status";
     case "start":
-      return "Start Service";
+      return "Start";
     case "stop":
-      return "Stop Service";
+      return "Stop";
     case "restart":
-      return "Restart Service";
+      return "Restart";
     case "logs":
-      return "Recent Logs";
+      return "Logs";
     case "custom":
       return "Custom Command";
   }
@@ -73,10 +90,108 @@ function buildBootstrapCommand(gateway: GatewayAdminGateway | null) {
   return `cd ${repoPath} && bash ./scripts/linux-gateway/bootstrap-admin.sh`;
 }
 
+function buildConnectionLabel(gateway: GatewayAdminGateway) {
+  if (gateway.host && gateway.user) {
+    return `${gateway.user}@${gateway.host}:${gateway.port}`;
+  }
+
+  return gateway.sshHostAlias || "connection not set";
+}
+
+function buildSshPreview(gateway: GatewayAdminGateway | null) {
+  if (!gateway) {
+    return "Save a gateway to preview the SSH command.";
+  }
+
+  if (gateway.host && gateway.user) {
+    return [
+      `ssh -p ${gateway.port} ${gateway.user}@${gateway.host} \\`,
+      "  -o StrictHostKeyChecking=accept-new \\",
+      "  -o IdentitiesOnly=yes",
+    ].join("\n");
+  }
+
+  if (gateway.sshHostAlias) {
+    return [
+      `ssh ${gateway.sshHostAlias} \\`,
+      "  -o StrictHostKeyChecking=accept-new \\",
+      "  -o IdentitiesOnly=yes",
+    ].join("\n");
+  }
+
+  return "Fill in host and user, or provide an SSH alias fallback.";
+}
+
+function FieldRow({
+  icon: Icon,
+  label,
+  value,
+  onCopy,
+}: {
+  icon: typeof Server;
+  label: string;
+  value: string;
+  onCopy?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-[#20262f] py-3.5 last:border-b-0">
+      <div className="flex size-8 items-center justify-center rounded-lg border border-[#253449] bg-[#0f151d] text-[#2f80ff]">
+        <Icon className="size-3.5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] text-zinc-400">{label}</div>
+      </div>
+      <div className="min-w-0 max-w-[50%] truncate text-right text-[13px] text-[#59a3ff]">
+        {value}
+      </div>
+      {onCopy ? (
+        <button
+          type="button"
+          onClick={onCopy}
+          className="rounded-md p-2 text-zinc-500 transition hover:bg-white/5 hover:text-zinc-200"
+          title={`Copy ${label}`}
+        >
+          <Copy className="size-4" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function QuickActionButton({
+  icon: Icon,
+  title,
+  subtitle,
+  disabled,
+  onClick,
+}: {
+  icon: typeof Terminal;
+  title: string;
+  subtitle: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="group flex min-h-20 flex-col justify-between rounded-none border-r border-[#20262f] px-2 py-2 text-left transition last:border-r-0 disabled:opacity-40 disabled:hover:bg-transparent xl:px-3"
+    >
+      <div className="flex items-center gap-2.5 text-zinc-100">
+        <Icon className="size-4 text-[#2f80ff]" />
+        <span className="text-base font-medium">{title}</span>
+      </div>
+      <div className="pl-7 text-xs text-zinc-500 group-hover:text-zinc-400">{subtitle}</div>
+    </button>
+  );
+}
+
 export function SetupPage() {
   const [config, setConfig] = useState<GatewayAdminConfig | null>(null);
   const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(null);
-  const [customCommand, setCustomCommand] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [customCommand] = useState("");
   const [lastResult, setLastResult] = useState<GatewayAdminCommandResult | null>(null);
   const [readiness, setReadiness] = useState<GatewayAdminReadinessResult | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -86,16 +201,19 @@ export function SetupPage() {
   useEffect(() => {
     let mounted = true;
 
-    void window.gymMotionDesktop.getGatewayAdminConfig().then((nextConfig) => {
-      if (!mounted) {
-        return;
-      }
+    void window.gymMotionDesktop
+      .getGatewayAdminConfig()
+      .then((nextConfig) => {
+        if (!mounted) {
+          return;
+        }
 
-      setConfig(nextConfig);
-      setSelectedGatewayId((current) => current ?? nextConfig.gateways[0]?.id ?? null);
-    }).catch((error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to load gateway config.");
-    });
+        setConfig(nextConfig);
+        setSelectedGatewayId((current) => current ?? nextConfig.gateways[0]?.id ?? null);
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : "Failed to load gateway config.");
+      });
 
     return () => {
       mounted = false;
@@ -106,6 +224,21 @@ export function SetupPage() {
     () => config?.gateways.find((gateway) => gateway.id === selectedGatewayId) ?? null,
     [config, selectedGatewayId],
   );
+
+  const filteredGateways = useMemo(() => {
+    const gateways = config?.gateways ?? [];
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return gateways;
+    }
+
+    return gateways.filter((gateway) =>
+      [gateway.label, gateway.host, gateway.user, gateway.sshHostAlias]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(query)),
+    );
+  }, [config?.gateways, searchQuery]);
 
   const canSave =
     !!config &&
@@ -192,11 +325,9 @@ export function SetupPage() {
         customCommand,
       });
       setLastResult(result);
-      if (result.ok) {
-        toast.success(`${buildCommandTitle(command)} finished.`);
-      } else {
-        toast.error(`${buildCommandTitle(command)} failed.`);
-      }
+      toast.success(
+        result.ok ? `${buildCommandTitle(command)} finished.` : `${buildCommandTitle(command)} failed.`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to run remote command.");
     } finally {
@@ -229,417 +360,509 @@ export function SetupPage() {
     }
   }
 
-  const gatewayList = config?.gateways ?? [];
+  async function copyText(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`${label} copied.`);
+    } catch {
+      toast.error(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  }
+
   const bootstrapCommand = buildBootstrapCommand(selectedGateway);
+  const sshPreview = buildSshPreview(selectedGateway);
+  const selectedConnectionLabel = selectedGateway ? buildConnectionLabel(selectedGateway) : "No gateway selected";
+  const lastUpdatedLabel = readiness?.checkedAt ?? lastResult?.finishedAt ?? null;
+  const gatewayStatusTone = readiness?.overallOk ? "bg-[#16361f] text-[#7ee2a0]" : "bg-[#1c2430] text-zinc-300";
+  const gatewayStatusLabel = readiness
+    ? readiness.overallOk
+      ? "Active"
+      : "Needs setup"
+    : "Unverified";
 
   return (
-    <div className="flex-1 overflow-auto p-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold text-zinc-100">Gateway Admin</h1>
-            <p className="text-sm text-zinc-500">
-              Manage Linux gateways over SSH from this desktop app.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={addGateway}>
-              <Plus className="size-4" />
-              Add Gateway
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => void runReadinessCheck()}
-              disabled={!selectedGateway || checkingReadiness}
-            >
-              <ShieldCheck className="size-4" />
-              {checkingReadiness ? "Checking…" : "Check Readiness"}
-            </Button>
-            <Button
-              onClick={() => config && void saveConfig(config)}
-              disabled={!config || !canSave || isSaving}
-            >
-              Save Config
-            </Button>
+    <div className="flex-1 overflow-auto bg-black p-0">
+      <div className="mx-auto max-w-[1420px] px-6 pb-6 pt-6">
+        <div className="border-b border-[#20262f] pb-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="space-y-2.5">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-600">Operations</div>
+              <h1 className="text-[2rem] font-semibold tracking-tight text-zinc-50">Gateway Admin</h1>
+              <p className="max-w-xl text-[15px] text-zinc-400">
+                Manage
+                <span className="mx-1 text-[#59a3ff]">Linux gateways</span>
+                over
+                <span className="mx-1 text-[#59a3ff]">SSH</span>
+                from this desktop app.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-[#2a313b] bg-transparent px-4 text-sm text-zinc-100 hover:bg-[#151b24]"
+                onClick={addGateway}
+              >
+                <Plus className="size-4" />
+                Add Gateway
+              </Button>
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-[#2a313b] bg-transparent px-4 text-sm text-zinc-100 hover:bg-[#151b24]"
+                onClick={() => void runReadinessCheck()}
+                disabled={!selectedGateway || checkingReadiness}
+              >
+                <ShieldCheck className="size-4" />
+                {checkingReadiness ? "Checking…" : "Check Readiness"}
+              </Button>
+              <Button
+                className="h-10 rounded-xl bg-[#2f80ff] px-4 text-sm text-white hover:bg-[#256fe2]"
+                onClick={() => config && void saveConfig(config)}
+                disabled={!config || !canSave || isSaving}
+              >
+                <CheckCircle2 className="size-4" />
+                Save Config
+              </Button>
+            </div>
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-          <Card className="border-zinc-800 bg-zinc-950/80">
-            <CardHeader>
-              <CardTitle>Saved Gateways</CardTitle>
-              <CardDescription>These gateway entries are stored locally on this desktop.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {gatewayList.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
-                  No gateways yet. Add one with a host, user, and port, or keep using an SSH alias if you prefer.
-                </div>
-              ) : (
-                gatewayList.map((gateway) => {
-                  const selected = gateway.id === selectedGatewayId;
+        <div className="grid min-h-[720px] grid-cols-1 gap-6 pt-5 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <section className="border-r border-[#20262f] pr-5">
+            <div className="space-y-4">
+              <div className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+                Gateways
+              </div>
 
-                  return (
-                    <button
-                      key={gateway.id}
-                      type="button"
-                      onClick={() => setSelectedGatewayId(gateway.id)}
-                      className={[
-                        "w-full rounded-xl border px-4 py-3 text-left transition-colors",
-                        selected
-                          ? "border-blue-500/50 bg-blue-500/10 text-zinc-100"
-                          : "border-zinc-800 bg-zinc-900/60 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
-                      ].join(" ")}
-                    >
-                      <div className="truncate text-sm font-medium">{gateway.label}</div>
-                      <div className="mt-1 truncate font-mono text-xs text-zinc-500">
-                        {gateway.host && gateway.user
-                          ? `${gateway.user}@${gateway.host}:${gateway.port}`
-                          : gateway.sshHostAlias || "connection not set"}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </CardContent>
-          </Card>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-zinc-500" />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search gateways..."
+                  className="h-10 w-full rounded-xl border border-[#2a313b] bg-[#121820] pl-11 pr-4 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-[#2f80ff]"
+                />
+              </div>
 
-          <div className="space-y-6">
-            <Card className="border-zinc-800 bg-zinc-950/80">
-              <CardHeader>
-                <CardTitle>One-Time Linux Setup</CardTitle>
-                <CardDescription>
-                  Run this once on each new gateway box so the desktop app can control the service without stopping for sudo prompts.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="text-sm text-zinc-400">
-                  This installs the narrow sudo rule the admin page needs for status, logs, start, stop, and restart.
-                </div>
-                <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-black/50 px-3 py-2 font-mono text-xs text-zinc-300">
-                  {bootstrapCommand}
-                </pre>
-                <div className="text-sm text-zinc-500">
-                  If the script says permission denied, run it with
-                  <span className="mx-1 font-mono text-zinc-300">bash</span>
-                  or make it executable first with
-                  <span className="mx-1 font-mono text-zinc-300">chmod +x ./scripts/linux-gateway/bootstrap-admin.sh</span>.
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-zinc-800 bg-zinc-950/80">
-              <CardHeader>
-                <CardTitle>Gateway Details</CardTitle>
-                <CardDescription>
-                  Prefer direct host, user, and port here. SSH aliases still work as a fallback.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {selectedGateway ? (
-                  <>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">Label</span>
-                        <input
-                          value={selectedGateway.label}
-                          onChange={(event) => patchSelectedGateway("label", event.target.value)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder="Zone A Gateway"
-                        />
-                      </label>
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">Host</span>
-                        <input
-                          value={selectedGateway.host ?? ""}
-                          onChange={(event) =>
-                            patchSelectedGateway("host", event.target.value || null)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder="192.168.1.174"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">User</span>
-                        <input
-                          value={selectedGateway.user ?? ""}
-                          onChange={(event) =>
-                            patchSelectedGateway("user", event.target.value || null)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder="adam-blumoff"
-                        />
-                      </label>
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">Port</span>
-                        <input
-                          value={String(selectedGateway.port)}
-                          onChange={(event) => {
-                            const nextPort = Number(event.target.value);
-                            if (!Number.isFinite(nextPort)) {
-                              return;
-                            }
-                            patchSelectedGateway("port", nextPort);
-                          }}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder={String(DEFAULT_PORT)}
-                        />
-                      </label>
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">Service Name</span>
-                        <input
-                          value={selectedGateway.serviceName}
-                          onChange={(event) =>
-                            patchSelectedGateway("serviceName", event.target.value)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder={DEFAULT_SERVICE_NAME}
-                        />
-                      </label>
-                    </div>
-
-                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">Repo Path</span>
-                        <input
-                          value={selectedGateway.repoPath}
-                          onChange={(event) =>
-                            patchSelectedGateway("repoPath", event.target.value)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder={DEFAULT_REPO_PATH}
-                        />
-                      </label>
-                      <label className="space-y-2 text-sm">
-                        <span className="text-zinc-400">SSH Alias Fallback</span>
-                        <input
-                          value={selectedGateway.sshHostAlias ?? ""}
-                          onChange={(event) =>
-                            patchSelectedGateway("sshHostAlias", event.target.value || null)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                          placeholder="Optional"
-                        />
-                      </label>
-                      <div className="flex items-end">
-                        <Button
-                          variant="destructive"
-                          onClick={removeSelectedGateway}
-                          disabled={isSaving}
-                        >
-                          <Trash2 className="size-4" />
-                          Remove
-                        </Button>
-                      </div>
-                    </div>
-
-                    <label className="block space-y-2 text-sm">
-                      <span className="text-zinc-400">Notes</span>
-                      <textarea
-                        value={selectedGateway.notes ?? ""}
-                        onChange={(event) =>
-                          patchSelectedGateway("notes", event.target.value || null)}
-                        className="min-h-24 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                        placeholder="Optional notes about this gateway box."
-                      />
-                    </label>
-                  </>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-zinc-800 p-6 text-sm text-zinc-500">
-                    Select a gateway on the left, or add one to get started.
+              <div className="space-y-3">
+                {filteredGateways.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-[#27303a] bg-[#121820] px-4 py-5 text-sm text-zinc-500">
+                    No gateways yet. Add one to start the admin flow.
                   </div>
-                )}
-              </CardContent>
-            </Card>
+                ) : (
+                  filteredGateways.map((gateway) => {
+                    const selected = gateway.id === selectedGatewayId;
+                    const statusReady = readiness?.gatewayId === gateway.id ? readiness.overallOk : false;
 
-            <Card className="border-zinc-800 bg-zinc-950/80">
-              <CardHeader>
-                <CardTitle>Readiness</CardTitle>
-                <CardDescription>
-                  This tells you what still needs to be true before the admin page feels automatic.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {readiness ? (
-                  <>
-                    <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
-                      {readiness.overallOk ? (
-                        <CheckCircle2 className="size-5 text-emerald-300" />
-                      ) : (
-                        <AlertCircle className="size-5 text-amber-300" />
-                      )}
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-zinc-100">
-                          {readiness.overallOk ? "Gateway admin is ready" : "Gateway admin needs setup"}
-                        </div>
-                        <div className="truncate font-mono text-xs text-zinc-500">
-                          {readiness.connectionLabel}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="space-y-3">
-                      {readiness.checks.map((check) => (
-                        <div
-                          key={check.key}
-                          className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-3"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-medium text-zinc-100">{check.label}</div>
-                            <div className={check.ok ? "text-emerald-300" : "text-amber-300"}>
-                              {check.ok ? "Ready" : "Needs attention"}
+                    return (
+                      <button
+                        key={gateway.id}
+                        type="button"
+                        onClick={() => setSelectedGatewayId(gateway.id)}
+                        className={[
+                          "w-full rounded-2xl border px-3.5 py-3.5 text-left transition",
+                          selected
+                            ? "border-[#2f80ff] bg-[#131d2a] shadow-[0_0_0_1px_rgba(47,128,255,0.15)]"
+                            : "border-[#28303a] bg-[#111720] hover:border-[#33404d] hover:bg-[#131a23]",
+                        ].join(" ")}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 gap-3">
+                            <div className="mt-0.5 flex size-9 items-center justify-center rounded-xl border border-[#274366] bg-[#102038] text-[#2f80ff]">
+                              <HardDrive className="size-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-[15px] font-medium text-zinc-100">{gateway.label}</div>
+                              <div className="mt-1 truncate text-[13px] text-[#59a3ff]">
+                                {buildConnectionLabel(gateway)}
+                              </div>
                             </div>
                           </div>
-                          <div className="mt-2 text-sm text-zinc-500">{check.detail}</div>
+                          <div className={selected ? "mt-1 size-3 rounded-full bg-[#2f80ff]" : "mt-1 size-3 rounded-full bg-transparent"} />
                         </div>
-                      ))}
-                    </div>
-                    {!readiness.overallOk ? (
-                      <div className="space-y-2">
-                        <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                          One-Time Linux Bootstrap
-                        </div>
-                        <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-black/50 px-3 py-2 font-mono text-xs text-zinc-300">
-                          {readiness.bootstrapCommand}
-                        </pre>
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-zinc-800 p-6 text-sm text-zinc-500">
-                    Run a readiness check to verify SSH, key auth, repo path, sudo service control, and logs.
-                  </div>
+                        {statusReady ? (
+                            <div className="mt-2.5 inline-flex rounded-full bg-[#16361f] px-2.5 py-1 text-[11px] font-medium text-[#7ee2a0]">
+                              Ready
+                            </div>
+                          ) : null}
+                      </button>
+                    );
+                  })
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
+          </section>
 
-            <Card className="border-zinc-800 bg-zinc-950/80">
-              <CardHeader>
-                <CardTitle>Remote Actions</CardTitle>
-                <CardDescription>
-                  These commands run through local SSH with first-connect host trust enabled.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => void runCommand("status")}
-                    disabled={!selectedGateway || runningCommand !== null}
-                  >
-                    <Terminal className="size-4" />
-                    Status
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void runCommand("start")}
-                    disabled={!selectedGateway || runningCommand !== null}
-                  >
-                    <Play className="size-4" />
-                    Start
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void runCommand("stop")}
-                    disabled={!selectedGateway || runningCommand !== null}
-                  >
-                    <Square className="size-4" />
-                    Stop
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void runCommand("restart")}
-                    disabled={!selectedGateway || runningCommand !== null}
-                  >
-                    <RotateCcw className="size-4" />
-                    Restart
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void runCommand("logs")}
-                    disabled={!selectedGateway || runningCommand !== null}
-                  >
-                    Logs
-                  </Button>
+          <section className="min-w-0">
+            {selectedGateway ? (
+              <div className="space-y-6">
+                <div className="border-b border-[#20262f] pb-5">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div className="flex size-10 items-center justify-center rounded-xl border border-[#274366] bg-[#102038] text-[#2f80ff]">
+                        <HardDrive className="size-4.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <h2 className="truncate text-[1.65rem] font-semibold text-zinc-100">
+                            {selectedGateway.label}
+                          </h2>
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${gatewayStatusTone}`}>
+                            {gatewayStatusLabel}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 truncate text-[13px] text-zinc-500">
+                          {selectedConnectionLabel}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 text-[13px] text-zinc-500">
+                      <span>Last updated: {lastUpdatedLabel ? formatTimestamp(lastUpdatedLabel) : "not yet checked"}</span>
+                      <button
+                        type="button"
+                        onClick={() => void runReadinessCheck()}
+                        className="rounded-md p-2 text-[#2f80ff] transition hover:bg-white/5"
+                        title="Refresh readiness"
+                      >
+                        <RefreshCw className="size-4" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <label className="block space-y-2 text-sm">
-                  <span className="text-zinc-400">Custom Remote Command</span>
-                  <div className="flex gap-2">
-                    <input
-                      value={customCommand}
-                      onChange={(event) => setCustomCommand(event.target.value)}
-                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none transition focus:border-blue-500"
-                      placeholder="uname -a"
-                    />
-                    <Button
-                      variant="outline"
-                      onClick={() => void runCommand("custom")}
-                      disabled={!selectedGateway || runningCommand !== null || !customCommand.trim()}
-                    >
-                      Run
-                    </Button>
-                  </div>
-                </label>
-
-                {runningCommand ? (
-                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200">
-                    Running {buildCommandTitle(runningCommand).toLowerCase()}…
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            <Card className="border-zinc-800 bg-zinc-950/80">
-              <CardHeader>
-                <CardTitle>Command Output</CardTitle>
-                <CardDescription>
-                  Last command result from the selected gateway.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {lastResult ? (
-                  <>
-                    <div className="grid gap-3 text-sm text-zinc-400 md:grid-cols-2">
-                      <div>
-                        <div className="text-zinc-500">Gateway</div>
-                        <div className="font-mono text-zinc-100">{lastResult.connectionLabel}</div>
+                <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.85fr)]">
+                  <div className="space-y-6">
+                    <section className="border-b border-[#20262f] pb-6">
+                      <div className="mb-3">
+                        <h3 className="text-[1.25rem] font-medium text-zinc-100">Connection Overview</h3>
                       </div>
                       <div>
-                        <div className="text-zinc-500">Result</div>
-                        <div className={lastResult.ok ? "text-emerald-300" : "text-red-300"}>
-                          {lastResult.ok ? "Success" : `Failed${lastResult.exitCode !== null ? ` (${lastResult.exitCode})` : ""}`}
+                        <FieldRow
+                          icon={Server}
+                          label="Host"
+                          value={selectedGateway.host || "not set"}
+                          onCopy={() => selectedGateway.host && void copyText(selectedGateway.host, "Host")}
+                        />
+                        <FieldRow
+                          icon={User}
+                          label="User"
+                          value={selectedGateway.user || "not set"}
+                          onCopy={() => selectedGateway.user && void copyText(selectedGateway.user, "User")}
+                        />
+                        <FieldRow
+                          icon={Terminal}
+                          label="Port"
+                          value={String(selectedGateway.port || DEFAULT_PORT)}
+                          onCopy={() => void copyText(String(selectedGateway.port || DEFAULT_PORT), "Port")}
+                        />
+                        <FieldRow
+                          icon={ShieldCheck}
+                          label="Service Name"
+                          value={selectedGateway.serviceName}
+                          onCopy={() => void copyText(selectedGateway.serviceName, "Service name")}
+                        />
+                        <FieldRow
+                          icon={RefreshCw}
+                          label="SSH Alias"
+                          value={selectedGateway.sshHostAlias || "unused"}
+                          onCopy={() =>
+                            selectedGateway.sshHostAlias && void copyText(selectedGateway.sshHostAlias, "SSH alias")}
+                        />
+                        <FieldRow
+                          icon={FolderOpen}
+                          label="Repo Path"
+                          value={selectedGateway.repoPath}
+                          onCopy={() => void copyText(selectedGateway.repoPath, "Repo path")}
+                        />
+                      </div>
+                    </section>
+
+                    <section className="border-b border-[#20262f] pb-6">
+                      <div className="mb-4">
+                        <h3 className="text-[1.25rem] font-medium text-zinc-100">Quick Actions</h3>
+                        <p className="mt-1.5 text-[13px] text-zinc-500">
+                          Execute common remote commands and operations.
+                        </p>
+                      </div>
+                      <div className="grid gap-0 rounded-2xl border border-[#20262f] bg-[#0f141b] md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+                        <QuickActionButton
+                          icon={Terminal}
+                          title="Status"
+                          subtitle="Check gateway status"
+                          disabled={runningCommand !== null}
+                          onClick={() => void runCommand("status")}
+                        />
+                        <QuickActionButton
+                          icon={Play}
+                          title="Start"
+                          subtitle="Start gateway service"
+                          disabled={runningCommand !== null}
+                          onClick={() => void runCommand("start")}
+                        />
+                        <QuickActionButton
+                          icon={Square}
+                          title="Stop"
+                          subtitle="Stop gateway service"
+                          disabled={runningCommand !== null}
+                          onClick={() => void runCommand("stop")}
+                        />
+                        <QuickActionButton
+                          icon={RotateCcw}
+                          title="Restart"
+                          subtitle="Restart gateway service"
+                          disabled={runningCommand !== null}
+                          onClick={() => void runCommand("restart")}
+                        />
+                        <QuickActionButton
+                          icon={FolderOpen}
+                          title="Logs"
+                          subtitle="View service logs"
+                          disabled={runningCommand !== null}
+                          onClick={() => void runCommand("logs")}
+                        />
+                      </div>
+                    </section>
+
+                    <section className="space-y-4">
+                      <div>
+                        <h3 className="text-[1.15rem] font-medium text-zinc-100">Gateway Details</h3>
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">Label</span>
+                          <input
+                            value={selectedGateway.label}
+                            onChange={(event) => patchSelectedGateway("label", event.target.value)}
+                            className="h-10 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-3.5 text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder="Zone A Gateway"
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">Host</span>
+                          <input
+                            value={selectedGateway.host ?? ""}
+                            onChange={(event) => patchSelectedGateway("host", event.target.value || null)}
+                            className="h-10 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-3.5 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder="192.168.1.174"
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">User</span>
+                          <input
+                            value={selectedGateway.user ?? ""}
+                            onChange={(event) => patchSelectedGateway("user", event.target.value || null)}
+                            className="h-12 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-4 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder="adam-blumoff"
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">Port</span>
+                          <input
+                            value={String(selectedGateway.port)}
+                            onChange={(event) => {
+                              const nextPort = Number(event.target.value);
+                              if (!Number.isFinite(nextPort)) {
+                                return;
+                              }
+                              patchSelectedGateway("port", nextPort);
+                            }}
+                            className="h-12 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-4 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder={String(DEFAULT_PORT)}
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">Service Name</span>
+                          <input
+                            value={selectedGateway.serviceName}
+                            onChange={(event) => patchSelectedGateway("serviceName", event.target.value)}
+                            className="h-12 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-4 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder={DEFAULT_SERVICE_NAME}
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm">
+                          <span className="text-zinc-400">SSH Alias Fallback</span>
+                          <input
+                            value={selectedGateway.sshHostAlias ?? ""}
+                            onChange={(event) => patchSelectedGateway("sshHostAlias", event.target.value || null)}
+                            className="h-12 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-4 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder="Optional"
+                          />
+                        </label>
+                        <label className="space-y-2 text-sm md:col-span-2">
+                          <span className="text-zinc-400">Repo Path</span>
+                          <input
+                            value={selectedGateway.repoPath}
+                            onChange={(event) => patchSelectedGateway("repoPath", event.target.value)}
+                            className="h-12 w-full rounded-xl border border-[#2a313b] bg-[#121820] px-4 font-mono text-sm text-zinc-100 outline-none transition focus:border-[#2f80ff]"
+                            placeholder={DEFAULT_REPO_PATH}
+                          />
+                        </label>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div className="space-y-6">
+                    <section className="space-y-4">
+                      <div>
+                        <h3 className="text-[1.25rem] font-medium text-zinc-100">SSH Command Preview</h3>
+                        <p className="mt-1.5 text-[13px] text-zinc-500">Use this to connect via SSH.</p>
+                      </div>
+                      <Card className="border-[#20262f] bg-[#10161e]">
+                        <CardContent className="pt-6">
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#28303a] bg-[#151b24] px-3.5 py-3.5 font-mono text-[12px] leading-6 text-zinc-100">
+                            {sshPreview}
+                          </pre>
+                          <div className="mt-5 flex justify-end">
+                            <Button
+                              variant="outline"
+                              className="h-10 rounded-xl border-[#2a313b] bg-transparent px-4 text-sm text-zinc-100 hover:bg-[#151b24]"
+                              onClick={() => void copyText(sshPreview, "SSH command")}
+                            >
+                              <Copy className="size-4" />
+                              Copy Command
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </section>
+
+                    <section className="space-y-4">
+                      <div>
+                        <h3 className="text-[1.15rem] font-medium text-zinc-100">Notes</h3>
+                      </div>
+                      <textarea
+                        value={selectedGateway.notes ?? ""}
+                        onChange={(event) => patchSelectedGateway("notes", event.target.value || null)}
+                        maxLength={200}
+                        className="min-h-32 w-full rounded-2xl border border-[#2a313b] bg-[#121820] px-3.5 py-3.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-[#2f80ff]"
+                        placeholder="Optional notes about this gateway..."
+                      />
+                      <div className="text-right text-sm text-zinc-500">
+                        {(selectedGateway.notes ?? "").length} / 200
+                      </div>
+                    </section>
+
+                    <section className="space-y-4 border-t border-[#20262f] pt-6">
+                      <div>
+                        <h3 className="text-[1.15rem] font-medium text-zinc-100">One-Time Linux Setup</h3>
+                        <p className="mt-1.5 text-[13px] text-zinc-500">
+                          Run this once on each new gateway box so the desktop app can manage the service cleanly.
+                        </p>
+                      </div>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#28303a] bg-[#151b24] px-3.5 py-3.5 font-mono text-[12px] leading-6 text-zinc-100">
+                        {bootstrapCommand}
+                      </pre>
+                      <div className="text-[13px] text-zinc-500">
+                        If the script says permission denied, run it with
+                        <span className="mx-1 font-mono text-zinc-300">bash</span>
+                        or make it executable first with
+                        <span className="mx-1 font-mono text-zinc-300">chmod +x ./scripts/linux-gateway/bootstrap-admin.sh</span>.
+                      </div>
+                    </section>
+
+                    <section className="space-y-4 border-t border-[#20262f] pt-6">
+                      <div>
+                        <h3 className="text-[1.15rem] font-medium text-zinc-100">Readiness</h3>
+                        <p className="mt-1.5 text-[13px] text-zinc-500">
+                          This tells you what still needs to be true before the admin page feels automatic.
+                        </p>
+                      </div>
+                      {readiness ? (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-3 rounded-2xl border border-[#28303a] bg-[#111720] px-3.5 py-3.5">
+                            {readiness.overallOk ? (
+                              <CheckCircle2 className="size-5 text-[#7ee2a0]" />
+                            ) : (
+                              <AlertCircle className="size-5 text-[#f5c04b]" />
+                            )}
+                            <div className="min-w-0">
+                              <div className="text-[13px] font-medium text-zinc-100">
+                                {readiness.overallOk ? "Gateway admin is ready" : "Gateway admin needs setup"}
+                              </div>
+                              <div className="truncate text-[12px] text-zinc-500">{readiness.connectionLabel}</div>
+                            </div>
+                          </div>
+
+                          {readiness.checks.map((check) => (
+                            <div
+                              key={check.key}
+                              className="rounded-2xl border border-[#28303a] bg-[#111720] px-3.5 py-3.5"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-[13px] font-medium text-zinc-100">{check.label}</div>
+                                <div className={`${check.ok ? "text-[#7ee2a0]" : "text-[#f5c04b]"} text-[12px]`}>
+                                  {check.ok ? "Ready" : "Needs attention"}
+                                </div>
+                              </div>
+                              <div className="mt-1.5 text-[12px] text-zinc-500">{check.detail}</div>
+                            </div>
+                          ))}
                         </div>
-                      </div>
+                      ) : (
+                        <div className="rounded-2xl border border-dashed border-[#28303a] bg-[#111720] px-4 py-5 text-[13px] text-zinc-500">
+                          Run a readiness check to verify SSH, key auth, repo path, sudo service control, and logs.
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="space-y-4 border-t border-[#20262f] pt-6">
                       <div>
-                        <div className="text-zinc-500">Started</div>
-                        <div className="text-zinc-100">{formatTimestamp(lastResult.startedAt)}</div>
+                        <h3 className="text-[1.15rem] font-medium text-zinc-100">Command Output</h3>
                       </div>
-                      <div>
-                        <div className="text-zinc-500">Finished</div>
-                        <div className="text-zinc-100">{formatTimestamp(lastResult.finishedAt)}</div>
-                      </div>
+                      {lastResult ? (
+                        <div className="space-y-3">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="rounded-2xl border border-[#28303a] bg-[#111720] px-3.5 py-3.5">
+                              <div className="text-[12px] text-zinc-500">Gateway</div>
+                              <div className="mt-1 font-mono text-[13px] text-zinc-100">{lastResult.connectionLabel}</div>
+                            </div>
+                            <div className="rounded-2xl border border-[#28303a] bg-[#111720] px-3.5 py-3.5">
+                              <div className="text-[12px] text-zinc-500">Result</div>
+                              <div className={`mt-1 text-[13px] ${lastResult.ok ? "text-[#7ee2a0]" : "text-[#ff7f7f]"}`}>
+                                {lastResult.ok
+                                  ? "Success"
+                                  : `Failed${lastResult.exitCode !== null ? ` (${lastResult.exitCode})` : ""}`}
+                              </div>
+                            </div>
+                          </div>
+                          <pre className="max-h-[18rem] overflow-auto whitespace-pre-wrap rounded-2xl border border-[#28303a] bg-[#111720] px-3.5 py-3.5 font-mono text-[12px] leading-6 text-zinc-100">
+                            {lastResult.combinedOutput || "Command returned no output."}
+                          </pre>
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-dashed border-[#28303a] bg-[#111720] px-4 py-5 text-[13px] text-zinc-500">
+                          Run a command to see its output here.
+                        </div>
+                      )}
+                    </section>
+
+                    <div className="pt-2">
+                      <Button
+                        variant="destructive"
+                        className="h-10 rounded-xl px-4 text-sm"
+                        onClick={removeSelectedGateway}
+                        disabled={isSaving}
+                      >
+                        <Trash2 className="size-4" />
+                        Remove Gateway
+                      </Button>
                     </div>
-                    <div className="space-y-2">
-                      <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                        Remote Command
-                      </div>
-                      <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-black/50 px-3 py-2 font-mono text-xs text-zinc-300">
-                        {lastResult.remoteCommand}
-                      </pre>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Output</div>
-                      <pre className="max-h-[32rem] overflow-auto rounded-lg border border-zinc-800 bg-black px-3 py-3 font-mono text-xs leading-6 text-zinc-200 whitespace-pre-wrap">
-                        {lastResult.combinedOutput || "Command returned no output."}
-                      </pre>
-                    </div>
-                  </>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-zinc-800 p-6 text-sm text-zinc-500">
-                    Run a command to see its stdout and stderr here.
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex min-h-[420px] items-center justify-center rounded-3xl border border-dashed border-[#28303a] bg-[#111720]">
+                <div className="max-w-md text-center">
+                  <HardDrive className="mx-auto size-9 text-[#2f80ff]" />
+                  <h2 className="mt-4 text-xl font-semibold text-zinc-100">Select a gateway</h2>
+                  <p className="mt-2.5 text-sm text-zinc-500">
+                    Choose a gateway from the left rail or add a new one to start managing it here.
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
         </div>
       </div>
     </div>
