@@ -632,6 +632,9 @@ internal sealed record ApprovedNodeRule(
     {
         var normalizedAddress = NormalizeAddress(device.Address);
         var expectedAddress = NormalizeAddress(Address);
+        var expectedLocalName = string.IsNullOrWhiteSpace(LocalName)
+            ? DeriveAdvertisedName(KnownDeviceId)
+            : LocalName;
 
         if (!string.IsNullOrWhiteSpace(expectedAddress) &&
             string.Equals(expectedAddress, normalizedAddress, StringComparison.OrdinalIgnoreCase))
@@ -639,13 +642,13 @@ internal sealed record ApprovedNodeRule(
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(LocalName) || string.IsNullOrWhiteSpace(device.Name))
+        if (string.IsNullOrWhiteSpace(expectedLocalName) || string.IsNullOrWhiteSpace(device.Name))
         {
             return false;
         }
 
-        return string.Equals(LocalName, device.Name, StringComparison.Ordinal) ||
-               device.Name.StartsWith(LocalName + "-s", StringComparison.Ordinal);
+        return string.Equals(expectedLocalName, device.Name, StringComparison.Ordinal) ||
+               device.Name.StartsWith(expectedLocalName + "-s", StringComparison.Ordinal);
     }
 
     public static IReadOnlyList<ApprovedNodeRule> Load(string path)
@@ -686,6 +689,17 @@ internal sealed record ApprovedNodeRule(
         => payload.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString()
             : null;
+
+    private static string? DeriveAdvertisedName(string? knownDeviceId)
+    {
+        if (string.IsNullOrWhiteSpace(knownDeviceId))
+        {
+            return null;
+        }
+
+        var suffixStart = Math.Max(0, knownDeviceId.Length - 6);
+        return "GymMotion-" + knownDeviceId.Substring(suffixStart);
+    }
 
     private static string? NormalizeAddress(string? value)
     {
