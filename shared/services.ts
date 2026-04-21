@@ -92,6 +92,10 @@ export type DesktopRuntimeEvent =
   | {
       type: "analytics-updated";
       analytics: DeviceAnalyticsSnapshot;
+    }
+  | {
+      type: "analytics-invalidated";
+      deviceIds: string[];
     };
 
 export type ThemeState = {

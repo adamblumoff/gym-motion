@@ -133,6 +133,7 @@ export function AnalyticsPage() {
   const {
     snapshot,
     analyticsByKey,
+    staleAnalyticsKeys,
     getDeviceAnalytics,
   } = useDesktopRuntime();
   const [selectedWindow, setSelectedWindow] = useState<AnalyticsWindow>("24h");
@@ -161,6 +162,9 @@ export function AnalyticsPage() {
   const currentAnalytics = selectedNodeId
     ? analyticsByKey[analyticsKey(selectedNodeId, selectedWindow)] ?? null
     : null;
+  const currentAnalyticsStale = selectedNodeId
+    ? Boolean(staleAnalyticsKeys[analyticsKey(selectedNodeId, selectedWindow)])
+    : false;
   const hasAnalytics = currentAnalytics !== null;
   const loadAnalytics = useEffectEvent((deviceId: string, window: AnalyticsWindow) =>
     getDeviceAnalytics({
@@ -173,7 +177,7 @@ export function AnalyticsPage() {
     if (!selectedNodeId) {
       return;
     }
-    if (hasAnalytics) {
+    if (hasAnalytics && !currentAnalyticsStale) {
       setIsLoadingAnalytics(false);
       return;
     }
@@ -190,7 +194,7 @@ export function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
+  }, [currentAnalyticsStale, hasAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,

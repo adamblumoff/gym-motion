@@ -11,6 +11,7 @@ export type DesktopAppState = {
   snapshot: DesktopSnapshot | null;
   setup: DesktopSetupState | null;
   analyticsByKey: Record<string, DeviceAnalyticsSnapshot>;
+  staleAnalyticsKeys: Record<string, true>;
   theme: ThemeState;
 };
 
@@ -19,6 +20,7 @@ export function createInitialDesktopAppState(): DesktopAppState {
     snapshot: null,
     setup: null,
     analyticsByKey: {},
+    staleAnalyticsKeys: {},
     theme: createFallbackThemeState(),
   };
 }

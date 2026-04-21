@@ -38,6 +38,16 @@ type DeviceAnalyticsResponse = {
   analytics: DeviceAnalyticsSnapshot;
 };
 
+type ApiInvalidateEvent = {
+  type?: string;
+  payload?: {
+    deviceId?: string | null;
+    device?: {
+      id?: string | null;
+    } | null;
+  } | null;
+};
+
 function approvedRuleFromDevice(device: DeviceSummary): ApprovedNodeRule {
   return {
     id: device.id,
@@ -186,6 +196,43 @@ function buildCloudSnapshot(baseUrl: string, devices: DeviceSummary[], args: {
 
 function createUnsupportedError() {
   return new Error(CLOUD_SETUP_MESSAGE);
+}
+
+function parseInvalidateEvent(lines: string[]) {
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .join("\n");
+
+  if (!data) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(data) as ApiInvalidateEvent;
+  } catch {
+    return null;
+  }
+}
+
+function analyticsAffectedDeviceIds(event: ApiInvalidateEvent | null) {
+  if (!event) {
+    return [];
+  }
+
+  const deviceIds = new Set<string>();
+  const payloadDeviceId = event.payload?.deviceId;
+  const nestedDeviceId = event.payload?.device?.id;
+
+  if (typeof payloadDeviceId === "string" && payloadDeviceId.length > 0) {
+    deviceIds.add(payloadDeviceId);
+  }
+
+  if (typeof nestedDeviceId === "string" && nestedDeviceId.length > 0) {
+    deviceIds.add(nestedDeviceId);
+  }
+
+  return [...deviceIds];
 }
 
 export function createCloudRuntime(baseUrl: string): DesktopRuntime {
@@ -343,6 +390,14 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
           "message";
 
         if (eventType === "invalidate") {
+          const invalidateEvent = parseInvalidateEvent(lines);
+          const deviceIds = analyticsAffectedDeviceIds(invalidateEvent);
+          if (deviceIds.length > 0) {
+            emit({
+              type: "analytics-invalidated",
+              deviceIds,
+            });
+          }
           void requestRefresh();
         }
       }

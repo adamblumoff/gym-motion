@@ -25,6 +25,35 @@ function analyticsKey(deviceId: string, window: AnalyticsWindow) {
   return `${deviceId}::${window}`;
 }
 
+function invalidateDeviceAnalytics(
+  current: DesktopAppState,
+  deviceIds: string[],
+): DesktopAppState {
+  if (deviceIds.length === 0) {
+    return current;
+  }
+
+  const staleDeviceIds = new Set(deviceIds);
+  const staleAnalyticsKeys = Object.fromEntries(
+    Object.entries(current.analyticsByKey).flatMap(([key]) => {
+      const [deviceId] = key.split("::", 1);
+      return staleDeviceIds.has(deviceId) ? ([[key, true]] as const) : [];
+    }),
+  ) as Record<string, true>;
+
+  if (Object.keys(staleAnalyticsKeys).length === 0) {
+    return current;
+  }
+
+  return {
+    ...current,
+    staleAnalyticsKeys: {
+      ...current.staleAnalyticsKeys,
+      ...staleAnalyticsKeys,
+    },
+  };
+}
+
 function filterSnapshotToApprovedNodes(
   snapshot: DesktopSnapshot | null,
   approvedNodes: ApprovedNodeRule[] | null,
@@ -247,12 +276,16 @@ export function replaceDeviceAnalytics(
   current: DesktopAppState,
   analytics: DeviceAnalyticsSnapshot,
 ): DesktopAppState {
+  const key = analyticsKey(analytics.deviceId, analytics.window);
+  const remainingStaleAnalyticsKeys = { ...current.staleAnalyticsKeys };
+  delete remainingStaleAnalyticsKeys[key];
   return {
     ...current,
     analyticsByKey: {
       ...current.analyticsByKey,
-      [analyticsKey(analytics.deviceId, analytics.window)]: analytics,
+      [key]: analytics,
     },
+    staleAnalyticsKeys: remainingStaleAnalyticsKeys,
   };
 }
 
@@ -283,6 +316,10 @@ export function applyRuntimeEventToState(
 ): DesktopAppState {
   if (event.type === "analytics-updated") {
     return replaceDeviceAnalytics(current, event.analytics);
+  }
+
+  if (event.type === "analytics-invalidated") {
+    return invalidateDeviceAnalytics(current, event.deviceIds);
   }
 
   return {
