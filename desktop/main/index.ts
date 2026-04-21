@@ -23,11 +23,6 @@ let isQuitting = false;
 let isDisposingRuntime = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
 let themeBridgeDisposer: (() => void) | null = null;
-const isE2E = process.env.GYM_MOTION_E2E === "1";
-
-if (isE2E && process.env.GYM_MOTION_E2E_USER_DATA_DIR) {
-  app.setPath("userData", path.resolve(process.env.GYM_MOTION_E2E_USER_DATA_DIR));
-}
 
 function createTrayImage() {
   const svg = `
@@ -137,7 +132,7 @@ function createTray() {
   return nextTray;
 }
 
-const singleInstance = isE2E ? true : app.requestSingleInstanceLock();
+const singleInstance = app.requestSingleInstanceLock();
 
 try {
   const envResult = loadDesktopEnv();
@@ -186,8 +181,8 @@ if (!singleInstance) {
     themeController.getState();
 
     mainWindow = createWindow();
-    tray = isE2E ? null : createTray();
-    runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []), preferences);
+    tray = createTray();
+    runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []));
 
     app.on("activate", () => {
       showMainWindow();
@@ -208,7 +203,7 @@ app.on("before-quit", (event) => {
     try {
       await runtimeBridge?.dispose();
     } catch (error) {
-      console.error("[runtime] failed to dispose managed gateway runtime", error);
+      console.error("[runtime] failed to dispose cloud runtime", error);
     } finally {
       runtimeBridge = null;
       themeBridgeDisposer?.();

@@ -10,12 +10,12 @@ import type {
 } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
-import type { ManagedGatewayRuntime } from "./managed-gateway-runtime/common";
 import {
   createEmptySetupState,
   createEmptySnapshot,
   offlineGatewaySnapshot,
-} from "./managed-gateway-runtime/snapshot";
+} from "./runtime-snapshot";
+import type { DesktopRuntime } from "./runtime-contract";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const SSE_RECONNECT_DELAY_MS = 2_000;
@@ -188,7 +188,7 @@ function createUnsupportedError() {
   return new Error(CLOUD_SETUP_MESSAGE);
 }
 
-export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
+export function createCloudRuntime(baseUrl: string): DesktopRuntime {
   const listeners = new Set<(event: DesktopRuntimeEvent) => void>();
   const normalizedBaseUrl = new URL(baseUrl).toString();
   let eventStreamAbort: AbortController | null = null;
@@ -446,9 +446,6 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
         `/api/device-activity?deviceId=${encodeURIComponent(deviceId)}&limit=${limit ?? 60}`,
       );
       return response.activities;
-    },
-    async runE2eStep() {
-      throw new Error("Desktop E2E test driver is unavailable in cloud runtime mode.");
     },
     onEvent(listener) {
       listeners.add(listener);

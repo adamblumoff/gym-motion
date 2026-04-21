@@ -1,13 +1,11 @@
 import http from "node:http";
 
-import dotenv from "dotenv";
-
 import { createApiEventStream } from "./event-stream";
 import { json } from "./http";
 import { createBackendApiHandler } from "./handler";
+import { loadRepoEnv } from "../../scripts/load-env";
 
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+loadRepoEnv();
 
 function readPort() {
   const value = Number(process.env.PORT ?? "3000");
