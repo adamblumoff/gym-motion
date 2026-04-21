@@ -37,7 +37,7 @@ export function SetupPage() {
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
   const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
-  const isReadOnly = setup?.adapterIssue?.startsWith('Cloud mode is active.') ?? false;
+  const isReadOnly = snapshot?.gateway.mode === 'cloud-http-backend';
   const isScanning =
     !isReadOnly &&
     (setup?.manualScanState === 'scanning' || setup?.manualScanState === 'pairing');

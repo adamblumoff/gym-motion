@@ -15,6 +15,11 @@ export function registerRuntimeBridge(
   preferences: PreferencesStore,
 ) {
   const cloudApiBaseUrl = process.env.GYM_MOTION_CLOUD_API_BASE_URL?.trim();
+  if (cloudApiBaseUrl) {
+    console.info(`[runtime] starting in cloud mode -> ${cloudApiBaseUrl}`);
+  } else {
+    console.info("[runtime] starting in local gateway mode");
+  }
   const runtime = cloudApiBaseUrl
     ? createCloudRuntime(cloudApiBaseUrl)
     : createManagedGatewayRuntime(preferences);

@@ -2,6 +2,7 @@ import http from "node:http";
 
 import dotenv from "dotenv";
 
+import { createApiEventStream } from "./event-stream";
 import { json } from "./http";
 import { createBackendApiHandler } from "./handler";
 
@@ -16,8 +17,11 @@ function readPort() {
 async function main() {
   const host = process.env.HOST ?? "0.0.0.0";
   const port = readPort();
+  const eventStream = createApiEventStream();
   const handleRequest = createBackendApiHandler({
+    emit: eventStream.emit,
     getBaseUrl: (request) => `http://${request.headers.host ?? `${host}:${port}`}`,
+    handleSse: eventStream.handleSse,
   });
 
   const server = http.createServer((request, response) => {

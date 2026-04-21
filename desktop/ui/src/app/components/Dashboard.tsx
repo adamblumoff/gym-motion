@@ -136,7 +136,7 @@ export function Dashboard() {
   const forgetPending = forgetTarget ? pendingForgetNodeIds.has(forgetTarget.id) : false;
   const runtimeStatus = snapshot?.liveStatus ?? 'Starting gateway runtime…';
   const gatewayIssue = snapshot?.gatewayIssue ?? null;
-  const isCloudMode = setup?.adapterIssue?.startsWith('Cloud mode is active.') ?? false;
+  const isCloudMode = snapshot?.gateway.mode === 'cloud-http-backend';
 
   return (
     <>
