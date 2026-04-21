@@ -35,6 +35,7 @@ bun run test
 bun run lint
 bun run typecheck
 bun run backend:dev
+bun run db:migrate
 bun run worktree:create:t3 -- <worktree-name> <branch-name>
 ```
 
