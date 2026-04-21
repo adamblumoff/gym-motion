@@ -1,14 +1,7 @@
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-
-import dotenv from "dotenv";
-
 import { getDb, rebuildMotionRollups } from "../backend/data";
+import { loadRepoEnv } from "./load-env";
 
-const repoRoot = new URL("../", import.meta.url);
-const rootEnvPath = path.join(fileURLToPath(repoRoot), ".env.local");
-
-dotenv.config({ path: rootEnvPath });
+loadRepoEnv();
 
 async function main() {
   const db = getDb();
