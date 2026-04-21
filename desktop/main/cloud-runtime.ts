@@ -19,7 +19,6 @@ import {
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const SSE_RECONNECT_DELAY_MS = 2_000;
-const FALLBACK_POLL_INTERVAL_MS = 30_000;
 const CLOUD_SETUP_MESSAGE =
   "Cloud mode is active. Sensor setup now lives on Linux gateways, so this desktop build is read-only for BLE pairing.";
 
@@ -192,9 +191,11 @@ function createUnsupportedError() {
 export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
   const listeners = new Set<(event: DesktopRuntimeEvent) => void>();
   const normalizedBaseUrl = new URL(baseUrl).toString();
-  let pollTimer: NodeJS.Timeout | null = null;
   let eventStreamAbort: AbortController | null = null;
   let eventStreamTask: Promise<void> | null = null;
+  let refreshTask: Promise<void> | null = null;
+  let refreshPending = false;
+  let pendingForceEmit = false;
   let stopped = false;
   let devices: DeviceSummary[] = [];
   let snapshot = buildCloudSnapshot(normalizedBaseUrl, [], {
@@ -269,15 +270,28 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
     }
   }
 
-  function startPolling() {
-    if (pollTimer) {
-      return;
+  function requestRefresh(forceEmit = false) {
+    refreshPending = true;
+    pendingForceEmit ||= forceEmit;
+
+    if (refreshTask) {
+      return refreshTask;
     }
 
-    pollTimer = setInterval(() => {
-      void refresh();
-    }, FALLBACK_POLL_INTERVAL_MS);
-    pollTimer.unref?.();
+    const run = async () => {
+      while (refreshPending) {
+        const nextForceEmit = pendingForceEmit;
+        refreshPending = false;
+        pendingForceEmit = false;
+        await refresh(nextForceEmit);
+      }
+    };
+
+    refreshTask = run().finally(() => {
+      refreshTask = null;
+    });
+
+    return refreshTask;
   }
 
   async function readEventStream(signal: AbortSignal) {
@@ -329,7 +343,7 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
           "message";
 
         if (eventType === "invalidate") {
-          void refresh();
+          void requestRefresh();
         }
       }
     }
@@ -361,6 +375,7 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
           break;
         }
 
+        await requestRefresh();
         await new Promise((resolve) => setTimeout(resolve, SSE_RECONNECT_DELAY_MS));
       }
     };
@@ -373,24 +388,17 @@ export function createCloudRuntime(baseUrl: string): ManagedGatewayRuntime {
   return {
     async start() {
       stopped = false;
-      await refresh(true);
-      startPolling();
+      await requestRefresh(true);
       startEventStream();
     },
     async stop() {
       stopped = true;
-      if (!pollTimer) {
-        eventStreamAbort?.abort();
-      } else {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-
       eventStreamAbort?.abort();
       await eventStreamTask;
+      await refreshTask;
     },
     async restart() {
-      await refresh(true);
+      await requestRefresh(true);
       return snapshot;
     },
     async getSnapshot() {
