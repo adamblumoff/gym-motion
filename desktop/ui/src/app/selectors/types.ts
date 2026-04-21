@@ -36,20 +36,6 @@ export type BluetoothNodeData = {
   logs: NodeLog[];
 };
 
-export type SetupDevice = {
-  id: string;
-  name: string;
-  macAddress: string | null;
-  signalStrength: number | null;
-  isPaired: boolean;
-  connectionState: GatewayConnectionState | "visible";
-  reconnectAttempt: number;
-  reconnectAttemptLimit: number;
-  reconnectRetryExhausted: boolean;
-  reconnectAwaitingDecision: boolean;
-  lastDisconnectReason: string | null;
-};
-
 export type SignalHistorySeries = {
   id: string;
   deviceId: string;

@@ -6,6 +6,7 @@ import type {
   ThemePreference,
 } from "@core/contracts";
 import {
+  DESKTOP_GATEWAY_ADMIN_CHANNELS,
   DESKTOP_THEME_CHANNELS,
   DESKTOP_RUNTIME_CHANNELS,
   type DesktopApi,
@@ -50,6 +51,18 @@ const desktopApi: DesktopApi = {
   },
   async getDeviceActivity(deviceId: string, limit?: number) {
     return ipcRenderer.invoke(DESKTOP_RUNTIME_CHANNELS.getDeviceActivity, deviceId, limit);
+  },
+  async getGatewayAdminConfig() {
+    return ipcRenderer.invoke(DESKTOP_GATEWAY_ADMIN_CHANNELS.getConfig);
+  },
+  async saveGatewayAdminConfig(config) {
+    return ipcRenderer.invoke(DESKTOP_GATEWAY_ADMIN_CHANNELS.saveConfig, config);
+  },
+  async runGatewayAdminCommand(input) {
+    return ipcRenderer.invoke(DESKTOP_GATEWAY_ADMIN_CHANNELS.runCommand, input);
+  },
+  async checkGatewayAdminReadiness(gatewayId) {
+    return ipcRenderer.invoke(DESKTOP_GATEWAY_ADMIN_CHANNELS.checkReadiness, gatewayId);
   },
   subscribeRuntime(listener) {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {

@@ -29,7 +29,7 @@ export function AppSidebar() {
       {/* Navigation */}
       <nav className="flex-1 flex flex-col gap-1 px-3 py-4">
         <SidebarNavItem icon={LayoutDashboard} label="Dashboard" to="/" collapsed={collapsed} />
-        <SidebarNavItem icon={Settings} label="Setup Sensors" to="/setup" collapsed={collapsed} />
+        <SidebarNavItem icon={Settings} label="Gateway Admin" to="/setup" collapsed={collapsed} />
         <SidebarNavItem icon={BarChart3} label="Analytics" to="/analytics" collapsed={collapsed} />
       </nav>
 

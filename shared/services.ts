@@ -30,11 +30,78 @@ export const DESKTOP_RUNTIME_CHANNELS = {
   updated: "runtime:updated",
 } as const;
 
+export const DESKTOP_GATEWAY_ADMIN_CHANNELS = {
+  getConfig: "gateway-admin:get-config",
+  saveConfig: "gateway-admin:save-config",
+  runCommand: "gateway-admin:run-command",
+  checkReadiness: "gateway-admin:check-readiness",
+} as const;
+
 export const DESKTOP_THEME_CHANNELS = {
   getState: "theme:get-state",
   setPreference: "theme:set-preference",
   updated: "theme:updated",
 } as const;
+
+export type GatewayAdminGateway = {
+  id: string;
+  label: string;
+  sshHostAlias: string | null;
+  host: string | null;
+  user: string | null;
+  port: number;
+  serviceName: string;
+  repoPath: string;
+  notes: string | null;
+};
+
+export type GatewayAdminConfig = {
+  gateways: GatewayAdminGateway[];
+};
+
+export type GatewayAdminCommand = "status" | "start" | "stop" | "restart" | "logs" | "custom";
+
+export type RunGatewayAdminCommandInput = {
+  gatewayId: string;
+  command: GatewayAdminCommand;
+  customCommand?: string;
+};
+
+export type GatewayAdminCommandResult = {
+  gatewayId: string;
+  command: GatewayAdminCommand;
+  connectionLabel: string;
+  remoteCommand: string;
+  ok: boolean;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  combinedOutput: string;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type GatewayAdminReadinessCheck = {
+  key:
+    | "ssh-client"
+    | "ssh-agent"
+    | "ssh-connect"
+    | "repo-path"
+    | "service-control"
+    | "logs";
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
+export type GatewayAdminReadinessResult = {
+  gatewayId: string;
+  checkedAt: string;
+  overallOk: boolean;
+  connectionLabel: string;
+  bootstrapCommand: string;
+  checks: GatewayAdminReadinessCheck[];
+};
 
 export type DesktopRuntimeBatchPatch = {
   devices?: GatewayRuntimeDeviceSummary[];
@@ -117,6 +184,12 @@ export type DesktopApi = {
   setAllowedNodes: (nodes: ApprovedNodeRule[]) => Promise<DesktopSetupState>;
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
   getDeviceActivity: (deviceId: string, limit?: number) => Promise<DeviceActivitySummary[]>;
+  getGatewayAdminConfig: () => Promise<GatewayAdminConfig>;
+  saveGatewayAdminConfig: (config: GatewayAdminConfig) => Promise<GatewayAdminConfig>;
+  runGatewayAdminCommand: (
+    input: RunGatewayAdminCommandInput,
+  ) => Promise<GatewayAdminCommandResult>;
+  checkGatewayAdminReadiness: (gatewayId: string) => Promise<GatewayAdminReadinessResult>;
   subscribeRuntime: (listener: (event: DesktopRuntimeEvent) => void) => () => void;
   getThemeState: () => Promise<ThemeState>;
   setThemePreference: (preference: ThemePreference) => Promise<ThemeState>;

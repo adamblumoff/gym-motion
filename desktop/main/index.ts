@@ -12,6 +12,8 @@ import {
 } from "electron";
 
 import { DESKTOP_THEME_CHANNELS } from "@core/services";
+import { registerGatewayAdminBridge } from "./gateway-admin";
+import { createGatewayAdminStore } from "./gateway-admin-store";
 import { registerRuntimeBridge } from "./runtime";
 import { createPreferencesStore } from "./preferences-store";
 import { createThemeController } from "./theme";
@@ -22,6 +24,7 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let isDisposingRuntime = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
+let gatewayAdminBridge: ReturnType<typeof registerGatewayAdminBridge> | null = null;
 let themeBridgeDisposer: (() => void) | null = null;
 
 function createTrayImage() {
@@ -158,6 +161,7 @@ if (!singleInstance) {
   void app.whenReady().then(() => {
     app.setAppUserModelId("com.gymmotion.desktop");
     const preferences = createPreferencesStore();
+    const gatewayAdminStore = createGatewayAdminStore();
     const themeController = createThemeController(preferences);
     const broadcastThemeState = (themeState: ReturnType<typeof themeController.getState>) => {
       const backgroundColor = themeState.resolvedTheme === "dark" ? "#050506" : "#f4f4f0";
@@ -183,6 +187,7 @@ if (!singleInstance) {
     mainWindow = createWindow();
     tray = createTray();
     runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []));
+    gatewayAdminBridge = registerGatewayAdminBridge(gatewayAdminStore);
 
     app.on("activate", () => {
       showMainWindow();
@@ -206,6 +211,8 @@ app.on("before-quit", (event) => {
       console.error("[runtime] failed to dispose cloud runtime", error);
     } finally {
       runtimeBridge = null;
+      gatewayAdminBridge?.dispose();
+      gatewayAdminBridge = null;
       themeBridgeDisposer?.();
       themeBridgeDisposer = null;
       ipcMain.removeHandler(DESKTOP_THEME_CHANNELS.getState);
