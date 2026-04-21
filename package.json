@@ -6,9 +6,8 @@
   "main": "out/main/index.js",
   "author": "Gym Motion",
   "scripts": {
-    "db:setup": "bun run ./scripts/setup-db.ts",
+    "db:migrate": "bun run ./scripts/migrate-db.ts",
     "db:drizzle:generate": "drizzle-kit generate",
-    "db:drizzle:migrate": "drizzle-kit migrate",
     "db:drizzle:pull": "drizzle-kit pull --config drizzle.config.ts",
     "db:migrate:timestamps": "bun run ./scripts/migrate-timestamps.ts",
     "db:rebuild:motion-rollups": "bun run ./scripts/rebuild-motion-rollups.ts",

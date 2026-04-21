@@ -42,6 +42,7 @@ jobs:
             backend_db:
               - "backend/**"
               - "shared/**"
+              - "drizzle/**"
               - "package.json"
               - "bun.lock"
               - "drizzle.config.ts"
