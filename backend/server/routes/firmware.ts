@@ -5,14 +5,16 @@ import {
   formatZodError,
   parseFirmwareReport,
   recordFirmwareReport,
-} from "../../../../backend/data";
+} from "../../data";
 import {
   createPresignedReadUrl,
   hasBucketConfig,
   isExternalAssetUrl,
-} from "../../../../backend/storage-bucket";
+} from "../../storage-bucket";
 
 import { json, readJsonBody } from "../http";
+
+type EmitApiEvent = (event: unknown) => void;
 
 export async function handleFirmwareRoutes(args: {
   request: http.IncomingMessage;
@@ -20,9 +22,9 @@ export async function handleFirmwareRoutes(args: {
   pathname: string;
   method: string;
   url: URL;
-  emit: (event: unknown) => void;
+  emit?: EmitApiEvent;
 }) {
-  const { request, response, pathname, method, url, emit } = args;
+  const { request, response, pathname, method, url, emit = () => {} } = args;
 
   if (method === "GET" && pathname === "/api/firmware/check") {
     const deviceId = url.searchParams.get("deviceId");

@@ -10,6 +10,8 @@ type DiscoveryPanelProps = {
   isScanning: boolean;
   pairingCandidateId: string | null;
   pendingPairIds: Set<string>;
+  disabled?: boolean;
+  disabledMessage?: string | null;
   onScan: () => void;
   onPairDevice: (deviceId: string) => void;
 };
@@ -19,6 +21,8 @@ export function DiscoveryPanel({
   isScanning,
   pairingCandidateId,
   pendingPairIds,
+  disabled = false,
+  disabledMessage = null,
   onScan,
   onPairDevice,
 }: DiscoveryPanelProps) {
@@ -31,7 +35,7 @@ export function DiscoveryPanel({
         </div>
         <Button
           onClick={onScan}
-          disabled={isScanning}
+          disabled={disabled || isScanning}
           className="bg-blue-500 hover:bg-blue-600 text-white"
         >
           {isScanning ? (
@@ -56,6 +60,12 @@ export function DiscoveryPanel({
               ? "Connecting to the selected device..."
               : "Searching for Bluetooth devices..."}
           </div>
+        </div>
+      ) : null}
+
+      {disabledMessage ? (
+        <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/8 p-3 text-sm text-amber-200">
+          {disabledMessage}
         </div>
       ) : null}
 
@@ -93,7 +103,7 @@ export function DiscoveryPanel({
                 <Button
                   onClick={() => onPairDevice(device.id)}
                   size="sm"
-                  disabled={isPairing}
+                  disabled={disabled || isPairing}
                   className="bg-blue-500 hover:bg-blue-600 text-white"
                 >
                   <Plus className="size-4 mr-1" />

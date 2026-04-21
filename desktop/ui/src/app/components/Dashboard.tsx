@@ -136,6 +136,7 @@ export function Dashboard() {
   const forgetPending = forgetTarget ? pendingForgetNodeIds.has(forgetTarget.id) : false;
   const runtimeStatus = snapshot?.liveStatus ?? 'Starting gateway runtime…';
   const gatewayIssue = snapshot?.gatewayIssue ?? null;
+  const isCloudMode = setup?.adapterIssue?.startsWith('Cloud mode is active.') ?? false;
 
   return (
     <>
@@ -152,7 +153,7 @@ export function Dashboard() {
       />
       <CommandPalette
         nodes={nodes}
-        onScan={() => void startManualScan()}
+        onScan={isCloudMode ? undefined : () => void startManualScan()}
         onSelectNode={handleSelectNode}
       />
       <NodeDetailModal node={selectedNode} open={modalOpen} onOpenChange={setModalOpen} />

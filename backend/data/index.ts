@@ -1,4 +1,11 @@
 export {
+  analyticsWindows,
+  buildAnalyticsSnapshot,
+  summarizeMotionEventsInBuckets,
+  WINDOW_DEFINITIONS,
+} from "./analytics-snapshot";
+
+export {
   formatZodError,
   parseDeviceAssignment,
   parseDeviceLog,

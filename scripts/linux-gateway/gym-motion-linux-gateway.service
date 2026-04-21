@@ -1,0 +1,16 @@
+[Unit]
+Description=Gym Motion Linux BLE Gateway
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=__ENV_FILE__
+ExecStart=/usr/bin/env bash __RUN_SCRIPT__
+Restart=always
+RestartSec=5
+User=__USER__
+
+[Install]
+WantedBy=multi-user.target

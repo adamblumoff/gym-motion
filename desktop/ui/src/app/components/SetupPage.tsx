@@ -37,8 +37,10 @@ export function SetupPage() {
     ? buildSetupVisibleDevices(setup, setup.approvedNodes).filter((device) => !device.isPaired)
     : [];
   const pairedDevices = setup ? buildPairedDevices(setup, snapshot) : [];
+  const isReadOnly = setup?.adapterIssue?.startsWith('Cloud mode is active.') ?? false;
   const isScanning =
-    setup?.manualScanState === 'scanning' || setup?.manualScanState === 'pairing';
+    !isReadOnly &&
+    (setup?.manualScanState === 'scanning' || setup?.manualScanState === 'pairing');
   const pairingCandidateId = setup?.pairingCandidateId ?? null;
   const [pendingPairIds, setPendingPairIds] = useState<Set<string>>(new Set());
   const [pendingRecoverIds, setPendingRecoverIds] = useState<Set<string>>(new Set());
@@ -183,6 +185,8 @@ export function SetupPage() {
               isScanning={isScanning}
               pairingCandidateId={pairingCandidateId}
               pendingPairIds={pendingPairIds}
+              disabled={isReadOnly}
+              disabledMessage={setup?.adapterIssue ?? null}
               onScan={() => void handleScan()}
               onPairDevice={(deviceId) => void handlePairDevice(deviceId)}
             />
@@ -190,6 +194,8 @@ export function SetupPage() {
               devices={pairedDevices}
               pendingRecoverIds={pendingRecoverIds}
               pendingRemoveIds={pendingRemoveIds}
+              readOnly={isReadOnly}
+              readOnlyMessage={setup?.adapterIssue ?? null}
               onRecoverDevice={(deviceId) => void handleRecoverDevice(deviceId)}
               onRequestUnpairDevice={requestUnpairDevice}
             />

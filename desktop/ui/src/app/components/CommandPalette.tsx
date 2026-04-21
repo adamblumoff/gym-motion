@@ -98,19 +98,23 @@ export function CommandPalette({ nodes, onSelectNode, onScan }: CommandPalettePr
             </CommandItem>
           ))}
         </CommandGroup>
-        <CommandSeparator />
-        <CommandGroup heading="Quick Actions">
-          <CommandItem
-            onSelect={() => {
-              onScan?.();
-              navigate('/setup');
-              setOpen(false);
-            }}
-          >
-            <Zap className="mr-2 size-4 text-amber-400" />
-            Scan for new devices
-          </CommandItem>
-        </CommandGroup>
+        {onScan ? (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Quick Actions">
+              <CommandItem
+                onSelect={() => {
+                  onScan();
+                  navigate('/setup');
+                  setOpen(false);
+                }}
+              >
+                <Zap className="mr-2 size-4 text-amber-400" />
+                Scan for new devices
+              </CommandItem>
+            </CommandGroup>
+          </>
+        ) : null}
       </CommandList>
     </CommandDialog>
   );

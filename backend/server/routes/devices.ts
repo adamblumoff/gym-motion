@@ -1,11 +1,17 @@
 import http from "node:http";
 
 import {
+  buildAnalyticsSnapshot,
   createOrUpdateDeviceRegistration,
+  findLatestDeviceMotionEventBeforeReceivedAt,
   formatZodError,
+  hasMotionRollupTables,
   listDeviceActivity,
+  listDeviceMotionEventsByReceivedAt,
   listDeviceLogs,
   listDevices,
+  listMotionRollupBuckets,
+  listRecentActivity,
   parseDeviceAssignment,
   parseDeviceLog,
   parseDeviceRegistration,
@@ -16,9 +22,11 @@ import {
   recordHeartbeat,
   recordMotionEvent,
   updateDeviceAssignment,
-} from "../../../../backend/data";
+} from "../../data";
 
 import { json, readJsonBody } from "../http";
+
+type EmitApiEvent = (event: unknown) => void;
 
 export async function handleDeviceRoutes(args: {
   request: http.IncomingMessage;
@@ -26,9 +34,9 @@ export async function handleDeviceRoutes(args: {
   pathname: string;
   method: string;
   url: URL;
-  emit: (event: unknown) => void;
+  emit?: EmitApiEvent;
 }) {
-  const { request, response, pathname, method, url, emit } = args;
+  const { request, response, pathname, method, url, emit = () => {} } = args;
 
   if (method === "GET" && pathname === "/api/devices") {
     json(response, 200, { devices: await listDevices() });
@@ -119,6 +127,38 @@ export async function handleDeviceRoutes(args: {
     }
 
     json(response, 200, { activities: await listDeviceActivity({ deviceId, limit }) });
+    return true;
+  }
+
+  if (method === "GET" && pathname === "/api/activity") {
+    const limit = Number(url.searchParams.get("limit") ?? "30");
+    json(response, 200, { activities: await listRecentActivity(limit) });
+    return true;
+  }
+
+  if (method === "GET" && pathname === "/api/device-analytics") {
+    const deviceId = url.searchParams.get("deviceId");
+    const window = url.searchParams.get("window");
+
+    if (!deviceId) {
+      json(response, 400, { ok: false, error: "deviceId is required." });
+      return true;
+    }
+
+    if (window !== "24h" && window !== "7d") {
+      json(response, 400, { ok: false, error: "window must be 24h or 7d." });
+      return true;
+    }
+
+    const analytics = await buildAnalyticsSnapshot({
+      deviceId,
+      window,
+      hasMotionRollupTables,
+      listMotionRollupBuckets,
+      listDeviceMotionEventsByReceivedAt,
+      findLatestDeviceMotionEventBeforeReceivedAt,
+    });
+    json(response, 200, { analytics });
     return true;
   }
 

@@ -9,6 +9,8 @@ type PairedDevicesPanelProps = {
   devices: SetupDevice[];
   pendingRecoverIds: Set<string>;
   pendingRemoveIds: Set<string>;
+  readOnly?: boolean;
+  readOnlyMessage?: string | null;
   onRecoverDevice: (deviceId: string) => void;
   onRequestUnpairDevice: (deviceId: string) => void;
 };
@@ -17,6 +19,8 @@ export function PairedDevicesPanel({
   devices,
   pendingRecoverIds,
   pendingRemoveIds,
+  readOnly = false,
+  readOnlyMessage = null,
   onRecoverDevice,
   onRequestUnpairDevice,
 }: PairedDevicesPanelProps) {
@@ -26,6 +30,12 @@ export function PairedDevicesPanel({
         <h2 className="text-lg font-semibold text-zinc-100 mb-1">Paired Sensors</h2>
         <p className="text-sm text-zinc-500">{devices.length} devices configured</p>
       </div>
+
+      {readOnlyMessage ? (
+        <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/8 p-3 text-sm text-amber-200">
+          {readOnlyMessage}
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         {devices.length === 0 ? (
@@ -69,7 +79,7 @@ export function PairedDevicesPanel({
                     onClick={() => onRecoverDevice(device.id)}
                     size="sm"
                     variant="secondary"
-                    disabled={recovering || removing}
+                    disabled={readOnly || recovering || removing}
                     className="bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
                   >
                     {recovering ? "Reconnecting..." : "Reconnect"}
@@ -79,7 +89,7 @@ export function PairedDevicesPanel({
                   onClick={() => onRequestUnpairDevice(device.id)}
                   variant="ghost"
                   size="sm"
-                  disabled={recovering || removing}
+                  disabled={readOnly || recovering || removing}
                   className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                 >
                   {removing ? "Forgetting..." : "Remove"}

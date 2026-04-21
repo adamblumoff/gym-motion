@@ -1,8 +1,11 @@
 import {
+  analyticsWindows,
+  buildAnalyticsSnapshot,
   findLatestDeviceMotionEventBeforeReceivedAt,
   hasMotionRollupTables,
-  listMotionRollupBuckets,
   listDeviceMotionEventsByReceivedAt,
+  listMotionRollupBuckets,
+  summarizeMotionEventsInBuckets,
 } from "../../../backend/data";
 import type { PreferencesStore } from "../preferences-store";
 import type {
@@ -17,10 +20,6 @@ import {
   writeAnalyticsCache,
 } from "./analytics-cache-store";
 import {
-  buildAnalyticsSnapshot,
-  analyticsWindows,
-} from "./analytics-snapshot-builder";
-import {
   mergeLiveOverlayIntoSnapshot,
   pruneLiveMotionEvents,
 } from "./analytics-live-overlay";
@@ -34,7 +33,7 @@ type AnalyticsServiceDeps = {
   listDeviceMotionEventsByReceivedAt?: typeof listDeviceMotionEventsByReceivedAt;
   findLatestDeviceMotionEventBeforeReceivedAt?: typeof findLatestDeviceMotionEventBeforeReceivedAt;
 };
-export { summarizeMotionEventsInBuckets } from "./analytics-snapshot-builder";
+export { summarizeMotionEventsInBuckets };
 
 export type AnalyticsService = {
   getDeviceAnalytics: (input: GetDeviceAnalyticsInput) => Promise<DeviceAnalyticsSnapshot>;
