@@ -38,6 +38,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.tmp-dev*.log
+.tmp-sidecar-run.log
 
 # env files (can opt-in for committing if needed)
 .env*
