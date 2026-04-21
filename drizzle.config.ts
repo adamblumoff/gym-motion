@@ -1,7 +1,7 @@
-import dotenv from "dotenv";
 import { defineConfig } from "drizzle-kit";
+import { loadRepoEnv } from "./scripts/load-env";
 
-dotenv.config({ path: ".env.local" });
+loadRepoEnv();
 
 const databaseUrl = process.env.DATABASE_PUBLIC_URL;
 
