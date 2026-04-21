@@ -17,8 +17,6 @@ Architecture is not documented as source-of-truth here. When changing behavior, 
 - `backend/server/standalone.ts`
 - `desktop/preload/index.ts`
 
-Historical bug context lives in [docs/bugs/windows-ble-bugs.md](/home/adamblumoff/gym-motion/docs/bugs/windows-ble-bugs.md), but current code and tests win if they disagree.
-
 ## Runtime Stack
 
 - Linux `.NET` BLE gateway for node connectivity and HTTP ingest
