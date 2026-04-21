@@ -10,8 +10,6 @@ export default tseslint.config(
       "out/**",
       "node_modules/**",
       "backend/runtime/**/*.ts",
-      "desktop/e2e/fake-gateway-child.ts",
-      "desktop/scripts/windows-winrt-gateway*.ts",
     ],
   },
   js.configs.recommended,

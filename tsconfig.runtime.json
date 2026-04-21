@@ -11,10 +11,7 @@
     "sourceMap": false
   },
   "include": [
-    "backend/server/**/*.ts",
-    "backend/runtime/**/*.ts",
-    "desktop/scripts/windows-winrt-gateway*.ts",
-    "desktop/e2e/fake-gateway-child.ts"
+    "backend/**/*.ts"
   ],
   "exclude": [
     "**/*.test.ts",
