@@ -68,6 +68,11 @@ function buildCommandTitle(command: GatewayAdminCommand) {
   }
 }
 
+function buildBootstrapCommand(gateway: GatewayAdminGateway | null) {
+  const repoPath = gateway?.repoPath?.trim() || DEFAULT_REPO_PATH;
+  return `cd ${repoPath} && bash ./scripts/linux-gateway/bootstrap-admin.sh`;
+}
+
 export function SetupPage() {
   const [config, setConfig] = useState<GatewayAdminConfig | null>(null);
   const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(null);
@@ -225,6 +230,7 @@ export function SetupPage() {
   }
 
   const gatewayList = config?.gateways ?? [];
+  const bootstrapCommand = buildBootstrapCommand(selectedGateway);
 
   return (
     <div className="flex-1 overflow-auto p-6">
@@ -299,6 +305,29 @@ export function SetupPage() {
           </Card>
 
           <div className="space-y-6">
+            <Card className="border-zinc-800 bg-zinc-950/80">
+              <CardHeader>
+                <CardTitle>One-Time Linux Setup</CardTitle>
+                <CardDescription>
+                  Run this once on each new gateway box so the desktop app can control the service without stopping for sudo prompts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="text-sm text-zinc-400">
+                  This installs the narrow sudo rule the admin page needs for status, logs, start, stop, and restart.
+                </div>
+                <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-black/50 px-3 py-2 font-mono text-xs text-zinc-300">
+                  {bootstrapCommand}
+                </pre>
+                <div className="text-sm text-zinc-500">
+                  If the script says permission denied, run it with
+                  <span className="mx-1 font-mono text-zinc-300">bash</span>
+                  or make it executable first with
+                  <span className="mx-1 font-mono text-zinc-300">chmod +x ./scripts/linux-gateway/bootstrap-admin.sh</span>.
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="border-zinc-800 bg-zinc-950/80">
               <CardHeader>
                 <CardTitle>Gateway Details</CardTitle>

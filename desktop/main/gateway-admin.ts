@@ -20,6 +20,18 @@ function shellQuote(value: string) {
   return "'" + value.replace(/'/g, `'"'"'`) + "'";
 }
 
+function normalizeRemotePath(path: string) {
+  if (path === "~") {
+    return "$HOME";
+  }
+
+  if (path.startsWith("~/")) {
+    return `$HOME/${path.slice(2)}`;
+  }
+
+  return shellQuote(path);
+}
+
 function buildRemoteCommand(
   command: GatewayAdminCommand,
   serviceName: string,
@@ -193,7 +205,7 @@ async function checkReadiness(gateway: GatewayAdminGateway): Promise<GatewayAdmi
 
   const repoProbe = await runSshCommand(
     gateway,
-    `test -d ${shellQuote(gateway.repoPath)} && printf present`,
+    `test -d ${normalizeRemotePath(gateway.repoPath)} && printf present`,
   );
   checks.push(
     createCheck(
