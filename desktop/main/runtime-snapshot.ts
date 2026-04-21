@@ -18,7 +18,7 @@ export const EMPTY_GATEWAY: GatewayStatusSummary = {
 
 export function createEmptySnapshot(): DesktopSnapshot {
   return {
-    liveStatus: "Starting gateway runtime…",
+    liveStatus: "Starting gateway runtime...",
     trayHint: "Closes to tray. Runtime stays hot.",
     runtimeState: "starting",
     gatewayIssue: null,
@@ -37,16 +37,6 @@ export function offlineGatewaySnapshot() {
   };
 }
 
-export function degradedEmptySnapshot(issue: string): DesktopSnapshot {
-  return {
-    ...createEmptySnapshot(),
-    liveStatus: "Gateway degraded",
-    runtimeState: "degraded",
-    gatewayIssue: issue,
-    gateway: offlineGatewaySnapshot(),
-  };
-}
-
 export function createEmptySetupState(): DesktopSetupState {
   return {
     adapterIssue: null,
@@ -58,18 +48,13 @@ export function createEmptySetupState(): DesktopSetupState {
   };
 }
 
-export function normalizeGatewayHealth(payload: unknown) {
-  const gateway = (payload as { gateway?: GatewayStatusSummary })?.gateway;
-  return gateway ? { ...EMPTY_GATEWAY, ...gateway } : { ...EMPTY_GATEWAY };
-}
-
 export function liveStatusFor(snapshotState: DesktopSnapshot) {
   if (snapshotState.runtimeState === "starting") {
-    return "Starting gateway runtime…";
+    return "Starting gateway runtime...";
   }
 
   if (snapshotState.runtimeState === "restarting") {
-    return "Restarting gateway runtime…";
+    return "Restarting gateway runtime...";
   }
 
   if (snapshotState.runtimeState === "degraded") {

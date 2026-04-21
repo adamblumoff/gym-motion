@@ -2,7 +2,7 @@
   "name": "gym-motion-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Windows-first Gym Motion desktop gateway and operator console.",
+  "description": "Gym Motion desktop cloud client and Linux gateway tooling.",
   "main": "out/main/index.js",
   "author": "Gym Motion",
   "scripts": {
@@ -23,11 +23,9 @@
     "gateway:linux:restart": "bash ./scripts/linux-gateway/control.sh restart",
     "gateway:linux:status": "bash ./scripts/linux-gateway/control.sh status",
     "gateway:linux:logs": "bash ./scripts/linux-gateway/control.sh logs",
-    "dev": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar-if-needed.mjs && GATEWAY_VERBOSE=0 electron-vite dev",
-    "dev:logs": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar-if-needed.mjs && GATEWAY_VERBOSE=1 electron-vite dev",
-    "build:desktop:test": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build",
+    "dev": "bun run build:runtime && GATEWAY_VERBOSE=0 electron-vite dev",
+    "dev:logs": "bun run build:runtime && GATEWAY_VERBOSE=1 electron-vite dev",
     "build": "bun run build:runtime && electron-vite build && electron-builder --config electron-builder.config.mjs --dir",
-    "build:win": "bun run build:runtime && bun run scripts/build-windows-ble-sidecar.mjs && electron-vite build && electron-builder --config electron-builder.config.mjs --win nsis portable",
     "preview": "electron-vite preview",
     "seed": "bun run ./scripts/send-test-event.ts",
     "firmware:build": "bash ./scripts/build-firmware.sh",
@@ -41,9 +39,7 @@
     "test:ts": "vitest run --config vitest.config.ts",
     "test:backend:db": "vitest run --config vitest.db.config.ts",
     "test": "bun run test:boundaries && bun run test:ts",
-    "test:e2e:desktop": "bun run build:desktop:test && playwright test -c playwright.desktop.config.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.runtime.json",
-    "test:windows-desktop": "bun run test:e2e:desktop"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.runtime.json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1003.0",
@@ -69,7 +65,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",
-    "@playwright/test": "^1.55.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/node": "^24.5.2",
     "@types/react": "^19.1.12",

@@ -1,9 +1,8 @@
-import type { DesktopApi, DesktopTestApi } from "@core/services";
+import type { DesktopApi } from "@core/services";
 
 declare global {
   interface Window {
     gymMotionDesktop: DesktopApi;
-    gymMotionDesktopTest?: DesktopTestApi;
   }
 }
 
