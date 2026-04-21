@@ -49,6 +49,8 @@ export type DeviceSummary = {
   firmwareVersion: string;
   machineLabel: string | null;
   siteId: string | null;
+  lastGatewayId?: string | null;
+  lastGatewaySeenAt?: string | null;
   provisioningState: ProvisioningState;
   updateStatus: UpdateStatus;
   updateTargetVersion: string | null;
@@ -181,6 +183,7 @@ export type DeviceCleanupResult = {
 export type MotionEventSummary = {
   id: number;
   deviceId: string;
+  gatewayId?: string | null;
   sequence: number | null;
   state: MotionState;
   delta: number | null;
@@ -198,6 +201,7 @@ export function getMotionEventTimelineTimestamp(event: Pick<MotionEventSummary, 
 export type DeviceLogSummary = {
   id: number;
   deviceId: string;
+  gatewayId?: string | null;
   sequence: number | null;
   level: DeviceLogLevel;
   code: string;
@@ -213,6 +217,7 @@ export type DeviceLogSummary = {
 export type DeviceActivitySummary = {
   id: string;
   deviceId: string;
+  gatewayId?: string | null;
   sequence: number | null;
   kind: "motion" | "lifecycle";
   title: string;

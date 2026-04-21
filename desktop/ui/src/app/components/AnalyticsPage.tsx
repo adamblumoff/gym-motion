@@ -15,11 +15,7 @@ import {
   YAxis,
 } from "recharts";
 
-import {
-  mergeActivityUpdate,
-  type AnalyticsWindow,
-  type DeviceActivitySummary,
-} from "@core/contracts";
+import { type AnalyticsWindow } from "@core/contracts";
 import {
   buildAnalyticsChartData,
   buildAnalyticsOverview,
@@ -35,14 +31,12 @@ import { useDesktopRuntime } from "../runtime-context";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
-import { ScrollArea } from "./ui/scroll-area";
 
 function analyticsKey(deviceId: string, window: AnalyticsWindow) {
   return `${deviceId}::${window}`;
 }
 
 const ANALYTICS_WINDOWS: AnalyticsWindow[] = ["24h", "7d"];
-const ACTIVITY_LIMIT = 60;
 type AnalyticsTooltipProps = TooltipContentProps<TooltipValueType>;
 
 function formatTooltipValue(value: TooltipValueType | undefined) {
@@ -104,6 +98,10 @@ function signalLabel(signalStrength: number | null) {
   return `Signal ${signalStrength}%`;
 }
 
+function gatewaySourceLabel(gatewayId: string | null | undefined) {
+  return gatewayId ?? "Gateway unknown";
+}
+
 type SummaryMetricCardProps = {
   icon: LucideIcon;
   iconClassName: string;
@@ -136,13 +134,10 @@ export function AnalyticsPage() {
     snapshot,
     analyticsByKey,
     getDeviceAnalytics,
-    getDeviceActivity,
   } = useDesktopRuntime();
   const [selectedWindow, setSelectedWindow] = useState<AnalyticsWindow>("24h");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
-  const [deviceActivities, setDeviceActivities] = useState<DeviceActivitySummary[]>([]);
-  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const nodes = useMemo(
     () => sortAnalyticsNodes(snapshot ? buildDashboardNodes(snapshot) : []),
     [snapshot],
@@ -173,9 +168,6 @@ export function AnalyticsPage() {
       window,
     }),
   );
-  const loadDeviceActivity = useEffectEvent((deviceId: string) =>
-    getDeviceActivity(deviceId, ACTIVITY_LIMIT),
-  );
 
   useEffect(() => {
     if (!selectedNodeId) {
@@ -200,38 +192,13 @@ export function AnalyticsPage() {
     };
   }, [hasAnalytics, loadAnalytics, selectedNodeId, selectedWindow]);
 
-  useEffect(() => {
-    if (!selectedNodeId) {
-      setDeviceActivities([]);
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoadingActivity(true);
-
-    void loadDeviceActivity(selectedNodeId)
-      .then((activities) => {
-        if (!cancelled) {
-          setDeviceActivities(activities);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingActivity(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    loadDeviceActivity,
-    selectedNodeId,
-  ]);
-
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
+  );
+  const selectedRuntimeDevice = useMemo(
+    () => snapshot?.devices.find((device) => device.id === selectedNodeId) ?? null,
+    [selectedNodeId, snapshot?.devices],
   );
   const chartData = useMemo(
     () => buildAnalyticsChartData(currentAnalytics),
@@ -241,27 +208,6 @@ export function AnalyticsPage() {
     () => buildAnalyticsOverview(currentAnalytics),
     [currentAnalytics],
   );
-  const activityLogs = useMemo(() => {
-    if (!selectedNodeId) {
-      return [];
-    }
-
-    let activities = deviceActivities;
-    for (const activity of snapshot?.activities ?? []) {
-      if (activity.deviceId !== selectedNodeId) {
-        continue;
-      }
-
-      activities = mergeActivityUpdate(activities, activity, ACTIVITY_LIMIT);
-    }
-
-    return activities.map((activity) => ({
-      id: activity.id,
-      timestamp: new Date(activity.receivedAt),
-      message: activity.message,
-      isMoving: activity.state === "moving",
-    }));
-  }, [deviceActivities, selectedNodeId, snapshot?.activities]);
   const utilizationSummary = useMemo(() => {
     if (isLoadingAnalytics && !overview) {
       return "Loading machine utilization...";
@@ -462,6 +408,21 @@ export function AnalyticsPage() {
                 >
                   {signalLabel(selectedNode.signalStrength)}
                 </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 font-mono text-zinc-300"
+                >
+                  {gatewaySourceLabel(selectedRuntimeDevice?.lastGatewayId)}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-zinc-800 bg-zinc-950 text-zinc-300"
+                >
+                  Gateway update{" "}
+                  {selectedRuntimeDevice?.lastGatewaySeenAt
+                    ? new Date(selectedRuntimeDevice.lastGatewaySeenAt).toLocaleString()
+                    : "unavailable"}
+                </Badge>
               </div>
             </div>
           </Card>
@@ -541,53 +502,6 @@ export function AnalyticsPage() {
             </Card>
           </div>
 
-          <Card className="border-zinc-800 bg-zinc-950/80 p-6 hover:border-zinc-700 transition-colors">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h2 className="text-sm font-medium text-zinc-100">Live Activity</h2>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Recent runtime events for this machine, shared with the dashboard feed.
-                </p>
-              </div>
-              <Badge
-                variant="outline"
-                className="border-zinc-800 bg-zinc-950 text-zinc-300"
-              >
-                {activityLogs.length} recent events
-              </Badge>
-            </div>
-
-            <ScrollArea className="mt-5 h-56">
-              <div className="space-y-2 pr-4">
-                {activityLogs.length > 0 ? (
-                  activityLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="flex items-start gap-3 rounded-lg border border-zinc-900 bg-zinc-950/70 px-3 py-2 hover:bg-zinc-900/80 hover:border-zinc-800 transition-colors"
-                    >
-                      <span className="shrink-0 font-mono text-[11px] text-zinc-500">
-                        {log.timestamp.toLocaleTimeString("en-US", {
-                          hour12: false,
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })}
-                      </span>
-                      <span className={log.isMoving ? "text-blue-300" : "text-zinc-400"}>
-                        {log.message}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex h-full min-h-40 items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
-                    {isLoadingActivity
-                      ? "Loading machine activity…"
-                      : "Machine activity will appear here as live motion events and device logs arrive."}
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
-          </Card>
         </div>
     </div>
   );
