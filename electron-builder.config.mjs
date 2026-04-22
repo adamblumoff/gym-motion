@@ -8,13 +8,16 @@ export default {
   ],
   files: [
     "dist/**",
+    "desktop/resources/**",
     "out/**",
     "package.json",
   ],
   directories: {
+    buildResources: "desktop/resources",
     output: "release",
   },
   win: {
+    icon: "desktop/resources/icon.ico",
     target: [
       {
         target: "nsis",

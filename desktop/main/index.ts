@@ -1,17 +1,17 @@
 import path from "node:path";
-import { Buffer } from "node:buffer";
 
 import {
   app,
   BrowserWindow,
   Menu,
   Tray,
-  nativeImage,
   ipcMain,
   shell,
 } from "electron";
 
+import { getDesktopShellPalette } from "@core/contracts";
 import { DESKTOP_THEME_CHANNELS } from "@core/services";
+import { createDesktopIcon, createTrayIcon, getDesktopIconPath } from "./assets";
 import { registerGatewayAdminBridge } from "./gateway-admin";
 import { createGatewayAdminStore } from "./gateway-admin-store";
 import { registerRuntimeBridge } from "./runtime";
@@ -26,18 +26,20 @@ let isDisposingRuntime = false;
 let runtimeBridge: ReturnType<typeof registerRuntimeBridge> | null = null;
 let gatewayAdminBridge: ReturnType<typeof registerGatewayAdminBridge> | null = null;
 let themeBridgeDisposer: (() => void) | null = null;
+const DEFAULT_DESKTOP_SHELL = getDesktopShellPalette("dark");
 
-function createTrayImage() {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-      <rect width="64" height="64" rx="18" fill="#0d2029"/>
-      <path d="M18 45V20h8l6 13 6-13h8v25h-6V31l-6 12h-4l-6-12v14z" fill="#f6a55f"/>
-    </svg>
-  `.trim();
+function syncTitleBarOverlay(resolvedTheme: "light" | "dark") {
+  if (!mainWindow || mainWindow.isDestroyed() || process.platform === "darwin") {
+    return;
+  }
 
-  return nativeImage.createFromDataURL(
-    `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
-  );
+  const desktopShellPalette = getDesktopShellPalette(resolvedTheme);
+
+  mainWindow.setTitleBarOverlay({
+    color: desktopShellPalette.shellBackground,
+    symbolColor: desktopShellPalette.titleBarSymbol,
+    height: 44,
+  });
 }
 
 function createWindow() {
@@ -49,7 +51,18 @@ function createWindow() {
     show: false,
     title: "Gym Motion",
     autoHideMenuBar: true,
-    backgroundColor: "#08131a",
+    backgroundColor: DEFAULT_DESKTOP_SHELL.windowBackground,
+    icon: getDesktopIconPath(),
+    titleBarStyle: process.platform === "darwin" ? "default" : "hidden",
+    ...(process.platform === "darwin"
+      ? {}
+      : {
+          titleBarOverlay: {
+            color: DEFAULT_DESKTOP_SHELL.shellBackground,
+            symbolColor: DEFAULT_DESKTOP_SHELL.titleBarSymbol,
+            height: 44,
+          },
+        }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -106,7 +119,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  const nextTray = new Tray(createTrayImage());
+  const nextTray = new Tray(createTrayIcon());
 
   nextTray.setToolTip("Gym Motion");
   nextTray.setContextMenu(
@@ -164,9 +177,10 @@ if (!singleInstance) {
     const gatewayAdminStore = createGatewayAdminStore();
     const themeController = createThemeController(preferences);
     const broadcastThemeState = (themeState: ReturnType<typeof themeController.getState>) => {
-      const backgroundColor = themeState.resolvedTheme === "dark" ? "#050506" : "#f4f4f0";
+      const desktopShellPalette = getDesktopShellPalette(themeState.resolvedTheme);
 
-      mainWindow?.setBackgroundColor(backgroundColor);
+      mainWindow?.setBackgroundColor(desktopShellPalette.windowBackground);
+      syncTitleBarOverlay(themeState.resolvedTheme);
 
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(DESKTOP_THEME_CHANNELS.updated, themeState);
@@ -185,6 +199,7 @@ if (!singleInstance) {
     themeController.getState();
 
     mainWindow = createWindow();
+    app.dock?.setIcon?.(createDesktopIcon());
     tray = createTray();
     runtimeBridge = registerRuntimeBridge(() => (mainWindow ? [mainWindow] : []));
     gatewayAdminBridge = registerGatewayAdminBridge(gatewayAdminStore);

@@ -9,12 +9,12 @@ export function AppSidebar() {
   return (
     <aside
       className={[
-        "flex flex-col h-full border-r border-sidebar-border bg-sidebar overflow-hidden shrink-0",
+        "flex flex-col h-full shrink-0 overflow-hidden border-r border-[var(--desktop-shell-border)] bg-[var(--desktop-shell-bg)]",
         collapsed ? "w-16" : "w-60",
       ].join(" ")}
     >
       {/* Brand */}
-      <div className="flex items-center gap-3 px-4 py-4 border-b border-sidebar-border">
+      <div className="flex items-center gap-3 border-b border-[var(--desktop-shell-border)] px-4 py-4">
         <div className="p-2 bg-blue-500/10 rounded-lg shrink-0">
           <Bluetooth className="size-5 text-blue-400" />
         </div>
@@ -34,7 +34,7 @@ export function AppSidebar() {
       </nav>
 
       {/* Collapse / expand toggle */}
-      <div className="border-t border-sidebar-border px-3 py-3">
+      <div className="border-t border-[var(--desktop-shell-border)] px-3 py-3">
         <button
           type="button"
           onClick={toggle}
