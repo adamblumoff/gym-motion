@@ -5,16 +5,18 @@ import type {
   DeviceLogInput,
   DeviceLogSummary,
 } from "../motion";
+import {
+  mapDeviceLogToActivity,
+  mapMotionEventToActivity,
+} from "../motion";
 import { deviceLogs, motionEvents } from "../schema";
 import {
   type DeviceLogRow,
   mapDeviceLogRecord,
   mapDeviceLogRow,
-  mapDeviceLogToActivity,
   mapMotionEventRow,
   mapMotionEventRecord,
   type MotionEventRow,
-  mapMotionEventToActivity,
   sortActivities,
 } from "./shared";
 

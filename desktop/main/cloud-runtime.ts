@@ -2,11 +2,21 @@ import type {
   ApprovedNodeRule,
   DesktopSetupState,
   DesktopSnapshot,
+  DeviceLogSummary,
   DeviceActivitySummary,
   DeviceAnalyticsSnapshot,
   DeviceSummary,
   GatewayRuntimeDeviceSummary,
   GetDeviceAnalyticsInput,
+  MotionEventSummary,
+} from "@core/contracts";
+import {
+  mapDeviceLogToActivity,
+  mapMotionEventToActivity,
+  mergeActivityUpdate,
+  mergeDeviceUpdate,
+  mergeEventUpdate,
+  mergeLogUpdate,
 } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
@@ -40,12 +50,12 @@ type DeviceAnalyticsResponse = {
 
 type ApiInvalidateEvent = {
   type?: string;
-  payload?: {
-    deviceId?: string | null;
-    device?: {
-      id?: string | null;
-    } | null;
-  } | null;
+  payload?: unknown;
+};
+
+type MotionUpdatePayload = {
+  device: DeviceSummary;
+  event?: MotionEventSummary;
 };
 
 function approvedRuleFromDevice(device: DeviceSummary): ApprovedNodeRule {
@@ -221,8 +231,16 @@ function analyticsAffectedDeviceIds(event: ApiInvalidateEvent | null) {
   }
 
   const deviceIds = new Set<string>();
-  const payloadDeviceId = event.payload?.deviceId;
-  const nestedDeviceId = event.payload?.device?.id;
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : null;
+  const nestedDevice =
+    payload?.device && typeof payload.device === "object"
+      ? (payload.device as Record<string, unknown>)
+      : null;
+  const payloadDeviceId = payload?.deviceId;
+  const nestedDeviceId = nestedDevice?.id;
 
   if (typeof payloadDeviceId === "string" && payloadDeviceId.length > 0) {
     deviceIds.add(payloadDeviceId);
@@ -233,6 +251,47 @@ function analyticsAffectedDeviceIds(event: ApiInvalidateEvent | null) {
   }
 
   return [...deviceIds];
+}
+
+function isDeviceSummary(value: unknown): value is DeviceSummary {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as DeviceSummary).id === "string" &&
+      typeof (value as DeviceSummary).updatedAt === "string" &&
+      typeof (value as DeviceSummary).healthStatus === "string",
+  );
+}
+
+function isMotionEventSummary(value: unknown): value is MotionEventSummary {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as MotionEventSummary).id === "number" &&
+      typeof (value as MotionEventSummary).deviceId === "string" &&
+      typeof (value as MotionEventSummary).receivedAt === "string",
+  );
+}
+
+function isDeviceLogSummary(value: unknown): value is DeviceLogSummary {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as DeviceLogSummary).id === "number" &&
+      typeof (value as DeviceLogSummary).deviceId === "string" &&
+      typeof (value as DeviceLogSummary).receivedAt === "string",
+  );
+}
+
+function isMotionUpdatePayload(value: unknown): value is MotionUpdatePayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const payload = value as Partial<MotionUpdatePayload>;
+  return isDeviceSummary(payload.device) && (
+    payload.event === undefined || isMotionEventSummary(payload.event)
+  );
 }
 
 export function createCloudRuntime(baseUrl: string): DesktopRuntime {
@@ -257,6 +316,136 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
   function emit(event: DesktopRuntimeEvent) {
     for (const listener of listeners) {
       listener(event);
+    }
+  }
+
+  function syncStateKeys() {
+    lastSnapshotKey = JSON.stringify(snapshot);
+    lastSetupKey = JSON.stringify(setup);
+  }
+
+  function updateSetupFromDevices(nextDevices: DeviceSummary[]) {
+    const nextSetup = buildCloudSetup(nextDevices);
+    const nextSetupKey = JSON.stringify(nextSetup);
+    setup = nextSetup;
+
+    if (nextSetupKey !== lastSetupKey) {
+      lastSetupKey = nextSetupKey;
+      emit({
+        type: "setup-updated",
+        setup,
+      });
+    }
+  }
+
+  function commitCloudPatch(args: {
+    nextDevices?: DeviceSummary[];
+    events?: MotionEventSummary[];
+    logs?: DeviceLogSummary[];
+    activities?: DeviceActivitySummary[];
+  }) {
+    const nextDevices = args.nextDevices ?? devices;
+    const nextEvents = args.events?.reduce(
+      (current, event) => mergeEventUpdate(current, event, 14),
+      snapshot.events,
+    ) ?? snapshot.events;
+    const nextLogs = args.logs?.reduce(
+      (current, log) => mergeLogUpdate(current, log, 18),
+      snapshot.logs,
+    ) ?? snapshot.logs;
+    const nextActivities = args.activities?.reduce(
+      (current, activity) => mergeActivityUpdate(current, activity, 30),
+      snapshot.activities,
+    ) ?? snapshot.activities;
+    const previousSnapshot = snapshot;
+    const nextSnapshot = buildCloudSnapshot(normalizedBaseUrl, nextDevices, {
+      events: nextEvents,
+      activities: nextActivities,
+      gatewayIssue: null,
+    });
+    const runtimeDevices = nextDevices.map(mapDeviceToRuntimeSummary);
+
+    devices = nextDevices;
+    snapshot = {
+      ...nextSnapshot,
+      logs: nextLogs,
+    };
+    syncStateKeys();
+    updateSetupFromDevices(nextDevices);
+
+    emit({
+      type: "runtime-batch",
+      patch: {
+        gateway:
+          nextSnapshot.gateway.updatedAt !== previousSnapshot.gateway.updatedAt ||
+          nextSnapshot.liveStatus !== previousSnapshot.liveStatus ||
+          nextSnapshot.runtimeState !== previousSnapshot.runtimeState ||
+          nextSnapshot.gatewayIssue !== previousSnapshot.gatewayIssue
+            ? {
+                gateway: nextSnapshot.gateway,
+                liveStatus: nextSnapshot.liveStatus,
+                runtimeState: nextSnapshot.runtimeState,
+                gatewayIssue: nextSnapshot.gatewayIssue,
+              }
+            : undefined,
+        devices: runtimeDevices.filter((device) => {
+          const previous = previousSnapshot.devices.find((entry) => entry.id === device.id);
+          return JSON.stringify(previous) !== JSON.stringify(device);
+        }),
+        events: args.events,
+        logs: args.logs,
+        activities: args.activities,
+      },
+    });
+  }
+
+  function applyDeviceUpdate(device: DeviceSummary) {
+    commitCloudPatch({
+      nextDevices: mergeDeviceUpdate(devices, device),
+    });
+  }
+
+  function applyMotionUpdate(payload: MotionUpdatePayload) {
+    commitCloudPatch({
+      nextDevices: mergeDeviceUpdate(devices, payload.device),
+      events: payload.event ? [payload.event] : undefined,
+      activities: payload.event ? [mapMotionEventToActivity(payload.event)] : undefined,
+    });
+  }
+
+  function applyDeviceLog(log: DeviceLogSummary) {
+    commitCloudPatch({
+      logs: [log],
+      activities: [mapDeviceLogToActivity(log)],
+    });
+  }
+
+  function applyApiInvalidateEvent(event: ApiInvalidateEvent | null) {
+    if (!event) {
+      return false;
+    }
+
+    switch (event.type) {
+      case "device-updated":
+        if (isDeviceSummary(event.payload)) {
+          applyDeviceUpdate(event.payload);
+          return true;
+        }
+        return false;
+      case "motion-update":
+        if (isMotionUpdatePayload(event.payload)) {
+          applyMotionUpdate(event.payload);
+          return true;
+        }
+        return false;
+      case "device-log":
+        if (isDeviceLogSummary(event.payload)) {
+          applyDeviceLog(event.payload);
+          return true;
+        }
+        return false;
+      default:
+        return false;
     }
   }
 
@@ -398,7 +587,9 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
               deviceIds,
             });
           }
-          void requestRefresh();
+          if (!applyApiInvalidateEvent(invalidateEvent)) {
+            void requestRefresh();
+          }
         }
       }
     }
