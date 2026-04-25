@@ -167,28 +167,30 @@ function FieldRow({
 function QuickActionButton({
   icon: Icon,
   title,
-  subtitle,
   disabled,
   onClick,
+  variant = "secondary",
 }: {
   icon: LucideIcon;
   title: string;
-  subtitle: string;
   disabled: boolean;
   onClick: () => void;
+  variant?: "primary" | "secondary";
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="group flex min-h-24 flex-col justify-between rounded-lg border border-zinc-800 bg-zinc-950/55 p-3 text-left transition hover:border-zinc-700 hover:bg-zinc-900/80 disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:bg-zinc-950/55"
+      className={cn(
+        "inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition disabled:opacity-40",
+        variant === "primary"
+          ? "bg-blue-600 text-white hover:bg-blue-500"
+          : "border border-zinc-800 bg-transparent text-zinc-100 hover:bg-white/5",
+      )}
     >
-      <div className="flex items-center gap-2.5 text-zinc-100">
-        <Icon className="size-4 text-blue-400" aria-hidden="true" />
-        <span className="text-sm font-semibold">{title}</span>
-      </div>
-      <div className="text-xs leading-5 text-zinc-500 group-hover:text-zinc-400">{subtitle}</div>
+      <Icon className={cn("size-4", variant === "primary" ? "text-white" : "text-blue-400")} aria-hidden="true" />
+      {title}
     </button>
   );
 }
@@ -200,11 +202,7 @@ function Panel({
   children: ReactNode;
   className?: string;
 }) {
-  return (
-    <section className={cn("rounded-lg border border-zinc-800 bg-zinc-950/70", className)}>
-      {children}
-    </section>
-  );
+  return <section className={cn("border-t border-zinc-800 pt-5", className)}>{children}</section>;
 }
 
 function StatusPill({
@@ -722,7 +720,7 @@ export function SetupPage() {
 
               <div className="space-y-3">
                 {isCreateMode && activeGateway ? (
-                  <div className="rounded-lg border border-blue-500 bg-blue-500/10 p-3.5">
+                  <div className="border-l border-blue-500 py-3.5 pl-3">
                     <div className="flex min-w-0 gap-3">
                       <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-400">
                         <HardDrive className="size-4" aria-hidden="true" />
@@ -743,7 +741,7 @@ export function SetupPage() {
                 ) : null}
 
                 {filteredGateways.length === 0 ? (
-                  <div className="space-y-4 rounded-lg border border-dashed border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-500">
+                  <div className="space-y-4 border-t border-zinc-800 py-4 text-sm text-zinc-500">
                     <p>No gateways yet.</p>
                     <Button
                       variant="outline"
@@ -765,10 +763,10 @@ export function SetupPage() {
                         type="button"
                         onClick={() => selectGateway(gateway.id)}
                         className={cn(
-                          "group w-full rounded-lg border p-3.5 text-left transition",
+                          "group w-full border-t py-3.5 pl-3 pr-2 text-left transition",
                           selected
                             ? "border-blue-500 bg-blue-500/10"
-                            : "border-zinc-800 bg-zinc-950/70 hover:border-zinc-700 hover:bg-zinc-900/70",
+                            : "border-zinc-800 hover:border-zinc-700",
                         )}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -808,44 +806,37 @@ export function SetupPage() {
                 )}
               </div>
 
-              <Button
-                variant="outline"
-                className="mt-auto hidden h-10 rounded-lg border-zinc-800 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 xl:flex"
-                onClick={startCreateGateway}
-                disabled={isSaving || deletingGatewayId !== null}
-              >
-                <Plus className="size-4" aria-hidden="true" />
-                Add Gateway
-              </Button>
             </div>
           </aside>
 
           <main className="min-w-0 py-5 xl:px-5">
             {activeGateway ? (
               <div className="space-y-5">
-                <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5 2xl:flex-row 2xl:items-center 2xl:justify-between">
-                  <div className="flex min-w-0 items-center gap-4">
+                <div className="flex min-w-0 items-center gap-4 pb-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-4">
                     <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-400">
                       <HardDrive className="size-5" aria-hidden="true" />
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <h2 className="truncate text-2xl font-semibold text-zinc-100">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <h2 className="min-w-0 truncate text-2xl font-semibold text-zinc-100">
                           {activeGateway.label}
                         </h2>
                         <StatusPill tone={gatewayStatusTone}>{gatewayStatusLabel}</StatusPill>
                       </div>
-                      <div className="mt-1 truncate text-sm text-zinc-500 tabular-nums">
-                        {selectedConnectionLabel}
+                      <div className="mt-1 flex min-w-0 items-center gap-3 text-sm text-zinc-500 tabular-nums">
+                        <span className="min-w-0 truncate">{selectedConnectionLabel}</span>
+                        {!isCreateMode ? (
+                          <span className="shrink-0 text-xs">
+                            Last updated: {lastUpdatedLabel ? formatTimestamp(lastUpdatedLabel) : "not yet checked"}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
 
                   {!isCreateMode ? (
-                    <div className="flex items-center gap-2 text-xs text-zinc-500 tabular-nums">
-                      <span>
-                        Last updated: {lastUpdatedLabel ? formatTimestamp(lastUpdatedLabel) : "not yet checked"}
-                      </span>
+                    <div className="shrink-0">
                       <button
                         type="button"
                         onClick={() => void runReadinessCheck()}
@@ -860,7 +851,7 @@ export function SetupPage() {
                 </div>
 
                 {!isCreateMode && (
-                  <Panel className="p-4">
+                  <Panel className="border-t-0 py-4">
                     <h3 className="text-lg font-semibold text-zinc-100">Connection Overview</h3>
                     <div className="mt-3">
                       <FieldRow
@@ -905,52 +896,67 @@ export function SetupPage() {
                 )}
 
                 {!isCreateMode && (
-                  <Panel className="p-4">
-                    <h3 className="text-lg font-semibold text-zinc-100">Quick Actions</h3>
-                    <p className="mt-1 text-pretty text-sm text-zinc-500">
-                      Execute common remote commands and operations.
-                    </p>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-                      <QuickActionButton
-                        icon={Terminal}
-                        title="Status"
-                        subtitle="Check gateway status"
-                        disabled={runningCommand !== null || editorDirty}
-                        onClick={() => void runCommand("status")}
-                      />
-                      <QuickActionButton
-                        icon={Play}
-                        title="Start"
-                        subtitle="Start gateway service"
-                        disabled={runningCommand !== null || editorDirty}
-                        onClick={() => void runCommand("start")}
-                      />
-                      <QuickActionButton
-                        icon={Square}
-                        title="Stop"
-                        subtitle="Stop gateway service"
-                        disabled={runningCommand !== null || editorDirty}
-                        onClick={() => void runCommand("stop")}
-                      />
-                      <QuickActionButton
-                        icon={RotateCcw}
-                        title="Restart"
-                        subtitle="Restart gateway service"
-                        disabled={runningCommand !== null || editorDirty}
-                        onClick={() => void runCommand("restart")}
-                      />
-                      <QuickActionButton
-                        icon={FolderOpen}
-                        title="Logs"
-                        subtitle="View service logs"
-                        disabled={runningCommand !== null || editorDirty}
-                        onClick={() => void runCommand("logs")}
-                      />
+                  <Panel className="py-4">
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold text-zinc-100">Quick Actions</h3>
+                          <p className="mt-1 text-pretty text-sm text-zinc-500">
+                            Run a status check, control the service, or inspect logs.
+                          </p>
+                        </div>
+                        {lastResult ? (
+                          <div className={cn("text-xs tabular-nums", lastResult.ok ? "text-emerald-300" : "text-red-300")}>
+                            Last command: {buildCommandTitle(lastResult.command)}{" "}
+                            {lastResult.ok ? "succeeded" : "failed"}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <QuickActionButton
+                          icon={Terminal}
+                          title={runningCommand === "status" ? "Checking..." : "Status"}
+                          disabled={runningCommand !== null || editorDirty}
+                          onClick={() => void runCommand("status")}
+                          variant="primary"
+                        />
+
+                        <div className="mx-1 hidden h-6 border-l border-zinc-800 sm:block" />
+
+                        <QuickActionButton
+                          icon={Play}
+                          title={runningCommand === "start" ? "Starting..." : "Start"}
+                          disabled={runningCommand !== null || editorDirty}
+                          onClick={() => void runCommand("start")}
+                        />
+                        <QuickActionButton
+                          icon={Square}
+                          title={runningCommand === "stop" ? "Stopping..." : "Stop"}
+                          disabled={runningCommand !== null || editorDirty}
+                          onClick={() => void runCommand("stop")}
+                        />
+                        <QuickActionButton
+                          icon={RotateCcw}
+                          title={runningCommand === "restart" ? "Restarting..." : "Restart"}
+                          disabled={runningCommand !== null || editorDirty}
+                          onClick={() => void runCommand("restart")}
+                        />
+
+                        <div className="mx-1 hidden h-6 border-l border-zinc-800 sm:block" />
+
+                        <QuickActionButton
+                          icon={FolderOpen}
+                          title={runningCommand === "logs" ? "Loading logs..." : "Logs"}
+                          disabled={runningCommand !== null || editorDirty}
+                          onClick={() => void runCommand("logs")}
+                        />
+                      </div>
                     </div>
                   </Panel>
                 )}
 
-                <Panel className="p-4">
+                <Panel className="py-4">
                   <h3 className="text-lg font-semibold text-zinc-100">Gateway Details</h3>
                   {isCreateMode ? (
                     <p className="mt-1 text-pretty text-sm text-zinc-500">
@@ -985,10 +991,10 @@ export function SetupPage() {
 
           {activeGateway ? (
             <aside className="space-y-4 border-t border-zinc-800 py-5 xl:col-start-3 xl:border-l xl:border-t-0 xl:pl-5">
-              <Panel className="p-4">
+              <Panel className="py-4">
                 <h3 className="text-lg font-semibold text-zinc-100">SSH Command Preview</h3>
                 <p className="mt-1 text-pretty text-sm text-zinc-500">Use this to connect via SSH.</p>
-                <pre className="mt-4 overflow-x-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/70 px-3.5 py-3.5 font-mono text-xs leading-6 text-zinc-100">
+                <pre className="mt-4 overflow-x-auto whitespace-pre-wrap border-l border-zinc-700 pl-3.5 font-mono text-xs leading-6 text-zinc-100">
                   {sshPreview}
                 </pre>
                 <div className="mt-4 flex justify-end">
@@ -1003,12 +1009,12 @@ export function SetupPage() {
                 </div>
               </Panel>
 
-              <Panel className="p-4">
+              <Panel className="py-4">
                 <h3 className="text-lg font-semibold text-zinc-100">One-Time Linux Setup</h3>
                 <p className="mt-1 text-pretty text-sm text-zinc-500">
                   Run this once on each new gateway box so the desktop app can manage the service cleanly.
                 </p>
-                <pre className="mt-4 overflow-x-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/70 px-3.5 py-3.5 font-mono text-xs leading-6 text-zinc-100">
+                <pre className="mt-4 overflow-x-auto whitespace-pre-wrap border-l border-zinc-700 pl-3.5 font-mono text-xs leading-6 text-zinc-100">
                   {bootstrapCommand}
                 </pre>
                 <p className="mt-3 text-pretty text-xs leading-5 text-zinc-500">
@@ -1019,8 +1025,8 @@ export function SetupPage() {
               </Panel>
 
               {!isCreateMode && (
-                <Panel className="overflow-hidden">
-                  <div className="flex items-center justify-between gap-3 border-b border-zinc-800 p-4">
+                <Panel className="py-4">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <h3 className="text-lg font-semibold text-zinc-100">Readiness Checks</h3>
                       <p className="mt-1 text-pretty text-sm text-zinc-500">
@@ -1035,9 +1041,9 @@ export function SetupPage() {
                   </div>
 
                   {readiness ? (
-                    <div className="divide-y divide-zinc-800">
+                    <div className="mt-4 divide-y divide-zinc-800">
                       {readiness.checks.map((check) => (
-                        <div key={check.key} className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3">
+                        <div key={check.key} className="grid grid-cols-[1fr_auto] gap-3 py-3">
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
                               {check.ok ? (
@@ -1056,7 +1062,7 @@ export function SetupPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="space-y-4 p-4 text-sm text-zinc-500">
+                    <div className="mt-4 space-y-4 text-sm text-zinc-500">
                       <p>Run a readiness check to verify the gateway admin path.</p>
                       <Button
                         variant="outline"
@@ -1073,18 +1079,18 @@ export function SetupPage() {
               )}
 
               {!isCreateMode && (
-                <Panel className="p-4">
+                <Panel className="py-4">
                   <h3 className="text-lg font-semibold text-zinc-100">Command Output</h3>
                   {lastResult ? (
                     <div className="mt-4 space-y-3">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-3">
+                      <div className="grid gap-3 border-y border-zinc-800 py-3 sm:grid-cols-2">
+                        <div>
                           <div className="text-xs text-zinc-500">Gateway</div>
                           <div className="mt-1 truncate font-mono text-xs text-zinc-100">
                             {lastResult.connectionLabel}
                           </div>
                         </div>
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-3">
+                        <div>
                           <div className="text-xs text-zinc-500">Result</div>
                           <div className={cn("mt-1 text-sm", lastResult.ok ? "text-emerald-300" : "text-red-300")}>
                             {lastResult.ok
@@ -1093,12 +1099,12 @@ export function SetupPage() {
                           </div>
                         </div>
                       </div>
-                      <pre className="max-h-[18rem] overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/70 px-3.5 py-3.5 font-mono text-xs leading-6 text-zinc-100">
+                      <pre className="max-h-[18rem] overflow-auto whitespace-pre-wrap border-l border-zinc-700 pl-3.5 font-mono text-xs leading-6 text-zinc-100">
                         {lastResult.combinedOutput || "Command returned no output."}
                       </pre>
                     </div>
                   ) : (
-                    <div className="mt-4 rounded-lg border border-dashed border-zinc-800 bg-zinc-950/80 px-4 py-5 text-sm text-zinc-500">
+                    <div className="mt-4 border-l border-zinc-800 pl-3.5 text-sm text-zinc-500">
                       Run a command to see its output here.
                     </div>
                   )}
