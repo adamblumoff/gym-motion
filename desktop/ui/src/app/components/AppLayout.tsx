@@ -8,17 +8,7 @@ import { AppSidebar } from "./sidebar/AppSidebar";
 
 export function AppLayout() {
   useEffect(() => {
-    const warmRoutes = () => {
-      void preloadSecondaryRoutes();
-    };
-
-    if (typeof window.requestIdleCallback === "function") {
-      const idleId = window.requestIdleCallback(warmRoutes, { timeout: 400 });
-      return () => window.cancelIdleCallback(idleId);
-    }
-
-    const timeoutId = window.setTimeout(warmRoutes, 150);
-    return () => window.clearTimeout(timeoutId);
+    void preloadSecondaryRoutes();
   }, []);
 
   return (
