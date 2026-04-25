@@ -13,15 +13,15 @@ fi
 case "$command" in
   install)
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    exec "$script_dir/install-systemd.sh"
+    exec bash "$script_dir/install-systemd.sh"
     ;;
   publish)
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    exec "$script_dir/publish.sh"
+    exec bash "$script_dir/publish.sh"
     ;;
   check)
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    exec "$script_dir/check.sh"
+    exec bash "$script_dir/check.sh"
     ;;
   start)
     exec sudo systemctl start "$service_name"
@@ -31,7 +31,7 @@ case "$command" in
     ;;
   restart)
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    "$script_dir/publish.sh"
+    bash "$script_dir/publish.sh"
     exec sudo systemctl restart "$service_name"
     ;;
   status)

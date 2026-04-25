@@ -7,4 +7,4 @@ project="$repo_root/native/linux-dotnet-ble-gateway/GymMotion.LinuxBleGateway.cs
 
 dotnet build "$project"
 dotnet list "$project" package --include-transitive --vulnerable
-"$script_dir/publish.sh"
+bash "$script_dir/publish.sh"

@@ -21,11 +21,7 @@ if [[ ! -x "$run_script" ]]; then
   chmod +x "$run_script"
 fi
 
-if [[ ! -x "$publish_script" ]]; then
-  chmod +x "$publish_script"
-fi
-
-"$publish_script"
+bash "$publish_script"
 
 tmp_service="$(mktemp)"
 trap 'rm -f "$tmp_service"' EXIT
