@@ -11,6 +11,38 @@ import {
 } from "./gateway-admin-utils";
 import { cn } from "../ui/utils";
 
+const inputClassName =
+  "h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500";
+const monoInputClassName = cn(inputClassName, "font-mono");
+
+function TextField({
+  label,
+  value,
+  placeholder,
+  className = inputClassName,
+  fullWidth,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  className?: string;
+  fullWidth?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className={cn("space-y-2 text-sm", fullWidth && "md:col-span-2")}>
+      <span className="text-zinc-400">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={className}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+}
+
 export function FieldRow({
   icon: Icon,
   label,
@@ -125,33 +157,26 @@ export function GatewayFieldGroup({
 }) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <label className="space-y-2 text-sm">
-        <span className="text-zinc-400">Label</span>
-        <input
-          value={gateway.label}
-          onChange={(event) => onChange("label", event.target.value)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder="Zone A Gateway"
-        />
-      </label>
-      <label className="space-y-2 text-sm">
-        <span className="text-zinc-400">Host</span>
-        <input
-          value={gateway.host ?? ""}
-          onChange={(event) => onChange("host", event.target.value || null)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder="192.168.1.174"
-        />
-      </label>
-      <label className="space-y-2 text-sm">
-        <span className="text-zinc-400">User</span>
-        <input
-          value={gateway.user ?? ""}
-          onChange={(event) => onChange("user", event.target.value || null)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder="adam-blumoff"
-        />
-      </label>
+      <TextField
+        label="Label"
+        value={gateway.label}
+        placeholder="Zone A Gateway"
+        onChange={(value) => onChange("label", value)}
+      />
+      <TextField
+        label="Host"
+        value={gateway.host ?? ""}
+        placeholder="192.168.1.174"
+        className={monoInputClassName}
+        onChange={(value) => onChange("host", value || null)}
+      />
+      <TextField
+        label="User"
+        value={gateway.user ?? ""}
+        placeholder="adam-blumoff"
+        className={monoInputClassName}
+        onChange={(value) => onChange("user", value || null)}
+      />
       <label className="space-y-2 text-sm">
         <span className="text-zinc-400">Port</span>
         <input
@@ -162,44 +187,39 @@ export function GatewayFieldGroup({
               onChange("port", nextPort);
             }
           }}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
+          className={monoInputClassName}
           placeholder={String(DEFAULT_PORT)}
         />
       </label>
-      <label className="space-y-2 text-sm">
-        <span className="text-zinc-400">Service Name</span>
-        <input
-          value={gateway.serviceName}
-          onChange={(event) => onChange("serviceName", event.target.value)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder={DEFAULT_SERVICE_NAME}
-        />
-      </label>
-      <label className="space-y-2 text-sm">
-        <span className="text-zinc-400">SSH Alias Fallback</span>
-        <input
-          value={gateway.sshHostAlias ?? ""}
-          onChange={(event) => onChange("sshHostAlias", event.target.value || null)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder="Optional"
-        />
-      </label>
-      <label className="space-y-2 text-sm md:col-span-2">
-        <span className="text-zinc-400">Repo Path</span>
-        <input
-          value={gateway.repoPath}
-          onChange={(event) => onChange("repoPath", event.target.value)}
-          className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 font-mono text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
-          placeholder={DEFAULT_REPO_PATH}
-        />
-      </label>
+      <TextField
+        label="Service Name"
+        value={gateway.serviceName}
+        placeholder={DEFAULT_SERVICE_NAME}
+        className={monoInputClassName}
+        onChange={(value) => onChange("serviceName", value)}
+      />
+      <TextField
+        label="SSH Alias Fallback"
+        value={gateway.sshHostAlias ?? ""}
+        placeholder="Optional"
+        className={monoInputClassName}
+        onChange={(value) => onChange("sshHostAlias", value || null)}
+      />
+      <TextField
+        label="Repo Path"
+        value={gateway.repoPath}
+        placeholder={DEFAULT_REPO_PATH}
+        className={monoInputClassName}
+        fullWidth
+        onChange={(value) => onChange("repoPath", value)}
+      />
       <label className="space-y-2 text-sm md:col-span-2">
         <span className="text-zinc-400">Notes</span>
         <textarea
           value={gateway.notes ?? ""}
           onChange={(event) => onChange("notes", event.target.value || null)}
           maxLength={200}
-          className="min-h-24 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500"
+          className={cn(inputClassName, "min-h-24 py-3")}
           placeholder="Optional notes about this gateway..."
         />
         <div className="text-right text-xs text-zinc-500">{(gateway.notes ?? "").length} / 200</div>
