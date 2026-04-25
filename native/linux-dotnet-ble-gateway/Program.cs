@@ -170,7 +170,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         {
             ["ruleId"] = runtime.Rule.Id,
             ["label"] = runtime.Rule.Label,
-            ["address"] = NormalizeAddress(properties.Address),
+            ["address"] = BleAddress.Normalize(properties.Address),
             ["name"] = properties.Name,
         });
 
@@ -190,7 +190,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         {
             ["ruleId"] = runtime.Rule.Id,
             ["label"] = runtime.Rule.Label,
-            ["address"] = NormalizeAddress(properties.Address),
+            ["address"] = BleAddress.Normalize(properties.Address),
         });
 
         var service = await runtime.Client.GetServiceAsync(RuntimeServiceUuid.ToString());
@@ -326,11 +326,11 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         }
 
         return new SessionStatus(
-            Type: GetString(payload, "type"),
-            DeviceId: GetString(payload, "deviceId"),
-            BootId: GetString(payload, "bootId"),
-            SessionId: GetString(payload, "sessionId"),
-            SessionNonce: GetString(payload, "sessionNonce"));
+            Type: GatewayJson.GetString(payload, "type"),
+            DeviceId: GatewayJson.GetString(payload, "deviceId"),
+            BootId: GatewayJson.GetString(payload, "bootId"),
+            SessionId: GatewayJson.GetString(payload, "sessionId"),
+            SessionNonce: GatewayJson.GetString(payload, "sessionNonce"));
     }
 
     private async Task WriteControlAsync(RuleRuntime runtime, string payload, CancellationToken cancellationToken)
@@ -367,9 +367,9 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
 
         runtime.LastPayloadText = payloadText;
 
-        var deviceId = GetString(payload, "deviceId") ?? runtime.Rule.KnownDeviceId;
-        var state = GetString(payload, "state");
-        var timestamp = GetInt64(payload, "timestamp");
+        var deviceId = GatewayJson.GetString(payload, "deviceId") ?? runtime.Rule.KnownDeviceId;
+        var state = GatewayJson.GetString(payload, "state");
+        var timestamp = GatewayJson.GetInt64(payload, "timestamp");
 
         if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(state) || timestamp is null)
         {
@@ -381,7 +381,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
             return;
         }
 
-        if (GetBool(payload, "snapshot") == true || string.Equals(runtime.LastMotionState, state, StringComparison.Ordinal))
+        if (GatewayJson.GetBool(payload, "snapshot") == true || string.Equals(runtime.LastMotionState, state, StringComparison.Ordinal))
         {
             var heartbeat = new Dictionary<string, object?>
             {
@@ -409,7 +409,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
             ["gatewayId"] = _config.GatewayId,
             ["state"] = state,
             ["timestamp"] = timestamp.Value,
-            ["delta"] = GetInt64(payload, "delta"),
+            ["delta"] = GatewayJson.GetInt64(payload, "delta"),
         };
         CopyOptionalString(payload, ingest, "sensorIssue");
         CopyOptionalInt64(payload, ingest, "sequence");
@@ -464,7 +464,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
 
     private static void CopyOptionalString(JsonElement payload, Dictionary<string, object?> target, string propertyName)
     {
-        var value = GetString(payload, propertyName);
+        var value = GatewayJson.GetString(payload, propertyName);
         if (!string.IsNullOrWhiteSpace(value))
         {
             target[propertyName] = value;
@@ -473,27 +473,12 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
 
     private static void CopyOptionalInt64(JsonElement payload, Dictionary<string, object?> target, string propertyName)
     {
-        var value = GetInt64(payload, propertyName);
+        var value = GatewayJson.GetInt64(payload, propertyName);
         if (value is not null)
         {
             target[propertyName] = value.Value;
         }
     }
-
-    private static string? GetString(JsonElement payload, string propertyName)
-        => payload.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
-
-    private static long? GetInt64(JsonElement payload, string propertyName)
-        => payload.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
-            ? value
-            : null;
-
-    private static bool? GetBool(JsonElement payload, string propertyName)
-        => payload.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? property.GetBoolean()
-            : null;
 
     private static Guid ReadGuid(string name, string fallback)
         => Guid.Parse(Environment.GetEnvironmentVariable(name) ?? fallback);
@@ -508,19 +493,6 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         }
 
         return builder.ToString()[..characterCount];
-    }
-
-    private static string? NormalizeAddress(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
-        var cleaned = new string(value.Where(char.IsAsciiHexDigit).ToArray()).ToUpperInvariant();
-        return cleaned.Length == 12
-            ? string.Join(":", Enumerable.Range(0, 6).Select(index => cleaned.Substring(index * 2, 2)))
-            : value.ToUpperInvariant();
     }
 
     private static void Log(string message, Dictionary<string, object?>? details = null)
@@ -549,243 +521,5 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         await DisposeConnectionsAsync();
         _httpClient.Dispose();
         _shutdown.Dispose();
-    }
-}
-
-internal sealed class RuleRuntime
-{
-    private int _connecting;
-
-    public RuleRuntime(ApprovedNodeRule rule)
-    {
-        Rule = rule;
-    }
-
-    public ApprovedNodeRule Rule { get; }
-    public Device? Device { get; set; }
-    public DeviceProperties? DeviceProperties { get; set; }
-    public Device? Client { get; set; }
-    public GattCharacteristic? TelemetryCharacteristic { get; set; }
-    public GattCharacteristic? ControlCharacteristic { get; set; }
-    public GattCharacteristic? StatusCharacteristic { get; set; }
-    public string? SessionId { get; set; }
-    public string? LastPayloadText { get; set; }
-    public string? LastMotionState { get; set; }
-    public CancellationTokenSource SessionCancellation { get; private set; } = new();
-    public TaskCompletionSource DisconnectSignal { get; set; } =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public bool TryMarkConnecting()
-        => Interlocked.CompareExchange(ref _connecting, 1, 0) == 0;
-
-    public void MarkDisconnected()
-        => Interlocked.Exchange(ref _connecting, 0);
-
-    public void CancelSession()
-    {
-        SessionCancellation.Cancel();
-        SessionCancellation.Dispose();
-        SessionCancellation = new CancellationTokenSource();
-    }
-
-    public async Task DisposeClientAsync()
-    {
-        CancelSession();
-
-        if (TelemetryCharacteristic is not null)
-        {
-            try
-            {
-                await TelemetryCharacteristic.StopNotifyAsync();
-            }
-            catch
-            {
-            }
-        }
-
-        if (Client is not null)
-        {
-            try
-            {
-                await Client.DisconnectAsync();
-            }
-            catch
-            {
-            }
-        }
-
-        Client = null;
-        TelemetryCharacteristic = null;
-        ControlCharacteristic = null;
-        StatusCharacteristic = null;
-        SessionId = null;
-        LastPayloadText = null;
-    }
-}
-
-internal sealed record ApprovedNodeRule(
-    string Id,
-    string Label,
-    string? KnownDeviceId,
-    string? LocalName,
-    string? Address)
-{
-    public bool Matches(DeviceProperties device)
-    {
-        var normalizedAddress = NormalizeAddress(device.Address);
-        var expectedAddress = NormalizeAddress(Address);
-        var expectedLocalName = string.IsNullOrWhiteSpace(LocalName)
-            ? DeriveAdvertisedName(KnownDeviceId)
-            : LocalName;
-
-        if (!string.IsNullOrWhiteSpace(expectedAddress) &&
-            string.Equals(expectedAddress, normalizedAddress, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (string.IsNullOrWhiteSpace(expectedLocalName) || string.IsNullOrWhiteSpace(device.Name))
-        {
-            return false;
-        }
-
-        return string.Equals(expectedLocalName, device.Name, StringComparison.Ordinal) ||
-               device.Name.StartsWith(expectedLocalName + "-s", StringComparison.Ordinal);
-    }
-
-    public static IReadOnlyList<ApprovedNodeRule> Load(string path)
-    {
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var nodes = document.RootElement.ValueKind == JsonValueKind.Array
-            ? document.RootElement
-            : document.RootElement.GetProperty("nodes");
-
-        var rules = new List<ApprovedNodeRule>();
-        var index = 0;
-        foreach (var node in nodes.EnumerateArray())
-        {
-            index++;
-            var label = GetString(node, "label") ?? $"Node {index}";
-            var knownDeviceId = GetString(node, "knownDeviceId") ?? GetString(node, "known_device_id");
-            var localName = GetString(node, "localName") ?? GetString(node, "local_name");
-            var address = GetString(node, "address");
-
-            if (knownDeviceId is null && localName is null && address is null)
-            {
-                throw new InvalidOperationException(
-                    $"Approved node '{label}' must include at least one of knownDeviceId, localName, or address.");
-            }
-
-            rules.Add(new ApprovedNodeRule(
-                Id: GetString(node, "id") ?? $"rule-{index}",
-                Label: label,
-                KnownDeviceId: knownDeviceId,
-                LocalName: localName,
-                Address: address));
-        }
-
-        return rules;
-    }
-
-    private static string? GetString(JsonElement payload, string propertyName)
-        => payload.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
-
-    private static string? DeriveAdvertisedName(string? knownDeviceId)
-    {
-        if (string.IsNullOrWhiteSpace(knownDeviceId))
-        {
-            return null;
-        }
-
-        var suffixStart = Math.Max(0, knownDeviceId.Length - 6);
-        return "GymMotion-" + knownDeviceId.Substring(suffixStart);
-    }
-
-    private static string? NormalizeAddress(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
-        var cleaned = new string(value.Where(char.IsAsciiHexDigit).ToArray()).ToUpperInvariant();
-        return cleaned.Length == 12
-            ? string.Join(":", Enumerable.Range(0, 6).Select(index => cleaned.Substring(index * 2, 2)))
-            : value.ToUpperInvariant();
-    }
-}
-
-internal sealed record SessionStatus(
-    string? Type,
-    string? DeviceId,
-    string? BootId,
-    string? SessionId,
-    string? SessionNonce);
-
-internal sealed class Config
-{
-    public required string BackendUrl { get; init; }
-    public required string GatewayId { get; init; }
-    public required string NodesFile { get; init; }
-    public string? AdapterName { get; init; }
-
-    private const string DefaultBackendUrl = "https://gym-motion-production.up.railway.app";
-
-    public static Config Parse(string[] args)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        for (var index = 0; index < args.Length; index++)
-        {
-            var current = args[index];
-            if (!current.StartsWith("--", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"Unsupported argument '{current}'.");
-            }
-
-            if (index + 1 >= args.Length)
-            {
-                throw new ArgumentException($"Missing value for '{current}'.");
-            }
-
-            values[current[2..]] = args[++index];
-        }
-
-        var backendUrl =
-            values.GetValueOrDefault("backend-url") ??
-            Environment.GetEnvironmentVariable("GYM_MOTION_CLOUD_API_BASE_URL") ??
-            Environment.GetEnvironmentVariable("GATEWAY_BACKEND_URL") ??
-            DefaultBackendUrl;
-        var gatewayId =
-            values.GetValueOrDefault("gateway-id") ??
-            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_ID") ??
-            Environment.GetEnvironmentVariable("GATEWAY_ID");
-        var nodesFile =
-            values.GetValueOrDefault("nodes-file") ??
-            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_NODES_FILE") ??
-            Environment.GetEnvironmentVariable("GATEWAY_NODES_FILE");
-        var adapterName =
-            values.GetValueOrDefault("adapter") ??
-            Environment.GetEnvironmentVariable("GYM_MOTION_GATEWAY_ADAPTER") ??
-            Environment.GetEnvironmentVariable("GATEWAY_ADAPTER") ??
-            "hci0";
-
-        if (string.IsNullOrWhiteSpace(gatewayId) || string.IsNullOrWhiteSpace(nodesFile))
-        {
-            throw new ArgumentException(
-                "Usage: --gateway-id <id> --nodes-file <path> [--backend-url <url>] [--adapter <hci0>]. " +
-                "You can also set GYM_MOTION_GATEWAY_ID, GYM_MOTION_GATEWAY_NODES_FILE, " +
-                "GYM_MOTION_CLOUD_API_BASE_URL, and GYM_MOTION_GATEWAY_ADAPTER.");
-        }
-
-        return new Config
-        {
-            BackendUrl = backendUrl.TrimEnd('/'),
-            GatewayId = gatewayId,
-            NodesFile = nodesFile,
-            AdapterName = adapterName,
-        };
     }
 }
