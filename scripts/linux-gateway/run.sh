@@ -6,6 +6,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 env_file="$script_dir/linux-ble-gateway.env"
 default_nodes_file="$script_dir/linux-ble-gateway.nodes.json"
 example_nodes_file="$script_dir/linux-ble-gateway.nodes.example.json"
+gateway_dll="$repo_root/native/linux-dotnet-ble-gateway/out/gym-motion-ble-linux.dll"
 
 if [[ -f "$env_file" ]]; then
   set -a
@@ -32,9 +33,14 @@ if [[ ! -f "$nodes_file" ]]; then
   exit 1
 fi
 
-exec dotnet run \
-  --project "$repo_root/native/linux-dotnet-ble-gateway/GymMotion.LinuxBleGateway.csproj" \
-  -- \
+if [[ ! -f "$gateway_dll" ]]; then
+  echo "Missing published gateway: $gateway_dll"
+  echo "Publish it first with:"
+  echo "  bash \"$script_dir/publish.sh\""
+  exit 1
+fi
+
+exec dotnet "$gateway_dll" \
   --gateway-id "$gateway_id" \
   --nodes-file "$nodes_file" \
   --backend-url "$backend_url" \

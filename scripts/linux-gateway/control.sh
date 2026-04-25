@@ -6,7 +6,7 @@ service_name="gym-motion-linux-gateway.service"
 command="${1:-}"
 
 if [[ -z "$command" ]]; then
-  echo "Usage: $0 <install|start|stop|restart|status|logs>"
+  echo "Usage: $0 <install|publish|check|start|stop|restart|status|logs>"
   exit 1
 fi
 
@@ -15,6 +15,14 @@ case "$command" in
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     exec "$script_dir/install-systemd.sh"
     ;;
+  publish)
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    exec "$script_dir/publish.sh"
+    ;;
+  check)
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    exec "$script_dir/check.sh"
+    ;;
   start)
     exec sudo systemctl start "$service_name"
     ;;
@@ -22,6 +30,8 @@ case "$command" in
     exec sudo systemctl stop "$service_name"
     ;;
   restart)
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    "$script_dir/publish.sh"
     exec sudo systemctl restart "$service_name"
     ;;
   status)
@@ -32,7 +42,7 @@ case "$command" in
     ;;
   *)
     echo "Unsupported command: $command"
-    echo "Usage: $0 <install|start|stop|restart|status|logs>"
+    echo "Usage: $0 <install|publish|check|start|stop|restart|status|logs>"
     exit 1
     ;;
 esac

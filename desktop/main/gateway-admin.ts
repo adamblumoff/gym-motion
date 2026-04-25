@@ -14,7 +14,7 @@ import {
 } from "@core/services";
 import type { GatewayAdminStore } from "./gateway-admin-store";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 function shellQuote(value: string) {
   return "'" + value.replace(/'/g, `'"'"'`) + "'";
@@ -34,9 +34,11 @@ function normalizeRemotePath(path: string) {
 
 function buildRemoteCommand(
   command: GatewayAdminCommand,
-  serviceName: string,
+  gateway: GatewayAdminGateway,
   customCommand?: string,
 ) {
+  const serviceName = gateway.serviceName;
+
   switch (command) {
     case "status":
       return `sudo -n systemctl status --no-pager ${shellQuote(serviceName)}`;
@@ -45,7 +47,7 @@ function buildRemoteCommand(
     case "stop":
       return `sudo -n systemctl stop ${shellQuote(serviceName)}`;
     case "restart":
-      return `sudo -n systemctl restart ${shellQuote(serviceName)}`;
+      return `cd ${normalizeRemotePath(gateway.repoPath)} && ./scripts/linux-gateway/control.sh restart`;
     case "logs":
       return `sudo -n journalctl -u ${shellQuote(serviceName)} -n 200 --no-pager`;
     case "custom": {
@@ -278,7 +280,7 @@ export function registerGatewayAdminBridge(store: GatewayAdminStore) {
 
       const remoteCommand = buildRemoteCommand(
         input.command,
-        gateway.serviceName,
+        gateway,
         input.customCommand,
       );
       const startedAt = new Date().toISOString();

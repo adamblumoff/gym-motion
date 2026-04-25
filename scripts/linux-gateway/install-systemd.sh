@@ -7,6 +7,7 @@ service_template="$script_dir/gym-motion-linux-gateway.service"
 service_target="/etc/systemd/system/gym-motion-linux-gateway.service"
 env_file="$script_dir/linux-ble-gateway.env"
 run_script="$script_dir/run.sh"
+publish_script="$script_dir/publish.sh"
 current_user="${SUDO_USER:-$USER}"
 
 if [[ ! -f "$env_file" ]]; then
@@ -19,6 +20,12 @@ fi
 if [[ ! -x "$run_script" ]]; then
   chmod +x "$run_script"
 fi
+
+if [[ ! -x "$publish_script" ]]; then
+  chmod +x "$publish_script"
+fi
+
+"$publish_script"
 
 tmp_service="$(mktemp)"
 trap 'rm -f "$tmp_service"' EXIT

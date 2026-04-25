@@ -59,6 +59,7 @@ target/
 # dotnet native helpers
 native/**/bin/
 native/**/obj/
+native/**/out/
 gym-motion.sln
 scripts/linux-gateway/linux-ble-gateway.env
 scripts/linux-gateway/linux-ble-gateway.nodes.json

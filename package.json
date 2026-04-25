@@ -16,6 +16,8 @@
     "backend:start": "bun run build:runtime && node out/runtime/backend/server/standalone.js",
     "gateway:linux": "bash ./scripts/linux-gateway/run.sh",
     "gateway:linux:install": "bash ./scripts/linux-gateway/control.sh install",
+    "gateway:linux:publish": "bash ./scripts/linux-gateway/control.sh publish",
+    "gateway:linux:check": "bash ./scripts/linux-gateway/control.sh check",
     "gateway:linux:start": "bash ./scripts/linux-gateway/control.sh start",
     "gateway:linux:stop": "bash ./scripts/linux-gateway/control.sh stop",
     "gateway:linux:restart": "bash ./scripts/linux-gateway/control.sh restart",
