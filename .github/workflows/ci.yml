@@ -51,6 +51,7 @@ jobs:
               - ".github/workflows/ci.yml"
             linux_gateway:
               - "native/linux-dotnet-ble-gateway/**"
+              - "native/linux-dotnet-ble-gateway.tests/**"
               - "scripts/linux-gateway/**"
               - "package.json"
               - "bun.lock"
@@ -158,6 +159,9 @@ jobs:
 
       - name: Build Linux gateway
         run: dotnet build native/linux-dotnet-ble-gateway/GymMotion.LinuxBleGateway.csproj --configuration Release
+
+      - name: Test Linux gateway
+        run: dotnet test native/linux-dotnet-ble-gateway.tests/GymMotion.LinuxBleGateway.Tests.csproj --configuration Release
 
   firmware-build:
     needs: changes

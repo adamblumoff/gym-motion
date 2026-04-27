@@ -17,6 +17,7 @@
     "gateway:linux": "bash ./scripts/linux-gateway/run.sh",
     "gateway:linux:install": "bash ./scripts/linux-gateway/control.sh install",
     "gateway:linux:publish": "bash ./scripts/linux-gateway/control.sh publish",
+    "gateway:linux:test": "dotnet test native/linux-dotnet-ble-gateway.tests/GymMotion.LinuxBleGateway.Tests.csproj --configuration Release",
     "gateway:linux:check": "bash ./scripts/linux-gateway/control.sh check",
     "gateway:linux:start": "bash ./scripts/linux-gateway/control.sh start",
     "gateway:linux:stop": "bash ./scripts/linux-gateway/control.sh stop",
