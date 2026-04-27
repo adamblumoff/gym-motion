@@ -129,3 +129,40 @@ TEST_CASE("parseRuntimeControlCommand rejects malformed JSON") {
   );
   CHECK(wrongType.type == ControlCommandType::Unknown);
 }
+
+TEST_CASE("runtime lease command applies only to the active app session") {
+  AppSessionState state = createResetAppSessionState(15'000);
+  state.runtimeAppSessionConnected = true;
+  state.runtimeAppSessionId = "abcd1234-session";
+  state.runtimeAppSessionNonce = "nonce-1";
+
+  ControlCommand command;
+  command.type = ControlCommandType::AppSessionLease;
+  command.sessionId = "abcd1234";
+
+  CHECK(canApplyAppSessionLease(state, command));
+
+  command.sessionId = "other-session";
+  CHECK_FALSE(canApplyAppSessionLease(state, command));
+
+  command.sessionId = "";
+  CHECK_FALSE(canApplyAppSessionLease(state, command));
+}
+
+TEST_CASE("runtime end command may omit the session token") {
+  AppSessionState state = createResetAppSessionState(15'000);
+  state.runtimeAppSessionConnected = true;
+  state.runtimeAppSessionId = "abcd1234-session";
+
+  ControlCommand command;
+  command.type = ControlCommandType::AppSessionEnd;
+  command.sessionId = "";
+
+  CHECK(canApplyAppSessionEnd(state, command));
+
+  command.sessionId = "abcd1234";
+  CHECK(canApplyAppSessionEnd(state, command));
+
+  command.sessionId = "other-session";
+  CHECK_FALSE(canApplyAppSessionEnd(state, command));
+}

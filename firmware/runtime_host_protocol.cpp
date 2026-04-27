@@ -4,6 +4,22 @@
 namespace firmware_runtime {
 namespace {
 
+bool sessionTokenMatches(
+  const std::string& activeSessionId,
+  const std::string& sessionToken,
+  bool emptyTokenMatches
+) {
+  if (sessionToken.empty()) {
+    return emptyTokenMatches;
+  }
+
+  if (sessionToken.length() == 8) {
+    return activeSessionId.compare(0, sessionToken.length(), sessionToken) == 0;
+  }
+
+  return activeSessionId == sessionToken;
+}
+
 }  // namespace
 
 AppSessionState createResetAppSessionState(unsigned long defaultLeaseTimeoutMs) {
@@ -151,6 +167,27 @@ ControlCommand parseRuntimeControlCommand(
   }
 
   return command;
+}
+
+bool canApplyAppSessionLease(
+  const AppSessionState& state,
+  const ControlCommand& command
+) {
+  return command.type == ControlCommandType::AppSessionLease &&
+    state.runtimeAppSessionConnected &&
+    !state.runtimeAppSessionId.empty() &&
+    !state.runtimeAppSessionNonce.empty() &&
+    sessionTokenMatches(state.runtimeAppSessionId, command.sessionId, false);
+}
+
+bool canApplyAppSessionEnd(
+  const AppSessionState& state,
+  const ControlCommand& command
+) {
+  return command.type == ControlCommandType::AppSessionEnd &&
+    state.runtimeAppSessionConnected &&
+    !state.runtimeAppSessionId.empty() &&
+    sessionTokenMatches(state.runtimeAppSessionId, command.sessionId, true);
 }
 
 }  // namespace firmware_runtime

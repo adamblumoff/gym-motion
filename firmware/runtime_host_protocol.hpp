@@ -73,5 +73,13 @@ ControlCommand parseRuntimeControlCommand(
   const std::string& payload,
   unsigned long defaultLeaseTimeoutMs
 );
+bool canApplyAppSessionLease(
+  const AppSessionState& state,
+  const ControlCommand& command
+);
+bool canApplyAppSessionEnd(
+  const AppSessionState& state,
+  const ControlCommand& command
+);
 
 }  // namespace firmware_runtime

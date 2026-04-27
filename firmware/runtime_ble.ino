@@ -762,22 +762,10 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
     const String sessionId = command.sessionId.c_str();
     const unsigned long expiresInMs = command.expiresInMs;
 
-    if (sessionId.length() == 0) {
-      return;
-    }
-
-    if (!runtimeAppSessionConnected ||
-        runtimeAppSessionId.length() == 0 ||
-        runtimeAppSessionNonce.length() == 0) {
-      return;
-    }
-
-    const bool shortReconnectToken = sessionId.length() == 8;
-    const bool sessionMatches = shortReconnectToken
-      ? runtimeAppSessionId.startsWith(sessionId)
-      : runtimeAppSessionId == sessionId;
-
-    if (!sessionMatches) {
+    if (!firmware_runtime::canApplyAppSessionLease(
+          captureRuntimeAppSessionState(),
+          command
+        )) {
       return;
     }
 
@@ -793,17 +781,10 @@ void handleRuntimeControl(const String& payload, int32_t notifyConnHandle = -1) 
   }
 
   if (command.type == firmware_runtime::ControlCommandType::AppSessionEnd) {
-    const String sessionId = command.sessionId.c_str();
-    const bool shortReconnectToken = sessionId.length() == 8;
-    const bool sessionMatches =
-      sessionId.length() == 0 ||
-      (shortReconnectToken
-        ? runtimeAppSessionId.startsWith(sessionId)
-        : runtimeAppSessionId == sessionId);
-
-    if (!runtimeAppSessionConnected ||
-        runtimeAppSessionId.length() == 0 ||
-        !sessionMatches) {
+    if (!firmware_runtime::canApplyAppSessionEnd(
+          captureRuntimeAppSessionState(),
+          command
+        )) {
       return;
     }
     resetRuntimeAppSessionState();
