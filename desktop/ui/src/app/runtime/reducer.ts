@@ -136,74 +136,18 @@ function applyRuntimeEvent(
     return previousSnapshot;
   }
 
-  switch (event.type) {
-    case "runtime-batch":
-      return applyRuntimeBatch(previousSnapshot, event.patch);
-    case "gateway-updated":
-      return {
-        ...previousSnapshot,
-        gateway: event.gateway,
-        liveStatus: event.liveStatus,
-        runtimeState: event.runtimeState,
-        gatewayIssue: event.gatewayIssue,
-      };
-    case "device-upserted":
-      return {
-        ...previousSnapshot,
-        devices: mergeGatewayDeviceUpdate(previousSnapshot.devices, event.device),
-      };
-    case "event-recorded":
-      return {
-        ...previousSnapshot,
-        events: mergeEventUpdate(previousSnapshot.events, event.event, 14),
-      };
-    case "log-recorded":
-      return {
-        ...previousSnapshot,
-        logs: mergeLogUpdate(previousSnapshot.logs, event.log, 18),
-      };
-    case "activity-recorded":
-      return {
-        ...previousSnapshot,
-        activities: mergeActivityUpdate(previousSnapshot.activities, event.activity, 30),
-      };
-    default:
-      return previousSnapshot;
+  if (event.type === "runtime-batch") {
+    return applyRuntimeBatch(previousSnapshot, event.patch);
   }
+
+  return previousSnapshot;
 }
 
 function applyRuntimeBatch(
   previousSnapshot: DesktopSnapshot,
   patch: DesktopRuntimeBatchPatch,
 ): DesktopSnapshot {
-  if (patch.replaceSnapshot) {
-    return patch.replaceSnapshot;
-  }
-
   let nextSnapshot = previousSnapshot;
-
-  if (patch.removedEventIds?.length) {
-    nextSnapshot = {
-      ...nextSnapshot,
-      events: nextSnapshot.events.filter((event) => !patch.removedEventIds?.includes(event.id)),
-    };
-  }
-
-  if (patch.removedLogIds?.length) {
-    nextSnapshot = {
-      ...nextSnapshot,
-      logs: nextSnapshot.logs.filter((log) => !patch.removedLogIds?.includes(log.id)),
-    };
-  }
-
-  if (patch.removedActivityIds?.length) {
-    nextSnapshot = {
-      ...nextSnapshot,
-      activities: nextSnapshot.activities.filter(
-        (activity) => !patch.removedActivityIds?.includes(activity.id),
-      ),
-    };
-  }
 
   if (patch.gateway) {
     nextSnapshot = {
@@ -314,10 +258,6 @@ export function applyRuntimeEventToState(
   current: DesktopAppState,
   event: DesktopRuntimeEvent,
 ): DesktopAppState {
-  if (event.type === "analytics-updated") {
-    return replaceDeviceAnalytics(current, event.analytics);
-  }
-
   if (event.type === "analytics-invalidated") {
     return invalidateDeviceAnalytics(current, event.deviceIds);
   }

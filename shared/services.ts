@@ -106,18 +106,14 @@ export type GatewayAdminReadinessResult = {
 export type DesktopRuntimeBatchPatch = {
   devices?: GatewayRuntimeDeviceSummary[];
   events?: MotionEventSummary[];
-  removedEventIds?: Array<number | string>;
   logs?: DeviceLogSummary[];
-  removedLogIds?: Array<number | string>;
   activities?: DeviceActivitySummary[];
-  removedActivityIds?: Array<number | string>;
   gateway?: {
     gateway: GatewayStatusSummary;
     liveStatus: string;
     runtimeState: DesktopSnapshot["runtimeState"];
     gatewayIssue: string | null;
   };
-  replaceSnapshot?: DesktopSnapshot;
 };
 
 export type DesktopRuntimeEvent =
@@ -130,35 +126,8 @@ export type DesktopRuntimeEvent =
       setup: DesktopSetupState;
     }
   | {
-      type: "gateway-updated";
-      gateway: GatewayStatusSummary;
-      liveStatus: string;
-      runtimeState: DesktopSnapshot["runtimeState"];
-      gatewayIssue: string | null;
-    }
-  | {
-      type: "device-upserted";
-      device: GatewayRuntimeDeviceSummary;
-    }
-  | {
-      type: "event-recorded";
-      event: MotionEventSummary;
-    }
-  | {
-      type: "log-recorded";
-      log: DeviceLogSummary;
-    }
-  | {
-      type: "activity-recorded";
-      activity: DeviceActivitySummary;
-    }
-  | {
       type: "runtime-batch";
       patch: DesktopRuntimeBatchPatch;
-    }
-  | {
-      type: "analytics-updated";
-      analytics: DeviceAnalyticsSnapshot;
     }
   | {
       type: "analytics-invalidated";
