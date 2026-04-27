@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -47,7 +46,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
 
     private readonly Config _config;
     private readonly IReadOnlyList<ApprovedNodeRule> _rules;
-    private readonly HttpClient _httpClient = new();
+    private readonly BackendTelemetryClient _backend;
     private readonly ConcurrentDictionary<string, RuleRuntime> _runtimeByRuleId = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
     private IAdapter1? _adapter;
@@ -57,8 +56,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
     {
         _config = config;
         _rules = ApprovedNodeRule.Load(config.NodesFile);
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "gym-motion-linux-gateway-poc");
-        _httpClient.DefaultRequestHeaders.Add("X-Gym-Motion-Gateway-Id", config.GatewayId);
+        _backend = new BackendTelemetryClient(config);
     }
 
     public async Task RunAsync()
@@ -320,7 +318,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         }
 
         var bytes = await runtime.StatusCharacteristic.ReadValueAsync(ReadTimeout);
-        if (ParseJson(bytes) is not JsonElement payload)
+        if (GatewayJson.ParseElement(bytes) is not JsonElement payload)
         {
             return null;
         }
@@ -354,130 +352,56 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         string source,
         CancellationToken cancellationToken)
     {
-        if (ParseJson(bytes) is not JsonElement payload)
+        var telemetry = GatewayTelemetryPayload.TryRead(bytes, runtime.Rule.KnownDeviceId);
+        if (telemetry is null)
         {
             return;
         }
 
-        var payloadText = JsonSerializer.Serialize(payload);
-        if (string.Equals(payloadText, runtime.LastPayloadText, StringComparison.Ordinal))
+        if (string.Equals(telemetry.Text, runtime.LastPayloadText, StringComparison.Ordinal))
         {
             return;
         }
 
-        runtime.LastPayloadText = payloadText;
+        runtime.LastPayloadText = telemetry.Text;
 
-        var deviceId = GatewayJson.GetString(payload, "deviceId") ?? runtime.Rule.KnownDeviceId;
-        var state = GatewayJson.GetString(payload, "state");
-        var timestamp = GatewayJson.GetInt64(payload, "timestamp");
-
-        if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(state) || timestamp is null)
+        if (!telemetry.HasRequiredFields)
         {
             Log("ignored telemetry payload missing required fields", new Dictionary<string, object?>
             {
                 ["ruleId"] = runtime.Rule.Id,
-                ["payload"] = payloadText,
+                ["payload"] = telemetry.Text,
             });
             return;
         }
 
-        if (GatewayJson.GetBool(payload, "snapshot") == true || string.Equals(runtime.LastMotionState, state, StringComparison.Ordinal))
+        if (telemetry.IsHeartbeat(runtime.LastMotionState))
         {
-            var heartbeat = new Dictionary<string, object?>
-            {
-                ["deviceId"] = deviceId,
-                ["gatewayId"] = _config.GatewayId,
-                ["timestamp"] = timestamp.Value,
-            };
-            CopyOptionalString(payload, heartbeat, "bootId");
-            CopyOptionalString(payload, heartbeat, "firmwareVersion");
-            CopyOptionalString(payload, heartbeat, "hardwareId");
-            await PostAsync("/api/heartbeat", heartbeat, cancellationToken);
+            await _backend.PostHeartbeatAsync(
+                telemetry.ToHeartbeatPayload(_config.GatewayId),
+                cancellationToken);
             Log("heartbeat forwarded", new Dictionary<string, object?>
             {
                 ["ruleId"] = runtime.Rule.Id,
                 ["source"] = source,
-                ["deviceId"] = deviceId,
-                ["state"] = state,
+                ["deviceId"] = telemetry.DeviceId,
+                ["state"] = telemetry.State,
             });
             return;
         }
 
-        var ingest = new Dictionary<string, object?>
-        {
-            ["deviceId"] = deviceId,
-            ["gatewayId"] = _config.GatewayId,
-            ["state"] = state,
-            ["timestamp"] = timestamp.Value,
-            ["delta"] = GatewayJson.GetInt64(payload, "delta"),
-        };
-        CopyOptionalString(payload, ingest, "sensorIssue");
-        CopyOptionalInt64(payload, ingest, "sequence");
-        CopyOptionalString(payload, ingest, "bootId");
-        CopyOptionalString(payload, ingest, "firmwareVersion");
-        CopyOptionalString(payload, ingest, "hardwareId");
-
-        await PostAsync("/api/ingest", ingest, cancellationToken);
-        runtime.LastMotionState = state;
+        await _backend.PostMotionAsync(
+            telemetry.ToMotionPayload(_config.GatewayId),
+            cancellationToken);
+        runtime.LastMotionState = telemetry.State;
 
         Log("motion forwarded", new Dictionary<string, object?>
         {
             ["ruleId"] = runtime.Rule.Id,
             ["source"] = source,
-            ["deviceId"] = deviceId,
-            ["state"] = state,
+            ["deviceId"] = telemetry.DeviceId,
+            ["state"] = telemetry.State,
         });
-    }
-
-    private async Task PostAsync(string path, Dictionary<string, object?> payload, CancellationToken cancellationToken)
-    {
-        using var response = await _httpClient.PostAsJsonAsync(
-            $"{_config.BackendUrl}{path}",
-            payload,
-            cancellationToken);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private static JsonElement? ParseJson(byte[] bytes)
-    {
-        var text = Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n', '\t');
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        var firstBrace = text.IndexOf('{');
-        var lastBrace = text.LastIndexOf('}');
-        if (firstBrace >= 0 && lastBrace >= firstBrace)
-        {
-            text = text[firstBrace..(lastBrace + 1)];
-        }
-
-        if (!text.StartsWith("{", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        using var document = JsonDocument.Parse(text);
-        return document.RootElement.Clone();
-    }
-
-    private static void CopyOptionalString(JsonElement payload, Dictionary<string, object?> target, string propertyName)
-    {
-        var value = GatewayJson.GetString(payload, propertyName);
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            target[propertyName] = value;
-        }
-    }
-
-    private static void CopyOptionalInt64(JsonElement payload, Dictionary<string, object?> target, string propertyName)
-    {
-        var value = GatewayJson.GetInt64(payload, propertyName);
-        if (value is not null)
-        {
-            target[propertyName] = value.Value;
-        }
     }
 
     private static Guid ReadGuid(string name, string fallback)
@@ -519,7 +443,7 @@ internal sealed class LinuxGatewayApp : IAsyncDisposable
         _shutdown.Cancel();
         _deviceWatcher?.Dispose();
         await DisposeConnectionsAsync();
-        _httpClient.Dispose();
+        _backend.Dispose();
         _shutdown.Dispose();
     }
 }
