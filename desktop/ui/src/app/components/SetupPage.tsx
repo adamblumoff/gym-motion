@@ -21,10 +21,7 @@ import { toast } from "sonner";
 
 import type {
   GatewayAdminCommand,
-  GatewayAdminCommandResult,
-  GatewayAdminConfig,
   GatewayAdminGateway,
-  GatewayAdminReadinessResult,
 } from "@core/services";
 
 import { ConfirmationDialog } from "./ConfirmationDialog";
@@ -40,35 +37,36 @@ import {
   buildCommandTitle,
   buildConnectionLabel,
   buildSshPreview,
-  cloneGateway,
-  createGatewayDraft,
   DEFAULT_PORT,
   formatTimestamp,
-  isGatewayValid,
 } from "./setup/gateway-admin-utils";
+import {
+  applyDeletedGatewayAdminConfig,
+  applySavedGatewayAdminConfig,
+  buildGatewayAdminConfigForSave,
+  canSaveGateway as canSaveGatewayInState,
+  cancelGatewayEditing,
+  filterGatewayAdminGateways,
+  getPersistedSelectedGateway,
+  initialGatewayAdminEditorState,
+  isCreateMode as isCreateModeInState,
+  isEditorDirty,
+  loadGatewayAdminConfig,
+  patchGatewayDraft,
+  requestDeleteGateway as requestDeleteGatewayInState,
+  selectGateway as selectGatewayInState,
+  startCreateGateway as startCreateGatewayInState,
+} from "./setup/gateway-admin-editor-state";
 import { Button } from "./ui/button";
 import { cn } from "./ui/utils";
 
-type EditorMode = "edit" | "create";
-
 export function SetupPage() {
-  const [config, setConfig] = useState<GatewayAdminConfig | null>(null);
-  const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(null);
-  const [editorMode, setEditorMode] = useState<EditorMode>("edit");
-  const [editorGateway, setEditorGateway] = useState<GatewayAdminGateway | null>(null);
-  const [returnGatewayId, setReturnGatewayId] = useState<string | null>(null);
+  const [editor, setEditor] = useState(initialGatewayAdminEditorState);
   const [searchQuery, setSearchQuery] = useState("");
-  const [lastResult, setLastResult] = useState<GatewayAdminCommandResult | null>(null);
-  const [readiness, setReadiness] = useState<GatewayAdminReadinessResult | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [deletingGatewayId, setDeletingGatewayId] = useState<string | null>(null);
-  const [pendingDeleteGatewayId, setPendingDeleteGatewayId] = useState<string | null>(null);
-  const [runningCommand, setRunningCommand] = useState<GatewayAdminCommand | null>(null);
-  const [checkingReadiness, setCheckingReadiness] = useState(false);
 
   const persistedSelectedGateway = useMemo(
-    () => config?.gateways.find((gateway) => gateway.id === selectedGatewayId) ?? null,
-    [config, selectedGatewayId],
+    () => getPersistedSelectedGateway(editor),
+    [editor],
   );
 
   useEffect(() => {
@@ -81,11 +79,7 @@ export function SetupPage() {
           return;
         }
 
-        const firstGateway = nextConfig.gateways[0] ?? null;
-        setConfig(nextConfig);
-        setSelectedGatewayId(firstGateway?.id ?? null);
-        setEditorMode("edit");
-        setEditorGateway(cloneGateway(firstGateway));
+        setEditor(loadGatewayAdminConfig(nextConfig));
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : "Failed to load gateway config.");
@@ -96,66 +90,14 @@ export function SetupPage() {
     };
   }, []);
 
-  const filteredGateways = useMemo(() => {
-    const gateways = config?.gateways ?? [];
-    const query = searchQuery.trim().toLowerCase();
-
-    if (!query) {
-      return gateways;
-    }
-
-    return gateways.filter((gateway) =>
-      [gateway.label, gateway.host, gateway.user, gateway.sshHostAlias]
-        .filter(Boolean)
-        .some((value) => value?.toLowerCase().includes(query)),
-    );
-  }, [config?.gateways, searchQuery]);
-
-  const isCreateMode = editorMode === "create";
-  const activeGateway = editorGateway;
-  const editorDirty = useMemo(() => {
-    if (!editorGateway) {
-      return false;
-    }
-
-    if (editorMode === "create") {
-      return true;
-    }
-
-    if (!persistedSelectedGateway) {
-      return false;
-    }
-
-    return JSON.stringify(editorGateway) !== JSON.stringify(persistedSelectedGateway);
-  }, [editorGateway, editorMode, persistedSelectedGateway]);
-
-  const canSaveGateway =
-    !!editorGateway && isGatewayValid(editorGateway) && (editorMode === "create" || editorDirty);
-
-  useEffect(() => {
-    if (editorMode === "create") {
-      setReadiness(null);
-      return;
-    }
-
-    if (!persistedSelectedGateway) {
-      setReadiness(null);
-      if (config && config.gateways.length > 0 && selectedGatewayId === null) {
-        const firstGateway = config.gateways[0] ?? null;
-        setSelectedGatewayId(firstGateway?.id ?? null);
-        setEditorGateway(cloneGateway(firstGateway));
-      }
-      return;
-    }
-
-    setEditorGateway((current) => {
-      if (!current || current.id !== persistedSelectedGateway.id || !editorDirty) {
-        return cloneGateway(persistedSelectedGateway);
-      }
-
-      return current;
-    });
-  }, [config, editorDirty, editorMode, persistedSelectedGateway, selectedGatewayId]);
+  const filteredGateways = useMemo(
+    () => filterGatewayAdminGateways(editor.config, searchQuery),
+    [editor.config, searchQuery],
+  );
+  const isCreateMode = isCreateModeInState(editor);
+  const activeGateway = editor.draft;
+  const editorDirty = isEditorDirty(editor);
+  const canSaveGateway = canSaveGatewayInState(editor);
 
   async function copyText(value: string, label: string) {
     try {
@@ -170,138 +112,82 @@ export function SetupPage() {
     field: TKey,
     value: GatewayAdminGateway[TKey],
   ) {
-    setEditorGateway((current) => (current ? { ...current, [field]: value } : current));
-  }
-
-  function syncFromConfig(nextConfig: GatewayAdminConfig, nextSelectedId: string | null) {
-    const nextSelectedGateway =
-      nextSelectedId !== null
-        ? nextConfig.gateways.find((gateway) => gateway.id === nextSelectedId) ?? null
-        : null;
-    setConfig(nextConfig);
-    setSelectedGatewayId(nextSelectedGateway?.id ?? null);
-    setEditorMode("edit");
-    setEditorGateway(cloneGateway(nextSelectedGateway));
-    setReturnGatewayId(null);
+    setEditor((current) => patchGatewayDraft(current, field, value));
   }
 
   function startCreateGateway() {
-    if (isCreateMode) {
-      return;
-    }
-
-    if (editorDirty) {
-      toast.error("Save or cancel the current gateway changes first.");
-      return;
-    }
-
-    setReturnGatewayId(selectedGatewayId);
-    setEditorMode("create");
-    setEditorGateway(createGatewayDraft());
-    setReadiness(null);
+    setEditor((current) => {
+      const next = startCreateGatewayInState(current);
+      if (!next) {
+        toast.error("Save or cancel the current gateway changes first.");
+        return current;
+      }
+      return next;
+    });
   }
 
   function selectGateway(gatewayId: string) {
-    const nextGateway = config?.gateways.find((gateway) => gateway.id === gatewayId) ?? null;
-    if (!nextGateway) {
-      return;
-    }
-
-    if (isCreateMode || editorDirty) {
-      toast.error("Save or cancel the current gateway changes first.");
-      return;
-    }
-
-    setSelectedGatewayId(nextGateway.id);
-    setEditorMode("edit");
-    setEditorGateway(cloneGateway(nextGateway));
-    if (readiness?.gatewayId !== nextGateway.id) {
-      setReadiness(null);
-    }
+    setEditor((current) => {
+      const next = selectGatewayInState(current, gatewayId);
+      if (!next) {
+        if (isCreateModeInState(current) || isEditorDirty(current)) {
+          toast.error("Save or cancel the current gateway changes first.");
+        }
+        return current;
+      }
+      return next;
+    });
   }
 
   function cancelEditing() {
-    if (editorMode === "create") {
-      const nextSelectedId = returnGatewayId ?? config?.gateways[0]?.id ?? null;
-      const nextGateway =
-        nextSelectedId !== null
-          ? config?.gateways.find((gateway) => gateway.id === nextSelectedId) ?? null
-          : null;
-      setSelectedGatewayId(nextSelectedId);
-      setEditorMode("edit");
-      setEditorGateway(cloneGateway(nextGateway));
-      setReturnGatewayId(null);
-      setReadiness(null);
-      return;
-    }
-
-    setEditorGateway(cloneGateway(persistedSelectedGateway));
+    setEditor(cancelGatewayEditing);
   }
 
   async function saveGateway() {
-    if (!config || !editorGateway || !canSaveGateway) {
+    const nextConfig = buildGatewayAdminConfigForSave(editor);
+    if (!editor.draft || !nextConfig) {
       return;
     }
 
-    setIsSaving(true);
+    const savedGatewayId = editor.draft.id;
+    setEditor((current) => ({ ...current, isSaving: true }));
 
     try {
-      const nextConfig =
-        editorMode === "create"
-          ? { gateways: [...config.gateways, editorGateway] }
-          : {
-              gateways: config.gateways.map((gateway) =>
-                gateway.id === editorGateway.id ? editorGateway : gateway,
-              ),
-            };
-
       const saved = await window.gymMotionDesktop.saveGatewayAdminConfig(nextConfig);
-      syncFromConfig(saved, editorGateway.id);
-      setLastResult(null);
-      setReadiness(null);
+      setEditor((current) => applySavedGatewayAdminConfig(current, saved, savedGatewayId));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save gateway config.");
-    } finally {
-      setIsSaving(false);
+      setEditor((current) => ({ ...current, isSaving: false }));
     }
   }
 
   function requestDeleteGateway(gatewayId: string) {
-    if (isCreateMode || editorDirty) {
-      toast.error("Save or cancel the current gateway changes first.");
-      return;
-    }
-
-    setPendingDeleteGatewayId(gatewayId);
+    setEditor((current) => {
+      const next = requestDeleteGatewayInState(current, gatewayId);
+      if (!next) {
+        toast.error("Save or cancel the current gateway changes first.");
+        return current;
+      }
+      return next;
+    });
   }
 
   async function confirmDeleteGateway() {
-    if (!config || !pendingDeleteGatewayId) {
+    if (!editor.config || !editor.pendingDeleteGatewayId) {
       return;
     }
 
-    setDeletingGatewayId(pendingDeleteGatewayId);
+    const deletingGatewayId = editor.pendingDeleteGatewayId;
+    setEditor((current) => ({ ...current, deletingGatewayId }));
 
     try {
-      const nextGateways = config.gateways.filter((gateway) => gateway.id !== pendingDeleteGatewayId);
+      const nextGateways = editor.config.gateways.filter((gateway) => gateway.id !== deletingGatewayId);
       const nextConfig = { gateways: nextGateways };
       const saved = await window.gymMotionDesktop.saveGatewayAdminConfig(nextConfig);
-      const nextSelectedId =
-        selectedGatewayId === pendingDeleteGatewayId
-          ? saved.gateways[0]?.id ?? null
-          : selectedGatewayId;
-      syncFromConfig(saved, nextSelectedId);
-      if (lastResult?.gatewayId === pendingDeleteGatewayId) {
-        setLastResult(null);
-      }
-      if (readiness?.gatewayId === pendingDeleteGatewayId) {
-        setReadiness(null);
-      }
-      setPendingDeleteGatewayId(null);
+      setEditor((current) => applyDeletedGatewayAdminConfig(current, saved, deletingGatewayId));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete gateway.");
-    } finally {
-      setDeletingGatewayId(null);
+      setEditor((current) => ({ ...current, deletingGatewayId: null }));
     }
   }
 
@@ -311,7 +197,7 @@ export function SetupPage() {
       return;
     }
 
-    setRunningCommand(command);
+    setEditor((current) => ({ ...current, runningCommand: command }));
 
     try {
       const result = await window.gymMotionDesktop.runGatewayAdminCommand({
@@ -319,14 +205,14 @@ export function SetupPage() {
         command,
         customCommand: "",
       });
-      setLastResult(result);
+      setEditor((current) => ({ ...current, lastResult: result }));
       toast.success(
         result.ok ? `${buildCommandTitle(command)} finished.` : `${buildCommandTitle(command)} failed.`,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to run remote command.");
     } finally {
-      setRunningCommand(null);
+      setEditor((current) => ({ ...current, runningCommand: null }));
     }
   }
 
@@ -336,13 +222,13 @@ export function SetupPage() {
       return;
     }
 
-    setCheckingReadiness(true);
+    setEditor((current) => ({ ...current, checkingReadiness: true }));
 
     try {
       const nextReadiness = await window.gymMotionDesktop.checkGatewayAdminReadiness(
         persistedSelectedGateway.id,
       );
-      setReadiness(nextReadiness);
+      setEditor((current) => ({ ...current, readiness: nextReadiness }));
       toast.success(
         nextReadiness.overallOk
           ? "Gateway admin is ready."
@@ -351,7 +237,7 @@ export function SetupPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to check readiness.");
     } finally {
-      setCheckingReadiness(false);
+      setEditor((current) => ({ ...current, checkingReadiness: false }));
     }
   }
 
@@ -360,16 +246,16 @@ export function SetupPage() {
   const saveStatusLabel = isCreateMode ? "New gateway" : editorDirty ? "Unsaved changes" : activeGateway ? "Saved" : null;
   const saveStatusTone = isCreateMode || editorDirty ? "text-amber-300" : "text-zinc-500";
   const selectedConnectionLabel = activeGateway ? buildConnectionLabel(activeGateway) : "No gateway selected";
-  const lastUpdatedLabel = readiness?.checkedAt ?? lastResult?.finishedAt ?? null;
+  const lastUpdatedLabel = editor.readiness?.checkedAt ?? editor.lastResult?.finishedAt ?? null;
   const gatewayStatusTone = isCreateMode
     ? "warning"
-    : readiness?.overallOk
+    : editor.readiness?.overallOk
       ? "good"
       : "neutral";
   const gatewayStatusLabel = isCreateMode
     ? "Draft"
-    : readiness
-      ? readiness.overallOk
+    : editor.readiness
+      ? editor.readiness.overallOk
         ? "Active"
         : "Needs setup"
       : "Unverified";
@@ -394,7 +280,7 @@ export function SetupPage() {
                 variant="outline"
                 className="h-10 rounded-lg border-zinc-800 bg-zinc-950 px-4 text-sm text-zinc-100 hover:bg-zinc-900"
                 onClick={startCreateGateway}
-                disabled={isSaving || deletingGatewayId !== null}
+                disabled={editor.isSaving || editor.deletingGatewayId !== null}
               >
                 <Plus className="size-4" aria-hidden="true" />
                 Add Gateway
@@ -403,17 +289,17 @@ export function SetupPage() {
                 variant="outline"
                 className="h-10 rounded-lg border-zinc-800 bg-zinc-950 px-4 text-sm text-zinc-100 hover:bg-zinc-900"
                 onClick={() => void runReadinessCheck()}
-                disabled={!persistedSelectedGateway || checkingReadiness || isSaving}
+                disabled={!persistedSelectedGateway || editor.checkingReadiness || editor.isSaving}
               >
                 <ShieldCheck className="size-4" aria-hidden="true" />
-                {checkingReadiness ? "Checking..." : "Check Readiness"}
+                {editor.checkingReadiness ? "Checking..." : "Check Readiness"}
               </Button>
               {(isCreateMode || editorDirty) && (
                 <Button
                   variant="outline"
                   className="h-10 rounded-lg border-zinc-800 bg-zinc-950 px-4 text-sm text-zinc-100 hover:bg-zinc-900"
                   onClick={cancelEditing}
-                  disabled={isSaving}
+                  disabled={editor.isSaving}
                 >
                   Cancel
                 </Button>
@@ -421,10 +307,10 @@ export function SetupPage() {
               <Button
                 className="h-10 rounded-lg bg-blue-600 px-4 text-sm text-white hover:bg-blue-500"
                 onClick={() => void saveGateway()}
-                disabled={!canSaveGateway || isSaving}
+                disabled={!canSaveGateway || editor.isSaving}
               >
                 <CheckCircle2 className="size-4" aria-hidden="true" />
-                {isSaving ? "Saving..." : "Save Gateway"}
+                {editor.isSaving ? "Saving..." : "Save Gateway"}
               </Button>
             </div>
           </div>
@@ -481,8 +367,8 @@ export function SetupPage() {
                   </div>
                 ) : (
                   filteredGateways.map((gateway) => {
-                    const selected = !isCreateMode && gateway.id === selectedGatewayId;
-                    const statusReady = readiness?.gatewayId === gateway.id ? readiness.overallOk : false;
+                    const selected = !isCreateMode && gateway.id === editor.selectedGatewayId;
+                    const statusReady = editor.readiness?.gatewayId === gateway.id ? editor.readiness.overallOk : false;
 
                     return (
                       <button
@@ -632,10 +518,10 @@ export function SetupPage() {
                             Run a status check, control the service, or inspect logs.
                           </p>
                         </div>
-                        {lastResult ? (
-                          <div className={cn("text-xs tabular-nums", lastResult.ok ? "text-emerald-300" : "text-red-300")}>
-                            Last command: {buildCommandTitle(lastResult.command)}{" "}
-                            {lastResult.ok ? "succeeded" : "failed"}
+                        {editor.lastResult ? (
+                          <div className={cn("text-xs tabular-nums", editor.lastResult.ok ? "text-emerald-300" : "text-red-300")}>
+                            Last command: {buildCommandTitle(editor.lastResult.command)}{" "}
+                            {editor.lastResult.ok ? "succeeded" : "failed"}
                           </div>
                         ) : null}
                       </div>
@@ -643,8 +529,8 @@ export function SetupPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <QuickActionButton
                           icon={Terminal}
-                          title={runningCommand === "status" ? "Checking..." : "Status"}
-                          disabled={runningCommand !== null || editorDirty}
+                          title={editor.runningCommand === "status" ? "Checking..." : "Status"}
+                          disabled={editor.runningCommand !== null || editorDirty}
                           onClick={() => void runCommand("status")}
                           variant="primary"
                         />
@@ -653,20 +539,20 @@ export function SetupPage() {
 
                         <QuickActionButton
                           icon={Play}
-                          title={runningCommand === "start" ? "Starting..." : "Start"}
-                          disabled={runningCommand !== null || editorDirty}
+                          title={editor.runningCommand === "start" ? "Starting..." : "Start"}
+                          disabled={editor.runningCommand !== null || editorDirty}
                           onClick={() => void runCommand("start")}
                         />
                         <QuickActionButton
                           icon={Square}
-                          title={runningCommand === "stop" ? "Stopping..." : "Stop"}
-                          disabled={runningCommand !== null || editorDirty}
+                          title={editor.runningCommand === "stop" ? "Stopping..." : "Stop"}
+                          disabled={editor.runningCommand !== null || editorDirty}
                           onClick={() => void runCommand("stop")}
                         />
                         <QuickActionButton
                           icon={RotateCcw}
-                          title={runningCommand === "restart" ? "Restarting..." : "Restart"}
-                          disabled={runningCommand !== null || editorDirty}
+                          title={editor.runningCommand === "restart" ? "Restarting..." : "Restart"}
+                          disabled={editor.runningCommand !== null || editorDirty}
                           onClick={() => void runCommand("restart")}
                         />
 
@@ -674,8 +560,8 @@ export function SetupPage() {
 
                         <QuickActionButton
                           icon={FolderOpen}
-                          title={runningCommand === "logs" ? "Loading logs..." : "Logs"}
-                          disabled={runningCommand !== null || editorDirty}
+                          title={editor.runningCommand === "logs" ? "Loading logs..." : "Logs"}
+                          disabled={editor.runningCommand !== null || editorDirty}
                           onClick={() => void runCommand("logs")}
                         />
                       </div>
@@ -760,16 +646,16 @@ export function SetupPage() {
                         Verify SSH, key auth, repo path, service control, and logs.
                       </p>
                     </div>
-                    {readiness ? (
-                      <StatusPill tone={readiness.overallOk ? "good" : "warning"}>
-                        {readiness.overallOk ? "All checks passed" : "Needs setup"}
+                    {editor.readiness ? (
+                      <StatusPill tone={editor.readiness.overallOk ? "good" : "warning"}>
+                        {editor.readiness.overallOk ? "All checks passed" : "Needs setup"}
                       </StatusPill>
                     ) : null}
                   </div>
 
-                  {readiness ? (
+                  {editor.readiness ? (
                     <div className="mt-4 divide-y divide-zinc-800">
-                      {readiness.checks.map((check) => (
+                      {editor.readiness.checks.map((check) => (
                         <div key={check.key} className="grid grid-cols-[1fr_auto] gap-3 py-3">
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
@@ -795,10 +681,10 @@ export function SetupPage() {
                         variant="outline"
                         className="h-9 rounded-lg border-zinc-800 bg-zinc-950 text-zinc-100 hover:bg-zinc-900"
                         onClick={() => void runReadinessCheck()}
-                        disabled={!persistedSelectedGateway || checkingReadiness || isSaving}
+                        disabled={!persistedSelectedGateway || editor.checkingReadiness || editor.isSaving}
                       >
                         <ShieldCheck className="size-4" aria-hidden="true" />
-                        {checkingReadiness ? "Checking..." : "Check Readiness"}
+                        {editor.checkingReadiness ? "Checking..." : "Check Readiness"}
                       </Button>
                     </div>
                   )}
@@ -808,26 +694,26 @@ export function SetupPage() {
               {!isCreateMode && (
                 <Panel className="py-4">
                   <h3 className="text-lg font-semibold text-zinc-100">Command Output</h3>
-                  {lastResult ? (
+                  {editor.lastResult ? (
                     <div className="mt-4 space-y-3">
                       <div className="grid gap-3 border-y border-zinc-800 py-3 sm:grid-cols-2">
                         <div>
                           <div className="text-xs text-zinc-500">Gateway</div>
                           <div className="mt-1 truncate font-mono text-xs text-zinc-100">
-                            {lastResult.connectionLabel}
+                            {editor.lastResult.connectionLabel}
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-zinc-500">Result</div>
-                          <div className={cn("mt-1 text-sm", lastResult.ok ? "text-emerald-300" : "text-red-300")}>
-                            {lastResult.ok
+                          <div className={cn("mt-1 text-sm", editor.lastResult.ok ? "text-emerald-300" : "text-red-300")}>
+                            {editor.lastResult.ok
                               ? "Success"
-                              : `Failed${lastResult.exitCode !== null ? ` (${lastResult.exitCode})` : ""}`}
+                              : `Failed${editor.lastResult.exitCode !== null ? ` (${editor.lastResult.exitCode})` : ""}`}
                           </div>
                         </div>
                       </div>
                       <pre className="max-h-[18rem] overflow-auto whitespace-pre-wrap border-l border-zinc-700 pl-3.5 font-mono text-xs leading-6 text-zinc-100">
-                        {lastResult.combinedOutput || "Command returned no output."}
+                        {editor.lastResult.combinedOutput || "Command returned no output."}
                       </pre>
                     </div>
                   ) : (
@@ -843,14 +729,14 @@ export function SetupPage() {
       </div>
 
       <ConfirmationDialog
-        open={pendingDeleteGatewayId !== null}
+        open={editor.pendingDeleteGatewayId !== null}
         title="Delete gateway?"
         description="This removes the gateway from the local desktop config. You can add it again later if needed."
         confirmLabel="Delete Gateway"
-        pending={deletingGatewayId !== null}
+        pending={editor.deletingGatewayId !== null}
         onOpenChange={(open) => {
-          if (!open && deletingGatewayId === null) {
-            setPendingDeleteGatewayId(null);
+          if (!open && editor.deletingGatewayId === null) {
+            setEditor((current) => ({ ...current, pendingDeleteGatewayId: null }));
           }
         }}
         onConfirm={() => void confirmDeleteGateway()}
