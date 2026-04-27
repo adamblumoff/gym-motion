@@ -1,12 +1,7 @@
 import type {
-  ApprovedNodeRule,
-  DesktopSetupState,
-  DesktopSnapshot,
   DeviceLogSummary,
   DeviceActivitySummary,
-  DeviceAnalyticsSnapshot,
   DeviceSummary,
-  GatewayRuntimeDeviceSummary,
   GetDeviceAnalyticsInput,
   MotionEventSummary,
 } from "@core/contracts";
@@ -20,283 +15,33 @@ import {
 } from "@core/contracts";
 import type { DesktopRuntimeEvent } from "@core/services";
 
-import {
-  createEmptySetupState,
-  createEmptySnapshot,
-  offlineGatewaySnapshot,
-} from "./runtime-snapshot";
 import type { DesktopRuntime } from "./runtime-contract";
+import {
+  analyticsAffectedDeviceIds,
+  createCloudApiClient,
+  isDeviceLogSummary,
+  isDeviceSummary,
+  isMotionUpdatePayload,
+  type ApiInvalidateEvent,
+  type MotionUpdatePayload,
+} from "./cloud-api-client";
+import {
+  buildCloudSetup,
+  buildCloudSnapshot,
+  CLOUD_SETUP_MESSAGE,
+  mapDeviceToRuntimeSummary,
+} from "./cloud-projection";
 
-const REQUEST_TIMEOUT_MS = 10_000;
 const SSE_RECONNECT_DELAY_MS = 2_000;
-const CLOUD_SETUP_MESSAGE =
-  "Cloud mode is active. Sensor setup now lives on Linux gateways, so this desktop build is read-only for BLE pairing.";
-
-type DevicesResponse = {
-  devices: DeviceSummary[];
-};
-
-type EventsResponse = {
-  events: DesktopSnapshot["events"];
-};
-
-type ActivityResponse = {
-  activities: DeviceActivitySummary[];
-};
-
-type DeviceAnalyticsResponse = {
-  analytics: DeviceAnalyticsSnapshot;
-};
-
-type ApiInvalidateEvent = {
-  type?: string;
-  payload?: unknown;
-};
-
-type MotionUpdatePayload = {
-  device: DeviceSummary;
-  event?: MotionEventSummary;
-};
-
-function approvedRuleFromDevice(device: DeviceSummary): ApprovedNodeRule {
-  return {
-    id: device.id,
-    label: device.machineLabel ?? device.id,
-    peripheralId: null,
-    address: null,
-    localName: null,
-    knownDeviceId: device.id,
-  };
-}
-
-function mapHealthToConnectionState(
-  healthStatus: DeviceSummary["healthStatus"],
-): GatewayRuntimeDeviceSummary["gatewayConnectionState"] {
-  switch (healthStatus) {
-    case "online":
-    case "stale":
-      return "connected";
-    default:
-      return "disconnected";
-  }
-}
-
-function mapHealthToFreshness(
-  healthStatus: DeviceSummary["healthStatus"],
-): GatewayRuntimeDeviceSummary["telemetryFreshness"] {
-  switch (healthStatus) {
-    case "online":
-      return "fresh";
-    case "stale":
-      return "stale";
-    default:
-      return "missing";
-  }
-}
-
-function mapDeviceToRuntimeSummary(device: DeviceSummary): GatewayRuntimeDeviceSummary {
-  return {
-    ...device,
-    gatewayConnectionState: mapHealthToConnectionState(device.healthStatus),
-    telemetryFreshness: mapHealthToFreshness(device.healthStatus),
-    sensorIssue: device.healthStatus === "offline" ? "No recent cloud heartbeat." : null,
-    peripheralId: null,
-    address: null,
-    gatewayLastAdvertisementAt: null,
-    gatewayLastConnectedAt: device.lastHeartbeatAt ?? device.lastEventReceivedAt,
-    gatewayLastDisconnectedAt: device.healthStatus === "offline" ? device.updatedAt : null,
-    gatewayLastTelemetryAt: device.lastEventReceivedAt ?? device.lastHeartbeatAt,
-    gatewayDisconnectReason:
-      device.healthStatus === "offline" ? "No recent gateway update reached the backend." : null,
-    advertisedName: device.machineLabel,
-    lastRssi: null,
-    otaStatus: device.updateStatus,
-    otaTargetVersion: device.updateTargetVersion,
-    otaProgressBytesSent: null,
-    otaTotalBytes: null,
-    otaLastPhase: null,
-    otaFailureDetail: device.updateStatus === "failed" ? device.updateDetail : null,
-    otaLastStatusMessage: device.updateDetail,
-    otaUpdatedAt: device.updateUpdatedAt,
-    reconnectAttempt: 0,
-    reconnectAttemptLimit: 0,
-    reconnectRetryExhausted: false,
-    reconnectAwaitingDecision: false,
-  };
-}
-
-async function fetchCloudJson<T>(baseUrl: string, path: string): Promise<T> {
-  const response = await fetch(new URL(path, baseUrl), {
-    cache: "no-store",
-    headers: {
-      "Cache-Control": "no-store",
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error(`${path} -> ${response.status}`);
-  }
-
-  return (await response.json()) as T;
-}
-
-function buildCloudSetup(devices: DeviceSummary[]): DesktopSetupState {
-  return {
-    ...createEmptySetupState(),
-    adapterIssue: CLOUD_SETUP_MESSAGE,
-    approvedNodes: devices.map(approvedRuleFromDevice),
-  };
-}
-
-function buildCloudSnapshot(baseUrl: string, devices: DeviceSummary[], args: {
-  events: DesktopSnapshot["events"];
-  activities: DeviceActivitySummary[];
-  gatewayIssue: string | null;
-}): DesktopSnapshot {
-  const runtimeDevices = devices.map(mapDeviceToRuntimeSummary);
-  const connectedNodeCount = runtimeDevices.filter(
-    (device) => device.gatewayConnectionState === "connected",
-  ).length;
-  const updatedAtCandidates = [
-    ...devices.map((device) => device.updatedAt),
-    ...args.events.map((event) => event.receivedAt),
-    ...args.activities.map((activity) => activity.receivedAt),
-  ]
-    .map((value) => Date.parse(value))
-    .filter((value) => Number.isFinite(value));
-  const gatewayUpdatedAt =
-    updatedAtCandidates.length > 0
-      ? new Date(Math.max(...updatedAtCandidates)).toISOString()
-      : new Date(0).toISOString();
-  const gateway = {
-    ...offlineGatewaySnapshot(),
-    hostname: new URL(baseUrl).hostname,
-    mode: "cloud-http-backend",
-    sessionId: new URL(baseUrl).host,
-    adapterState: "remote",
-    scanState: "remote",
-    connectedNodeCount,
-    reconnectingNodeCount: 0,
-    knownNodeCount: runtimeDevices.length,
-    updatedAt: gatewayUpdatedAt,
-  };
-  const runtimeState = args.gatewayIssue ? "degraded" : "running";
-  const liveStatus = args.gatewayIssue
-    ? "Cloud backend unavailable"
-    : connectedNodeCount > 0
-      ? "Cloud data live"
-      : runtimeDevices.length > 0
-        ? "Cloud backend connected"
-        : "Waiting for cloud device data";
-  const snapshot = {
-    ...createEmptySnapshot(),
-    trayHint: "Desktop reads from the cloud backend. BLE runs on Linux gateways.",
-    liveStatus,
-    runtimeState,
-    gatewayIssue: args.gatewayIssue,
-    gateway,
-    devices: runtimeDevices,
-    events: args.events,
-    activities: args.activities,
-  } satisfies DesktopSnapshot;
-
-  return snapshot;
-}
 
 function createUnsupportedError() {
   return new Error(CLOUD_SETUP_MESSAGE);
 }
 
-function parseInvalidateEvent(lines: string[]) {
-  const data = lines
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice("data:".length).trim())
-    .join("\n");
-
-  if (!data) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(data) as ApiInvalidateEvent;
-  } catch {
-    return null;
-  }
-}
-
-function analyticsAffectedDeviceIds(event: ApiInvalidateEvent | null) {
-  if (!event) {
-    return [];
-  }
-
-  const deviceIds = new Set<string>();
-  const payload =
-    event.payload && typeof event.payload === "object"
-      ? (event.payload as Record<string, unknown>)
-      : null;
-  const nestedDevice =
-    payload?.device && typeof payload.device === "object"
-      ? (payload.device as Record<string, unknown>)
-      : null;
-  const payloadDeviceId = payload?.deviceId;
-  const nestedDeviceId = nestedDevice?.id;
-
-  if (typeof payloadDeviceId === "string" && payloadDeviceId.length > 0) {
-    deviceIds.add(payloadDeviceId);
-  }
-
-  if (typeof nestedDeviceId === "string" && nestedDeviceId.length > 0) {
-    deviceIds.add(nestedDeviceId);
-  }
-
-  return [...deviceIds];
-}
-
-function isDeviceSummary(value: unknown): value is DeviceSummary {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      typeof (value as DeviceSummary).id === "string" &&
-      typeof (value as DeviceSummary).updatedAt === "string" &&
-      typeof (value as DeviceSummary).healthStatus === "string",
-  );
-}
-
-function isMotionEventSummary(value: unknown): value is MotionEventSummary {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      typeof (value as MotionEventSummary).id === "number" &&
-      typeof (value as MotionEventSummary).deviceId === "string" &&
-      typeof (value as MotionEventSummary).receivedAt === "string",
-  );
-}
-
-function isDeviceLogSummary(value: unknown): value is DeviceLogSummary {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      typeof (value as DeviceLogSummary).id === "number" &&
-      typeof (value as DeviceLogSummary).deviceId === "string" &&
-      typeof (value as DeviceLogSummary).receivedAt === "string",
-  );
-}
-
-function isMotionUpdatePayload(value: unknown): value is MotionUpdatePayload {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const payload = value as Partial<MotionUpdatePayload>;
-  return isDeviceSummary(payload.device) && (
-    payload.event === undefined || isMotionEventSummary(payload.event)
-  );
-}
-
 export function createCloudRuntime(baseUrl: string): DesktopRuntime {
   const listeners = new Set<(event: DesktopRuntimeEvent) => void>();
   const normalizedBaseUrl = new URL(baseUrl).toString();
+  const api = createCloudApiClient(normalizedBaseUrl);
   let eventStreamAbort: AbortController | null = null;
   let eventStreamTask: Promise<void> | null = null;
   let refreshTask: Promise<void> | null = null;
@@ -452,9 +197,9 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
   async function refresh(forceEmit = false) {
     try {
       const [devicesResponse, eventsResponse, activityResponse] = await Promise.all([
-        fetchCloudJson<DevicesResponse>(normalizedBaseUrl, "/api/devices"),
-        fetchCloudJson<EventsResponse>(normalizedBaseUrl, "/api/events?limit=14"),
-        fetchCloudJson<ActivityResponse>(normalizedBaseUrl, "/api/activity?limit=30"),
+        api.getDevices(),
+        api.getEvents(),
+        api.getActivity(),
       ]);
 
       const nextSnapshot = buildCloudSnapshot(normalizedBaseUrl, devicesResponse.devices, {
@@ -530,71 +275,6 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
     return refreshTask;
   }
 
-  async function readEventStream(signal: AbortSignal) {
-    const response = await fetch(new URL("/api/stream", normalizedBaseUrl), {
-      cache: "no-store",
-      headers: {
-        Accept: "text/event-stream",
-        "Cache-Control": "no-store",
-      },
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`/api/stream -> ${response.status}`);
-    }
-
-    if (!response.body) {
-      throw new Error("/api/stream did not provide a response body.");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-
-      while (true) {
-        const normalizedBuffer = buffer.replace(/\r\n/g, "\n");
-        const boundary = normalizedBuffer.indexOf("\n\n");
-        if (boundary < 0) {
-          buffer = normalizedBuffer;
-          break;
-        }
-
-        const rawEvent = normalizedBuffer.slice(0, boundary);
-        buffer = normalizedBuffer.slice(boundary + 2);
-        const lines = rawEvent
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const eventType =
-          lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim() ??
-          "message";
-
-        if (eventType === "invalidate") {
-          const invalidateEvent = parseInvalidateEvent(lines);
-          const deviceIds = analyticsAffectedDeviceIds(invalidateEvent);
-          if (deviceIds.length > 0) {
-            emit({
-              type: "analytics-invalidated",
-              deviceIds,
-            });
-          }
-          if (!applyApiInvalidateEvent(invalidateEvent)) {
-            void requestRefresh();
-          }
-        }
-      }
-    }
-  }
-
   function startEventStream() {
     if (eventStreamTask) {
       return;
@@ -606,7 +286,18 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
         eventStreamAbort = abortController;
 
         try {
-          await readEventStream(abortController.signal);
+          await api.readEventStream(abortController.signal, (invalidateEvent) => {
+            const deviceIds = analyticsAffectedDeviceIds(invalidateEvent);
+            if (deviceIds.length > 0) {
+              emit({
+                type: "analytics-invalidated",
+                deviceIds,
+              });
+            }
+            if (!applyApiInvalidateEvent(invalidateEvent)) {
+              void requestRefresh();
+            }
+          });
         } catch (error) {
           if (!abortController.signal.aborted && !stopped) {
             console.warn("[cloud-runtime] event stream disconnected", error);
@@ -678,19 +369,11 @@ export function createCloudRuntime(baseUrl: string): DesktopRuntime {
       throw createUnsupportedError();
     },
     async getDeviceAnalytics(input: GetDeviceAnalyticsInput) {
-      const response = await fetchCloudJson<DeviceAnalyticsResponse>(
-        normalizedBaseUrl,
-        `/api/device-analytics?deviceId=${encodeURIComponent(input.deviceId)}&window=${encodeURIComponent(
-          input.window,
-        )}`,
-      );
+      const response = await api.getDeviceAnalytics(input);
       return response.analytics;
     },
     async getDeviceActivity(deviceId: string, limit?: number) {
-      const response = await fetchCloudJson<ActivityResponse>(
-        normalizedBaseUrl,
-        `/api/device-activity?deviceId=${encodeURIComponent(deviceId)}&limit=${limit ?? 60}`,
-      );
+      const response = await api.getDeviceActivity(deviceId, limit);
       return response.activities;
     },
     onEvent(listener) {
