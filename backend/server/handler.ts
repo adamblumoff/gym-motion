@@ -4,6 +4,7 @@ import { json, notFound } from "./http";
 import { handleDeviceRoutes } from "./routes/devices";
 import { handleEventRoutes } from "./routes/events";
 import { handleFirmwareRoutes } from "./routes/firmware";
+import { handleIngestRoutes } from "./routes/ingest";
 
 export function createBackendApiHandler({
   emit = () => {},
@@ -29,6 +30,18 @@ export function createBackendApiHandler({
 
     if (method === "GET" && pathname === "/api/stream" && handleSse) {
       handleSse(request, response);
+      return;
+    }
+
+    if (
+      await handleIngestRoutes({
+        request,
+        response,
+        pathname,
+        method,
+        emit,
+      })
+    ) {
       return;
     }
 
